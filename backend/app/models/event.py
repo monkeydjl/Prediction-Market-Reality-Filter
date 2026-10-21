@@ -2117,6 +2117,43 @@ class PredictionTriggerResponse(FlexibleResponse):
     explanation_contributions: ExplanationContributions | None = None
 
 
+class IngestErrorEntry(BaseModel):
+    """One element of ``errors`` in an ingest import result (audit 53.82).
+
+    ``import_sports_facts`` appends exactly ``{"index": <int>, "error": <str>}``
+    at both append sites (the ``SportsFactValidationError`` and the bare
+    ``ValueError`` branch), so both keys are required and carry no default.
+    """
+
+    index: int
+    error: str
+
+
+class IngestImportResponse(FlexibleResponse):
+    """Response shared by all 18 world-cup ingest ``*/import`` routes (53.82).
+
+    Every import chain terminates at ``import_sports_facts``, whose two return
+    literals write the same five keys unconditionally (partial-failure early
+    return and the success return). Therefore:
+
+    * no route in this family carries ``response_model_exclude_unset`` --
+      adding the flag would be a no-op and adding defaults would be wrong
+      (the §Z4 case: unconditional writes ⇒ any default is a type lie);
+    * all five fields are required -- a missing key is a producer regression
+      and should fail loudly at the response boundary.
+
+    The 18 routes are listed in
+    ``tests.test_generate_types.ImportRouteContractTests``; each one must stay
+    bound to this model (and out of ``BARE_FLEXIBLE_RESPONSE_ROUTES``).
+    """
+
+    imported: int
+    error_count: int
+    errors: list[IngestErrorEntry]
+    total: int
+    replace: bool
+
+
 class MatchFixtureRecord(BaseModel):
     """The ``match`` block of one ``/matches`` element (audit 53.76).
 

@@ -144,6 +144,7 @@ from app.models.event import (
     EventStoreEntry,
     FlexibleResponse,
     FreshEdgesResponse,
+    IngestImportResponse,
     LoopStatusResponse,
     OpenDecisionsResponse,
     PendingLinksResponse,
@@ -626,7 +627,7 @@ async def list_world_cup_facts(
     return {"count": len(facts), "facts": facts}
 
 
-@router.post("/sports/world-cup/facts/import", response_model=FlexibleResponse)
+@router.post("/sports/world-cup/facts/import", response_model=IngestImportResponse)
 async def import_world_cup_facts(
     payload: FactsPayload = Body(...),
     replace: bool = Query(default=False),
@@ -646,7 +647,7 @@ async def import_world_cup_facts(
     return result
 
 
-@router.post("/sports/world-cup/data/import", response_model=FlexibleResponse)
+@router.post("/sports/world-cup/data/import", response_model=IngestImportResponse)
 async def import_world_cup_data_source(
     payload: DictPayload = Body(...),
     replace: bool = Query(default=False),
@@ -687,7 +688,7 @@ async def preview_world_cup_source_bundle_route(
         _reject_source_configuration(exc)
 
 
-@router.post("/sports/world-cup/data/bundle/import", response_model=FlexibleResponse)
+@router.post("/sports/world-cup/data/bundle/import", response_model=IngestImportResponse)
 async def import_world_cup_source_bundle_route(
     payload: DictPayload = Body(...),
     replace: bool = Query(default=False),
@@ -716,7 +717,7 @@ async def preview_configured_world_cup_source_bundle_route(
         _reject_source_configuration(exc)
 
 
-@router.post("/sports/world-cup/data/bundle/source/import", response_model=FlexibleResponse)
+@router.post("/sports/world-cup/data/bundle/source/import", response_model=IngestImportResponse)
 async def import_configured_world_cup_source_bundle_route(
     replace: bool = Query(default=False),
     _auth: None = Depends(require_write_key),
@@ -744,7 +745,7 @@ async def preview_remote_world_cup_source_bundle_route(
         _reject_source_configuration(exc)
 
 
-@router.post("/sports/world-cup/data/bundle/url/import", response_model=FlexibleResponse)
+@router.post("/sports/world-cup/data/bundle/url/import", response_model=IngestImportResponse)
 async def import_remote_world_cup_source_bundle_route(
     replace: bool = Query(default=False),
     _auth: None = Depends(require_write_key),
@@ -769,7 +770,7 @@ async def preview_configured_world_cup_source_feeds_route(
         _reject_invalid_payload(exc)
 
 
-@router.post("/sports/world-cup/data/bundle/feeds/import", response_model=FlexibleResponse)
+@router.post("/sports/world-cup/data/bundle/feeds/import", response_model=IngestImportResponse)
 async def import_configured_world_cup_source_feeds_route(
     replace: bool = Query(default=False),
     _auth: None = Depends(require_write_key),
@@ -796,7 +797,7 @@ async def preview_api_football_world_cup_source_bundle_route(
         _reject_invalid_payload(exc)
 
 
-@router.post("/sports/world-cup/data/bundle/api-football/import", response_model=FlexibleResponse)
+@router.post("/sports/world-cup/data/bundle/api-football/import", response_model=IngestImportResponse)
 async def import_api_football_world_cup_source_bundle_route(
     replace: bool = Query(default=False),
     _auth: None = Depends(require_write_key),
@@ -912,7 +913,7 @@ async def preview_football_data_world_cup_standings_route(
         _reject_invalid_payload(exc)
 
 
-@router.post("/sports/world-cup/data/bundle/football-data/import", response_model=FlexibleResponse)
+@router.post("/sports/world-cup/data/bundle/football-data/import", response_model=IngestImportResponse)
 async def import_football_data_world_cup_standings_route(
     replace: bool = Query(default=False),
     _auth: None = Depends(require_write_key),
@@ -942,7 +943,7 @@ async def preview_sportmonks_world_cup_source_bundle_route(
         _reject_invalid_payload(exc)
 
 
-@router.post("/sports/world-cup/data/bundle/sportmonks/import", response_model=FlexibleResponse)
+@router.post("/sports/world-cup/data/bundle/sportmonks/import", response_model=IngestImportResponse)
 async def import_sportmonks_world_cup_source_bundle_route(
     replace: bool = Query(default=False),
     _auth: None = Depends(require_write_key),
@@ -988,7 +989,7 @@ async def preview_configured_world_cup_data_source(
         _reject_invalid_payload(exc)
 
 
-@router.post("/sports/world-cup/data/source/import", response_model=FlexibleResponse)
+@router.post("/sports/world-cup/data/source/import", response_model=IngestImportResponse)
 async def import_configured_world_cup_data_source(
     replace: bool = Query(default=False),
     _auth: None = Depends(require_write_key),
@@ -1017,7 +1018,7 @@ async def preview_world_cup_official_csv_source_route(
         _reject_invalid_payload(exc)
 
 
-@router.post("/sports/world-cup/official-csv/import", response_model=FlexibleResponse)
+@router.post("/sports/world-cup/official-csv/import", response_model=IngestImportResponse)
 async def import_world_cup_official_csv_source_route(
     payload: DictPayload = Body(...),
     replace: bool = Query(default=False),
@@ -1042,7 +1043,7 @@ async def preview_world_cup_match_source_route(
         _reject_invalid_payload(exc)
 
 
-@router.post("/sports/world-cup/matches/import", response_model=FlexibleResponse)
+@router.post("/sports/world-cup/matches/import", response_model=IngestImportResponse)
 async def import_world_cup_match_source_route(
     payload: DictPayload = Body(...),
     replace: bool = Query(default=False),
@@ -1067,7 +1068,7 @@ async def preview_world_cup_match_events_source_route(
         _reject_invalid_payload(exc)
 
 
-@router.post("/sports/world-cup/match-events/import", response_model=FlexibleResponse)
+@router.post("/sports/world-cup/match-events/import", response_model=IngestImportResponse)
 async def import_world_cup_match_events_source_route(
     payload: DictPayload = Body(...),
     replace: bool = Query(default=False),
@@ -1092,7 +1093,7 @@ async def preview_world_cup_lineups_source_route(
         _reject_invalid_payload(exc)
 
 
-@router.post("/sports/world-cup/lineups/import", response_model=FlexibleResponse)
+@router.post("/sports/world-cup/lineups/import", response_model=IngestImportResponse)
 async def import_world_cup_lineups_source_route(
     payload: DictPayload = Body(...),
     replace: bool = Query(default=False),
@@ -1117,7 +1118,7 @@ async def preview_world_cup_standings_source_route(
         _reject_invalid_payload(exc)
 
 
-@router.post("/sports/world-cup/standings/import", response_model=FlexibleResponse)
+@router.post("/sports/world-cup/standings/import", response_model=IngestImportResponse)
 async def import_world_cup_standings_source_route(
     payload: DictPayload = Body(...),
     replace: bool = Query(default=False),
@@ -1142,7 +1143,7 @@ async def preview_world_cup_player_awards_source_route(
         _reject_invalid_payload(exc)
 
 
-@router.post("/sports/world-cup/player-awards/import", response_model=FlexibleResponse)
+@router.post("/sports/world-cup/player-awards/import", response_model=IngestImportResponse)
 async def import_world_cup_player_awards_source_route(
     payload: DictPayload = Body(...),
     replace: bool = Query(default=False),
@@ -1167,7 +1168,7 @@ async def preview_world_cup_player_status_source_route(
         _reject_invalid_payload(exc)
 
 
-@router.post("/sports/world-cup/player-status/import", response_model=FlexibleResponse)
+@router.post("/sports/world-cup/player-status/import", response_model=IngestImportResponse)
 async def import_world_cup_player_status_source_route(
     payload: DictPayload = Body(...),
     replace: bool = Query(default=False),
@@ -1192,7 +1193,7 @@ async def preview_world_cup_statistics_source_route(
         _reject_source_configuration(exc)
 
 
-@router.post("/sports/world-cup/statistics/import", response_model=FlexibleResponse)
+@router.post("/sports/world-cup/statistics/import", response_model=IngestImportResponse)
 async def import_world_cup_statistics_source_route(
     payload: DictPayload = Body(...),
     replace: bool = Query(default=False),

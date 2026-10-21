@@ -43,9 +43,10 @@ function summarize(result: IngestResult): string {
     parts.push(`可转换 ${result.converted_fact_count} 条事实`);
   }
   if (typeof result.imported === "number") parts.push(`已导入 ${result.imported}`);
-  if (typeof result.replaced === "number") parts.push(`已替换 ${result.replaced}`);
-  if (typeof result.skipped === "number") parts.push(`跳过 ${result.skipped}`);
   if (typeof result.error_count === "number") parts.push(`错误 ${result.error_count}`);
+  // The retired branches for `replaced` / `skipped` were dead keys: no ingest
+  // producer sends either (the import result echoes the request as the boolean
+  // `replace`) — audit 53.82.
   if (typeof result.count === "number" && parts.length === 0) parts.push(`共 ${result.count} 条`);
   if (typeof result.ok === "boolean") parts.push(result.ok ? "校验通过" : "校验未通过");
   if (parts.length === 0 && result.status) parts.push(String(result.status));
@@ -142,7 +143,16 @@ export function IngestConsole() {
     (path: string, label: string, action: SourceAction) => {
       const key = `${path}:${action}`;
       const execute = () =>
-        void run(key, () => ingestApi.runConfigured(path, action, replace), setSourceResult);
+        void run(
+          key,
+          // Literal-narrowed so the import overload returns the generated
+          // IngestImportResponse (audit 53.82); previews stay loose.
+          () =>
+            action === "import"
+              ? ingestApi.runConfigured(path, "import", replace)
+              : ingestApi.runConfigured(path, action, replace),
+          setSourceResult,
+        );
       if (action !== "import") {
         execute();
         return;
@@ -174,7 +184,12 @@ export function IngestConsole() {
       const execute = () =>
         void run(
           key,
-          () => ingestApi.runPayload(payloadSource.path, action, payload, replace),
+          // Literal-narrowed so the import overload returns the generated
+          // IngestImportResponse (audit 53.82); previews stay loose.
+          () =>
+            action === "import"
+              ? ingestApi.runPayload(payloadSource.path, "import", payload, replace)
+              : ingestApi.runPayload(payloadSource.path, "preview", payload, replace),
           setPayloadResult,
         );
       if (action === "preview") {

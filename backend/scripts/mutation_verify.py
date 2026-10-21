@@ -1671,7 +1671,7 @@ SETS: tuple[MutationSet, ...] = (
     ),
     MutationSet(
         key="frontend-type-closure",
-        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6、J1–J177）",
+        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6、J1–J180）",
         rationale=(
             "§2 的「登记为根」规则（§53.49 立、§53.50 推广）。`pydantic2ts` 用 "
             "`inspect.getmembers(module)` 收集**模块命名空间里**的模型当根；只有根会被临时置 "
@@ -5776,6 +5776,61 @@ SETS: tuple[MutationSet, ...] = (
                     "变异）。"
                     "● 针单行、带 CRLF、命中 **1 次**（已实测；init-db 是清单"
                     "最后一行、全文件唯一）。删除型编辑，删除数 1。"
+                ),
+            ),
+            Mutation(
+                label="J178 facts/import 路由解绑具名模型：18 条身份判据脱钩",
+                path=_DIGEST_ROUTES,
+                old=b'@router.post("/sports/world-cup/facts/import", response_model=IngestImportResponse)',
+                new=b'@router.post("/sports/world-cup/facts/import", response_model=FlexibleResponse)',
+                guard_file=_T_GENERATE_TYPES,
+                guards=(
+                    "test_every_ingest_import_route_binds_ingest_import_response",
+                ),
+                note=(
+                    "§53.82（ingest 批 1）：18 条 import 路由全部共享 "
+                    "import_sports_facts 的单形状 —— 身份判据按「全族 18 条"
+                    "都绑 IngestImportResponse」断言，任何一条滑回裸类都红。"
+                    "同时该守卫断言全族无 response_model_exclude_unset "
+                    "（无条件写入 ⇒ 旗子是盲点不是保护，§Z4）。"
+                    "● 针单行、无换行、命中 **1 次**（已实测；18 条同形装饰器"
+                    "中 facts/import 的 path 段全文件唯一）。"
+                ),
+            ),
+            Mutation(
+                label="J179 IngestImportResponse.imported 加默认值：必填判据脱钩",
+                path=_EVENT_MODEL,
+                old=b"    imported: int\r\n",
+                new=b"    imported: int = 0\r\n",
+                guard_file=_T_GENERATE_TYPES,
+                guards=(
+                    "test_model_is_the_producer_five_keys_all_required",
+                ),
+                note=(
+                    "§53.82（ingest 批 1）：两个 return 无条件写五键 ⇒ 全部"
+                    "必填、无默认值（§Z4：无条件写入的端点任何默认值都是错的"
+                    "—— 有默认值生成即可选，生产者回归会被 0 静默吞掉而不是"
+                    "在边界 422）。is_required 断言当场红。"
+                    "● 针单行、带 CRLF、命中 **1 次**（已实测）。"
+                ),
+            ),
+            Mutation(
+                label="J180 生产者首个 return 的 total 键改名：键集钉源判据脱钩",
+                path=_SPORTS_FACT,
+                old=b'            "total": len(load_sports_facts(tournament=default_tournament)),\r\n',
+                new=b'            "total_x": len(load_sports_facts(tournament=default_tournament)),\r\n',
+                guard_file=_T_GENERATE_TYPES,
+                guards=(
+                    "test_producer_key_set_is_pinned_from_source",
+                ),
+                note=(
+                    "§53.82（ingest 批 1）：模型键集按 AST 从 "
+                    "import_sports_facts 源码钉住（两个 dict 字面量 return 的"
+                    "常量键集都必须等于模型键序）—— 开放尾巴会原样透传多余键"
+                    "，所以「名字集==生产者键集」判据必须在源侧红（§Z6）。"
+                    "选首个 return 的 total 键做针：它带独特表达式、与第二个 "
+                    "return 的 `len(store[\"facts\"])` 字节不同。"
+                    "● 针单行、带 CRLF、命中 **1 次**（已实测）。"
                 ),
             ),
         ),

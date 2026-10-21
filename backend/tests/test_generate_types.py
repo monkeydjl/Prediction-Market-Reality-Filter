@@ -3289,45 +3289,27 @@ class FlexibleResponseIdentityTests(unittest.TestCase):
         "GET /api/world-cup/predictions/matches/{match_id}",
         "GET /api/world-cup/predictions/today",
         "POST /api/events/analyze",
-        "POST /api/events/sports/world-cup/data/bundle/api-football/import",
         "POST /api/events/sports/world-cup/data/bundle/api-football/preview",
         "POST /api/events/sports/world-cup/data/bundle/api-football/test",
         "POST /api/events/sports/world-cup/data/bundle/api-football/validate",
-        "POST /api/events/sports/world-cup/data/bundle/feeds/import",
         "POST /api/events/sports/world-cup/data/bundle/feeds/preview",
-        "POST /api/events/sports/world-cup/data/bundle/football-data/import",
         "POST /api/events/sports/world-cup/data/bundle/football-data/preview",
-        "POST /api/events/sports/world-cup/data/bundle/import",
         "POST /api/events/sports/world-cup/data/bundle/preview",
-        "POST /api/events/sports/world-cup/data/bundle/source/import",
         "POST /api/events/sports/world-cup/data/bundle/source/preview",
-        "POST /api/events/sports/world-cup/data/bundle/sportmonks/import",
         "POST /api/events/sports/world-cup/data/bundle/sportmonks/preview",
         "POST /api/events/sports/world-cup/data/bundle/sportmonks/test",
         "POST /api/events/sports/world-cup/data/bundle/sportmonks/validate",
-        "POST /api/events/sports/world-cup/data/bundle/url/import",
         "POST /api/events/sports/world-cup/data/bundle/url/preview",
-        "POST /api/events/sports/world-cup/data/import",
         "POST /api/events/sports/world-cup/data/preview",
-        "POST /api/events/sports/world-cup/data/source/import",
         "POST /api/events/sports/world-cup/data/source/preview",
-        "POST /api/events/sports/world-cup/facts/import",
-        "POST /api/events/sports/world-cup/lineups/import",
         "POST /api/events/sports/world-cup/lineups/preview",
-        "POST /api/events/sports/world-cup/match-events/import",
         "POST /api/events/sports/world-cup/match-events/preview",
-        "POST /api/events/sports/world-cup/matches/import",
         "POST /api/events/sports/world-cup/matches/preview",
-        "POST /api/events/sports/world-cup/official-csv/import",
         "POST /api/events/sports/world-cup/official-csv/preview",
-        "POST /api/events/sports/world-cup/player-awards/import",
         "POST /api/events/sports/world-cup/player-awards/preview",
-        "POST /api/events/sports/world-cup/player-status/import",
         "POST /api/events/sports/world-cup/player-status/preview",
         "POST /api/events/sports/world-cup/resolve",
-        "POST /api/events/sports/world-cup/standings/import",
         "POST /api/events/sports/world-cup/standings/preview",
-        "POST /api/events/sports/world-cup/statistics/import",
         "POST /api/events/sports/world-cup/statistics/preview",
         "POST /api/world-cup/predictions/init-db",
     })
@@ -3370,6 +3352,180 @@ class FlexibleResponseIdentityTests(unittest.TestCase):
             "canonical export from app.models.event -- a same-name local "
             "copy is the regression audit 53.68 found, and it makes every "
             "identity-keyed census and guard go blind: " + "; ".join(wrong),
+        )
+
+
+class IngestImportContractTests(unittest.TestCase):
+    """All 18 world-cup ingest ``*/import`` routes share one shape (53.82).
+
+    The AST census resolved every import chain to a single terminal producer,
+    ``import_sports_facts``, whose two return literals (partial-failure early
+    return and success return) write the same five keys unconditionally.
+    Judgments:
+
+    * every import route binds ``IngestImportResponse`` and carries no
+      ``response_model_exclude_unset`` -- unconditional writes make the flag
+      a no-op that would let a conditional key slip in unnoticed (§Z4);
+    * the model is the producer key set in producer order, all required
+      (a default would be a type lie, and a missing key must fail loudly);
+    * the producer key set is pinned from source by AST over
+      ``import_sports_facts`` -- a sixth key or a renamed key goes red here
+      instead of silently passing through the open tail;
+    * the generated TypeScript carries the five keys required and the
+      ``errors`` element as a closed two-key interface.
+    """
+
+    _IMPORT_PREFIX = "/api/events/sports/world-cup/"
+
+    def _import_routes(self):
+        from app.main import app
+
+        routes = [
+            route for route in app.routes
+            if getattr(route, "path", "").startswith(self._IMPORT_PREFIX)
+            and route.path.endswith("/import")
+        ]
+        self.assertEqual(
+            len(routes), 18,
+            "the ingest import family is 18 routes (census 53.82); a drift "
+            "here means a route was added or removed and this guard plus "
+            "BARE_FLEXIBLE_RESPONSE_ROUTES must be re-scoped together",
+        )
+        return routes
+
+    def test_every_ingest_import_route_binds_ingest_import_response(self):
+        from app.models.event import IngestImportResponse
+
+        routes = self._import_routes()
+        wrong = [
+            f"{route.path} -> "
+            f"{getattr(route.response_model, '__name__', '?')}"
+            for route in routes
+            if route.response_model is not IngestImportResponse
+        ]
+        self.assertEqual(
+            wrong, [],
+            "every import route must bind the shared IngestImportResponse -- "
+            "all 18 chains terminate at import_sports_facts and publish the "
+            "same five-key shape: " + "; ".join(wrong),
+        )
+        flagged = [
+            route.path for route in routes
+            if getattr(route, "response_model_exclude_unset", False)
+        ]
+        self.assertEqual(
+            flagged, [],
+            "no import route may carry response_model_exclude_unset: both "
+            "producer returns write all five keys, so the flag is a no-op "
+            "today and a blind spot the day a key becomes conditional "
+            f"(audit 53.82): {flagged}",
+        )
+
+    def test_model_is_the_producer_five_keys_all_required(self):
+        from app.models.event import IngestErrorEntry, IngestImportResponse
+
+        fields = IngestImportResponse.model_fields
+        self.assertEqual(
+            list(fields),
+            ["imported", "error_count", "errors", "total", "replace"],
+            "IngestImportResponse is no longer the producer's five keys in "
+            "producer order (audit 53.82)",
+        )
+        for name, field in fields.items():
+            with self.subTest(key=name):
+                self.assertTrue(
+                    field.is_required(),
+                    f"IngestImportResponse.{name} gained a default; both "
+                    "producer returns write it unconditionally, so a default "
+                    "would hide a producer regression instead of failing at "
+                    "the boundary (audit 53.82)",
+                )
+        self.assertEqual(
+            fields["errors"].annotation,
+            list[IngestErrorEntry],
+            "errors is no longer the list of {index, error} entries the two "
+            "append sites write (audit 53.82)",
+        )
+        entry_fields = IngestErrorEntry.model_fields
+        self.assertEqual(
+            list(entry_fields), ["index", "error"],
+            "IngestErrorEntry is no longer the two keys every append site "
+            "writes (audit 53.82)",
+        )
+        for name, field in entry_fields.items():
+            with self.subTest(entry_key=name):
+                self.assertTrue(
+                    field.is_required(),
+                    f"IngestErrorEntry.{name} gained a default; both append "
+                    "sites write it unconditionally (audit 53.82)",
+                )
+
+    def test_producer_key_set_is_pinned_from_source(self):
+        import ast
+
+        source = (
+            _BACKEND_DIR / "app" / "services" / "sports_fact_service.py"
+        ).read_bytes().decode("utf-8")
+        tree = ast.parse(source)
+        fn = next(
+            node for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == "import_sports_facts"
+        )
+        key_sets: list[list[str]] = []
+        stack = list(ast.iter_child_nodes(fn))
+        while stack:
+            node = stack.pop()
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+                continue
+            if isinstance(node, ast.Return) and isinstance(node.value, ast.Dict):
+                key_sets.append([
+                    key.value for key in node.value.keys
+                    if isinstance(key, ast.Constant)
+                ])
+            stack.extend(ast.iter_child_nodes(node))
+        self.assertEqual(
+            len(key_sets), 2,
+            "import_sports_facts no longer has exactly two dict-literal "
+            "returns; the single-shape decision needs a re-census "
+            "(audit 53.82)",
+        )
+        for keys in key_sets:
+            self.assertEqual(
+                keys,
+                ["imported", "error_count", "errors", "total", "replace"],
+                "the producer's return key set drifted from the model; the "
+                "open tail would pass extra keys through unvalidated "
+                f"(audit 53.82): {keys}",
+            )
+
+    def test_generated_types_carry_the_required_keys(self):
+        text = _OUTPUT_PATH.read_bytes().decode("utf-8")
+        bodies = _interface_bodies(text)
+        self.assertIn("IngestImportResponse", bodies)
+        self.assertIn("IngestErrorEntry", bodies)
+        for line in (
+            "  imported: number;",
+            "  error_count: number;",
+            "  errors: IngestErrorEntry[];",
+            "  total: number;",
+            "  replace: boolean;",
+        ):
+            self.assertIn(
+                line, bodies["IngestImportResponse"],
+                "the generated envelope lost a required key or grew a "
+                f"default (audit 53.82): {line!r}",
+            )
+        self.assertNotIn(
+            "  imported?: number", bodies["IngestImportResponse"],
+            "a key turned optional in the generated envelope; that means a "
+            "default slipped into the model (audit 53.82)",
+        )
+        self.assertEqual(
+            bodies["IngestErrorEntry"],
+            ["  index: number;", "  error: string;"],
+            "IngestErrorEntry is no longer the closed two-key element "
+            "(audit 53.82)",
         )
 
 

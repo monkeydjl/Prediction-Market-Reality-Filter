@@ -572,7 +572,13 @@ class WorldCupFactRouteTests(unittest.TestCase):
                 patch.object(settings, "API_WRITE_KEY", "secret"), \
                 patch(
                     "app.api.routes.events.import_world_cup_api_football_bundle",
-                    return_value={"imported": 1, "provider": "api_football"},
+                    return_value={
+                        "imported": 1,
+                        "error_count": 0,
+                        "errors": [],
+                        "total": 1,
+                        "replace": True,
+                    },
                 ) as mock_import:
             run_id = loop_run_store.start_run("world_cup_api_football_validate")
             loop_run_store.finish_run(
@@ -1273,9 +1279,11 @@ class WorldCupFactRouteTests(unittest.TestCase):
                 patch(
                     "app.api.routes.events.import_world_cup_football_data_standings",
                     return_value={
-                        "provider": "football_data",
-                        "normalized_qualification_count": 48,
                         "imported": 48,
+                        "error_count": 0,
+                        "errors": [],
+                        "total": 48,
+                        "replace": True,
                     },
                 ) as mock_import:
             client = _events_client()
@@ -1285,8 +1293,13 @@ class WorldCupFactRouteTests(unittest.TestCase):
             )
 
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.json()["provider"], "football_data")
+        # The producer never sends a provider key (audit 53.82): the import
+        # chain terminates at import_sports_facts's five-key result, and the
+        # stub that used to echo one was an unfaithful double the named
+        # response model exposed at the boundary.
         self.assertEqual(resp.json()["imported"], 48)
+        self.assertEqual(resp.json()["total"], 48)
+        self.assertEqual(resp.json()["replace"], True)
         mock_import.assert_called_once_with(replace=True)
 
     def test_world_cup_football_data_import_hides_provider_error_body(self):

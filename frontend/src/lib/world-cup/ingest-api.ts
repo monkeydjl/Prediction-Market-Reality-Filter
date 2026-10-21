@@ -17,6 +17,7 @@
  */
 
 import { getApiBase } from "@/lib/env";
+import type { IngestImportResponse } from "@/lib/generated-types";
 import {
   ApiError,
   buildApiErrorMessage,
@@ -191,21 +192,29 @@ export const PAYLOAD_SOURCES: PayloadSource[] = [
   },
 ];
 
-/** Backend responses are `FlexibleResponse` dicts; these keys are the common ones. */
-export interface IngestResult {
+/**
+ * Loose display bag for the ingest actions that are still bare on the
+ * backend (preview / test / validate / the two status reads). The five
+ * import-result keys are **derived** from the generated contract
+ * (audit 53.82: the 18 import routes all publish ``IngestImportResponse``),
+ * not re-declared by hand -- imports return the generated type directly via
+ * the ``runConfigured`` / ``runPayload`` overloads.
+ */
+export type IngestResult = Partial<
+  Pick<
+    IngestImportResponse,
+    "imported" | "error_count" | "errors" | "total" | "replace"
+  >
+> & {
   status?: string;
   message?: string;
   ok?: boolean;
-  imported?: number;
-  replaced?: number;
-  skipped?: number;
-  error_count?: number;
-  errors?: unknown;
   count?: number;
+  /** preview-family keys: named in a later slice, read loosely until then. */
   converted_fact_count?: number;
   facts?: unknown[];
   [key: string]: unknown;
-}
+};
 
 export interface WorldCupFact {
   kind?: string;
@@ -220,11 +229,17 @@ export interface FactsResponse {
   facts?: WorldCupFact[];
 }
 
-export interface ResolveResult extends IngestResult {
+/**
+ * Resolve reads, widened to the producer's real keys (audit 53.82: the
+ * retired copy declared `resolved` / `candidates`, keys the producer never
+ * sends — it sends `resolved_count` / `pending_count`). Still loose until
+ * the resolve route is named in a later slice.
+ */
+export type ResolveResult = IngestResult & {
   dry_run?: boolean;
   resolved?: number;
   candidates?: number;
-}
+};
 
 function ingestHeaders(withBody: boolean): Record<string, string> {
   const headers: Record<string, string> = {
@@ -284,6 +299,60 @@ export function parseIngestPayload(text: string): unknown {
   return parsed;
 }
 
+/**
+ * Run a no-body action against a configured source. Import responses are
+ * strongly typed (all 18 import routes share ``IngestImportResponse``,
+ * audit 53.82); the other actions stay loose until their slices name them.
+ */
+function runConfigured(
+  path: string,
+  action: "import",
+  replace?: boolean,
+): Promise<IngestImportResponse>;
+function runConfigured(
+  path: string,
+  action: Exclude<SourceAction, "import">,
+  replace?: boolean,
+): Promise<IngestResult>;
+async function runConfigured(
+  path: string,
+  action: SourceAction,
+  replace = false,
+): Promise<IngestResult> {
+  const query = action === "import" ? `?replace=${replace}` : "";
+  return ingestFetch<IngestResult>(`${PREFIX}/${path}/${action}${query}`, {
+    method: "POST",
+    timeoutMs: action === "test" ? DEFAULT_TIMEOUT_MS : IMPORT_TIMEOUT_MS,
+  });
+}
+
+/** Preview or import an operator-supplied payload (overloads mirror runConfigured). */
+function runPayload(
+  path: string,
+  action: "import",
+  payload: unknown,
+  replace?: boolean,
+): Promise<IngestImportResponse>;
+function runPayload(
+  path: string,
+  action: "preview",
+  payload: unknown,
+  replace?: boolean,
+): Promise<IngestResult>;
+async function runPayload(
+  path: string,
+  action: "preview" | "import",
+  payload: unknown,
+  replace = false,
+): Promise<IngestResult> {
+  const query = action === "import" ? `?replace=${replace}` : "";
+  return ingestFetch<IngestResult>(`${PREFIX}/${path}/${action}${query}`, {
+    method: "POST",
+    body: payload,
+    timeoutMs: IMPORT_TIMEOUT_MS,
+  });
+}
+
 export const ingestApi = {
   status: (): Promise<IngestResult> => ingestFetch<IngestResult>(`${PREFIX}/status`),
 
@@ -298,33 +367,9 @@ export const ingestApi = {
     return ingestFetch<FactsResponse>(`${PREFIX}/facts${query ? `?${query}` : ""}`);
   },
 
-  /** Run a no-body action against a configured source. */
-  runConfigured: (
-    path: string,
-    action: SourceAction,
-    replace = false,
-  ): Promise<IngestResult> => {
-    const query = action === "import" ? `?replace=${replace}` : "";
-    return ingestFetch<IngestResult>(`${PREFIX}/${path}/${action}${query}`, {
-      method: "POST",
-      timeoutMs: action === "test" ? DEFAULT_TIMEOUT_MS : IMPORT_TIMEOUT_MS,
-    });
-  },
+  runConfigured,
 
-  /** Preview or import an operator-supplied payload. */
-  runPayload: (
-    path: string,
-    action: "preview" | "import",
-    payload: unknown,
-    replace = false,
-  ): Promise<IngestResult> => {
-    const query = action === "import" ? `?replace=${replace}` : "";
-    return ingestFetch<IngestResult>(`${PREFIX}/${path}/${action}${query}`, {
-      method: "POST",
-      body: payload,
-      timeoutMs: IMPORT_TIMEOUT_MS,
-    });
-  },
+  runPayload,
 
   resolve: (dryRun: boolean, limit: number): Promise<ResolveResult> =>
     ingestFetch<ResolveResult>(

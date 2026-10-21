@@ -15159,3 +15159,87 @@ subtests**（`junit_events_routes_5382.xml`）。教训：替身返回值也是�
 诺——具名片的收尾清单里，「单跑测试文件绿」之外必须看替身 return_value
 的键集是否与模型同形；偏离的桩是隐性生产者文档谎言，具名是把它变红的
 机制而不是回归的原因。
+
+**53.83 补记（同日）：普查 v3 推翻「18 条共享五键」——增量赋值盲区与
+响应 sources 元素的双形状陷阱。** 批 2（bundle preview 6 条）落地时先升级
+普查脚本（`.workbuddy/audit-2026-10-03/_census_ingest.py` v3）：v1/v2 只追
+「return 字面量 + 局部赋值 + service 链」，漏了增量赋值
+（`result["k"] = ...`、`result.update(...)`、追加型 helper
+`_attach_run_metadata`）——由此 53.82 的「18 条 import 共享五键」被推翻：
+真实形状按 wrapper 层分四族（facts/import 纯五键；data/source 族 +1 键；
+资源路由各带自己的 count 键；bundle 族 +run/source_fetches?）。落地：
+`event.py` 新增 22 个模型（`IngestBundleRunSummary` /
+`IngestBundleSourceEntry` / `IngestBundleSourceFeedSummary` /
+`IngestDataImportResponse` + 10 个子类 + bundle import/preview 各 4 个），
+24 条路由按生产者层重绑，12 条 bundle 路由（6 import + 6 preview）带
+`response_model_exclude_unset=True`（`source_fetches` 条件写 ⇒ §Z3），
+非 bundle 12 条无旗（§Z4）；`_frontend_export.py` 登记 + `generate_types`
+重生成（22 新接口）。变异 harness +3 条（J181 拔旗 / J182 撤 run /
+J183 撤 sources 追加），清单 266→**269**；J178/J179/J180 的 guards 名同步
+更新（守卫类重构成表驱动，判据名变了 ⇒ 换判据并更新 note）。
+
+**本轮实证的四条新事实（都以源码/失败文本为准）：** ① 响应 `sources`
+元素**唯一**生产者形状 = `_convert_bundle` 的 6 键
+`{index, kind, converted_fact_count, duration_ms, status, normalized_data}`；
+5 键 `{kind, source, source_url, observed_at, payload}` 是
+`_source_feed_entry` 产出的**输入** bundle 条目形状，从不进响应——首版
+`IngestBundleSourceEntry` 拿输入形状当输出形状，被
+`test_world_cup_source_bundle_import_writes_facts` 的
+`ResponseValidationError: 8 validation errors` 当场抓出。② 8 条资源路由的
+`normalized_data` 是 **dict**（整个规范化文档
+`{tournament, source, ..., matches: [...]}`），不是 list——16 条失败文本
+逐条自白了真实形状，模型按文修正。③ `source_metadata` 是**双形状**：
+bundle 族（`validate_world_cup_source_bundle_metadata`）返回**条目列表**，
+`data/source/import`（`validate_world_cup_data_source_metadata`）返回**单
+dict**——同名字段两个生产者两种形状，批量 replace_all 把后者误伤成 list
+后被 `test_world_cup_configured_data_import_writes_facts` 抓出回退；「别
+从同族模型互推」再+1。④ 53.82 写进测试注释的「producer never sends a
+provider key」被源码**证伪**：`import_world_cup_football_data_standings`
+明确追加 `provider`/`source_url`——当时的不忠实五键桩恰好和那个错误结论
+自洽（桩、断言、注释三重假），本轮一并更正：桩补 standings 形状 +
+provider/source_url，断言钉 `provider == "football_data"`。
+
+**替身与 patch 目标的两条操作教训：** ① Blocking 测试
+（`BlockingSourceRouteOffloadTests`）里 sportmonks/test 的 SUBFAILED 根因
+不是形状：patch 的 helper 名 `test_sportmonks_connection` 在
+`app.api.routes.events` 命名空间不存在（AttributeError）——路由 handler
+叫 `test_sportmonks_connection_route`，而 `asyncio.to_thread` 的目标是
+service 名 `test_world_cup_sportmonks_connection`；patch 已注册的 handler
+无效，正确目标与 api-football 行一致，都是 import 进命名空间的 service
+函数。② 同测试 url/feeds 变体桩的 `source_metadata: {}` 是 dict，bundle
+变体的生产者给列表 ⇒ 改 `[]`（与事实 ③ 同源）。
+
+**守卫重构的三条判据教训：** ① 旗子判据按**模型名**分组，不按 URL 前缀
+——`football-data/import` 挂在 `/data/bundle/` 下但属 data 族、无条件写
+⇒ 前缀分组把它误归旗组。② 生成物断言改**规范化全文比对**（逐行 strip 后
+合并空白）：dict 字段在生成器输出里展开成多行 union（含 prettier 风格的
+前导 `|`），逐行断言过度拟合打印机、子串探针欠拟合；规范化后仍钉每个键、
+类型与顺序，且 FlexibleResponse 派生接口必须带 `[k: string]: unknown;`
+开放尾巴、BaseModel 接口闭合（断言漏尾巴 = 53.82 版的三条失败之一）。③
+钉源 AST 收集必须**文档序**（递归 `iter_child_nodes`），`stack.pop()` 的
+LIFO 会把追加序倒过来（实测 `['sources','converted_fact_count',
+'source_count']`）——假序使期望值只能写成错的，倒序修好后期望
+`([], ["source_count", "converted_fact_count", "sources"])` 才是
+`import_world_cup_source_bundle` 的真实构造（无自有 dict 字面量，仅三次
+下标追加；base 五键来源用「`result` 必须由 `import_sports_facts(...)` 调
+用赋值」的断言钉住）。
+
+**验证链读数：** `ruff check app/` 全过；`mypy app/` 331 文件零问题；
+`generate_types --check` up to date；全量 `pytest tests/` **6718 passed /
+11 skipped / 2220 subtests**（junit `failures=0 errors=0`，714s）；J178–
+J183 六条四阶段全 `[OK]`（green before / red after / green restore /
+bytes restored 全 True，红点均在 `tests/test_generate_types.py`）；针审计
+269/269 恰命中 1 次（harness `count_needle` 双变体，
+`.workbuddy/audit-2026-10-03/_needle_audit_5383.py`）；前端 `tsc --noEmit`
+零错、`vitest` 94 文件 / 447 测试全过；`git diff --numstat` 8 文件
++1388/−159（events.py 138/23、_frontend_export.py 44/0、event.py 234/12、
+mutation_verify.py 69/5、test_events_routes.py 73/7、
+test_generate_types.py 379/113、generated-types.ts 440/10、
+ingest-api.ts 15/9），触及文件 CRLF 纯净（bare_lf=0）。前端注释同步更正：
+`ingest-api.ts` 的「18 条 import 共享单形状」过时声明改为分族说明，
+preview 保持松读（调用点传 `source.path: string`，TS 无法按 path 分派
+重载；盲目把 preview 强类型成 bundle 形状会把 `data/preview` 的
+`{converted_fact_count, facts}` 标错——按族收口留给后续批次）。
+
+**下一片队列（不变）：** ③ 资源 preview 11 条 → ④ test+validate 4 条 →
+⑥ status 2 条 → ⑦+⑧ facts/resolve。

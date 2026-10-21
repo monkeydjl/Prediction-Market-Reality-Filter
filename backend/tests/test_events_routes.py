@@ -578,6 +578,29 @@ class WorldCupFactRouteTests(unittest.TestCase):
                         "errors": [],
                         "total": 1,
                         "replace": True,
+                        # The real producer is import_world_cup_source_bundle
+                        # plus _provider_result_metadata (audit 53.83): the
+                        # five-key-only stub was an unfaithful double that
+                        # the named response model exposed at the boundary.
+                        "source_count": 1,
+                        "converted_fact_count": 1,
+                        "sources": [{
+                            "index": 0,
+                            "kind": "matches",
+                            "converted_fact_count": 1,
+                            "duration_ms": 1,
+                            "status": "converted",
+                            "normalized_data": {"matches": []},
+                        }],
+                        "run": {
+                            "status": "success",
+                            "duration_ms": 1,
+                            "source_count": 1,
+                            "converted_fact_count": 1,
+                            "skipped_source_count": 0,
+                        },
+                        "provider": "api_football",
+                        "source_metadata": [],
                     },
                 ) as mock_import:
             run_id = loop_run_store.start_run("world_cup_api_football_validate")
@@ -599,6 +622,7 @@ class WorldCupFactRouteTests(unittest.TestCase):
 
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json()["imported"], 1)
+        self.assertEqual(resp.json()["provider"], "api_football")
         mock_import.assert_called_once_with(replace=True)
 
     def test_world_cup_data_import_converts_match_payload(self):
@@ -1284,6 +1308,16 @@ class WorldCupFactRouteTests(unittest.TestCase):
                         "errors": [],
                         "total": 48,
                         "replace": True,
+                        # The real producer is import_world_cup_standings_source
+                        # plus provider/source_url (audit 53.83): the
+                        # five-key-only stub below was an unfaithful double
+                        # the named response model exposed at the boundary.
+                        "converted_fact_count": 48,
+                        "normalized_qualification_count": 48,
+                        "normalized_data": {"qualifications": []},
+                        "provider": "football_data",
+                        "source_url":
+                            "https://provider.example/v4/competitions/WC/standings",
                     },
                 ) as mock_import:
             client = _events_client()
@@ -1293,13 +1327,14 @@ class WorldCupFactRouteTests(unittest.TestCase):
             )
 
         self.assertEqual(resp.status_code, 200)
-        # The producer never sends a provider key (audit 53.82): the import
-        # chain terminates at import_sports_facts's five-key result, and the
-        # stub that used to echo one was an unfaithful double the named
-        # response model exposed at the boundary.
+        # Correction of the audit-53.82 claim that "the producer never sends
+        # a provider key": reading the producer shows
+        # import_world_cup_football_data_standings appends provider and
+        # source_url after the standings import result (audit 53.83).
         self.assertEqual(resp.json()["imported"], 48)
         self.assertEqual(resp.json()["total"], 48)
         self.assertEqual(resp.json()["replace"], True)
+        self.assertEqual(resp.json()["provider"], "football_data")
         mock_import.assert_called_once_with(replace=True)
 
     def test_world_cup_football_data_import_hides_provider_error_body(self):
@@ -3297,30 +3332,61 @@ class BlockingSourceRouteOffloadTests(unittest.TestCase):
     loop must still be able to schedule other work.
     """
 
+    # 53.83: the preview routes are named now, so the stubs must satisfy
+    # their response models (the point of this test is loop starvation, not
+    # shapes, but a shape the model rejects would 500 before the assertion).
+    _RUN_STUB = {
+        "status": "success",
+        "duration_ms": 1,
+        "source_count": 0,
+        "converted_fact_count": 0,
+        "skipped_source_count": 0,
+    }
+    _BASE_PREVIEW_STUB = {
+        "source_count": 0,
+        "converted_fact_count": 0,
+        "sources": [],
+        "facts": [],
+        "run": _RUN_STUB,
+    }
     ROUTES = (
         (
             "/events/sports/world-cup/data/bundle/api-football/test",
             "test_world_cup_api_football_connection",
+            {"ok": True},
         ),
         (
             "/events/sports/world-cup/data/bundle/sportmonks/test",
             "test_world_cup_sportmonks_connection",
+            {"ok": True},
         ),
         (
             "/events/sports/world-cup/data/bundle/url/preview",
             "preview_world_cup_source_bundle_url",
+            {
+                **_BASE_PREVIEW_STUB,
+                "source_url": "https://upstream.example/bundle.json",
+                "source_metadata": [],
+            },
         ),
         (
             "/events/sports/world-cup/data/bundle/feeds/preview",
             "preview_world_cup_source_bundle_feeds",
+            {
+                **_BASE_PREVIEW_STUB,
+                "source_feeds": [],
+                "source_metadata": [],
+            },
         ),
         (
             "/events/sports/world-cup/data/bundle/football-data/preview",
             "preview_world_cup_football_data_standings",
+            {"ok": True},
         ),
         (
             "/events/sports/world-cup/data/bundle/sportmonks/preview",
             "preview_world_cup_sportmonks_bundle",
+            _BASE_PREVIEW_STUB,
         ),
     )
 
@@ -3329,7 +3395,7 @@ class BlockingSourceRouteOffloadTests(unittest.TestCase):
 
         from httpx import ASGITransport, AsyncClient
 
-        for route, helper in self.ROUTES:
+        for route, helper, stub in self.ROUTES:
             with self.subTest(route=route):
                 app = FastAPI()
                 app.include_router(events_routes.router, prefix="/events")
@@ -3356,8 +3422,8 @@ class BlockingSourceRouteOffloadTests(unittest.TestCase):
                 with patch.object(settings, "API_WRITE_KEY", "secret"), \
                         patch(
                             f"app.api.routes.events.{helper}",
-                            side_effect=lambda *a, **k: (
-                                time.sleep(0.25) or {"ok": True}
+                            side_effect=lambda _stub=stub, *a, **k: (
+                                time.sleep(0.25) or _stub
                             ),
                         ):
                     resp, ticks = asyncio.run(_exercise())

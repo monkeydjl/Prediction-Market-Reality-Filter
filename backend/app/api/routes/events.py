@@ -144,7 +144,26 @@ from app.models.event import (
     EventStoreEntry,
     FlexibleResponse,
     FreshEdgesResponse,
+    IngestBundleFileImportResponse,
+    IngestBundleFilePreviewResponse,
+    IngestBundleFeedsImportResponse,
+    IngestBundleFeedsPreviewResponse,
+    IngestBundleImportResponse,
+    IngestBundlePreviewResponse,
+    IngestBundleUrlImportResponse,
+    IngestBundleUrlPreviewResponse,
+    IngestDataImportResponse,
+    IngestDataSourceFileImportResponse,
     IngestImportResponse,
+    IngestLineupsSourceImportResponse,
+    IngestMatchEventsSourceImportResponse,
+    IngestMatchSourceImportResponse,
+    IngestOfficialCsvSourceImportResponse,
+    IngestPlayerAwardsSourceImportResponse,
+    IngestPlayerStatusSourceImportResponse,
+    IngestStandingsSourceImportResponse,
+    IngestStatisticsSourceImportResponse,
+    IngestFootballDataImportResponse,
     LoopStatusResponse,
     OpenDecisionsResponse,
     PendingLinksResponse,
@@ -647,7 +666,7 @@ async def import_world_cup_facts(
     return result
 
 
-@router.post("/sports/world-cup/data/import", response_model=IngestImportResponse)
+@router.post("/sports/world-cup/data/import", response_model=IngestDataImportResponse)
 async def import_world_cup_data_source(
     payload: DictPayload = Body(...),
     replace: bool = Query(default=False),
@@ -676,7 +695,15 @@ async def preview_world_cup_data_source(
     return {"converted_fact_count": len(facts), "facts": facts}
 
 
-@router.post("/sports/world-cup/data/bundle/preview", response_model=FlexibleResponse)
+@router.post(
+    "/sports/world-cup/data/bundle/preview",
+    response_model=IngestBundlePreviewResponse,
+    # 53.83: source_fetches is written only when the bundle payload
+    # carries the list; without the flag naming would materialise an
+    # explicit null key on responses that omit it.
+    response_model_exclude_unset=True,
+)
+
 async def preview_world_cup_source_bundle_route(
     payload: DictPayload = Body(...),
     _auth: None = Depends(require_write_key),
@@ -688,7 +715,15 @@ async def preview_world_cup_source_bundle_route(
         _reject_source_configuration(exc)
 
 
-@router.post("/sports/world-cup/data/bundle/import", response_model=IngestImportResponse)
+@router.post(
+    "/sports/world-cup/data/bundle/import",
+    response_model=IngestBundleImportResponse,
+    # 53.83: source_fetches is written only when the bundle payload
+    # carries the list; without the flag naming would materialise an
+    # explicit null key on responses that omit it.
+    response_model_exclude_unset=True,
+)
+
 async def import_world_cup_source_bundle_route(
     payload: DictPayload = Body(...),
     replace: bool = Query(default=False),
@@ -701,7 +736,15 @@ async def import_world_cup_source_bundle_route(
         _reject_source_configuration(exc)
 
 
-@router.post("/sports/world-cup/data/bundle/source/preview", response_model=FlexibleResponse)
+@router.post(
+    "/sports/world-cup/data/bundle/source/preview",
+    response_model=IngestBundleFilePreviewResponse,
+    # 53.83: source_fetches is written only when the bundle payload
+    # carries the list; without the flag naming would materialise an
+    # explicit null key on responses that omit it.
+    response_model_exclude_unset=True,
+)
+
 async def preview_configured_world_cup_source_bundle_route(
     _auth: None = Depends(require_write_key),
 ) -> dict[str, Any]:
@@ -717,7 +760,15 @@ async def preview_configured_world_cup_source_bundle_route(
         _reject_source_configuration(exc)
 
 
-@router.post("/sports/world-cup/data/bundle/source/import", response_model=IngestImportResponse)
+@router.post(
+    "/sports/world-cup/data/bundle/source/import",
+    response_model=IngestBundleFileImportResponse,
+    # 53.83: source_fetches is written only when the bundle payload
+    # carries the list; without the flag naming would materialise an
+    # explicit null key on responses that omit it.
+    response_model_exclude_unset=True,
+)
+
 async def import_configured_world_cup_source_bundle_route(
     replace: bool = Query(default=False),
     _auth: None = Depends(require_write_key),
@@ -734,7 +785,15 @@ async def import_configured_world_cup_source_bundle_route(
         _reject_source_configuration(exc)
 
 
-@router.post("/sports/world-cup/data/bundle/url/preview", response_model=FlexibleResponse)
+@router.post(
+    "/sports/world-cup/data/bundle/url/preview",
+    response_model=IngestBundleUrlPreviewResponse,
+    # 53.83: source_fetches is written only when the bundle payload
+    # carries the list; without the flag naming would materialise an
+    # explicit null key on responses that omit it.
+    response_model_exclude_unset=True,
+)
+
 async def preview_remote_world_cup_source_bundle_route(
     _auth: None = Depends(require_write_key),
 ) -> dict[str, Any]:
@@ -745,7 +804,15 @@ async def preview_remote_world_cup_source_bundle_route(
         _reject_source_configuration(exc)
 
 
-@router.post("/sports/world-cup/data/bundle/url/import", response_model=IngestImportResponse)
+@router.post(
+    "/sports/world-cup/data/bundle/url/import",
+    response_model=IngestBundleUrlImportResponse,
+    # 53.83: source_fetches is written only when the bundle payload
+    # carries the list; without the flag naming would materialise an
+    # explicit null key on responses that omit it.
+    response_model_exclude_unset=True,
+)
+
 async def import_remote_world_cup_source_bundle_route(
     replace: bool = Query(default=False),
     _auth: None = Depends(require_write_key),
@@ -759,7 +826,15 @@ async def import_remote_world_cup_source_bundle_route(
         _reject_source_configuration(exc)
 
 
-@router.post("/sports/world-cup/data/bundle/feeds/preview", response_model=FlexibleResponse)
+@router.post(
+    "/sports/world-cup/data/bundle/feeds/preview",
+    response_model=IngestBundleFeedsPreviewResponse,
+    # 53.83: source_fetches is written only when the bundle payload
+    # carries the list; without the flag naming would materialise an
+    # explicit null key on responses that omit it.
+    response_model_exclude_unset=True,
+)
+
 async def preview_configured_world_cup_source_feeds_route(
     _auth: None = Depends(require_write_key),
 ) -> dict[str, Any]:
@@ -770,7 +845,15 @@ async def preview_configured_world_cup_source_feeds_route(
         _reject_invalid_payload(exc)
 
 
-@router.post("/sports/world-cup/data/bundle/feeds/import", response_model=IngestImportResponse)
+@router.post(
+    "/sports/world-cup/data/bundle/feeds/import",
+    response_model=IngestBundleFeedsImportResponse,
+    # 53.83: source_fetches is written only when the bundle payload
+    # carries the list; without the flag naming would materialise an
+    # explicit null key on responses that omit it.
+    response_model_exclude_unset=True,
+)
+
 async def import_configured_world_cup_source_feeds_route(
     replace: bool = Query(default=False),
     _auth: None = Depends(require_write_key),
@@ -784,7 +867,15 @@ async def import_configured_world_cup_source_feeds_route(
         _reject_invalid_payload(exc)
 
 
-@router.post("/sports/world-cup/data/bundle/api-football/preview", response_model=FlexibleResponse)
+@router.post(
+    "/sports/world-cup/data/bundle/api-football/preview",
+    response_model=IngestBundlePreviewResponse,
+    # 53.83: source_fetches is written only when the bundle payload
+    # carries the list; without the flag naming would materialise an
+    # explicit null key on responses that omit it.
+    response_model_exclude_unset=True,
+)
+
 async def preview_api_football_world_cup_source_bundle_route(
     _auth: None = Depends(require_write_key),
 ) -> dict[str, Any]:
@@ -797,7 +888,15 @@ async def preview_api_football_world_cup_source_bundle_route(
         _reject_invalid_payload(exc)
 
 
-@router.post("/sports/world-cup/data/bundle/api-football/import", response_model=IngestImportResponse)
+@router.post(
+    "/sports/world-cup/data/bundle/api-football/import",
+    response_model=IngestBundleImportResponse,
+    # 53.83: source_fetches is written only when the bundle payload
+    # carries the list; without the flag naming would materialise an
+    # explicit null key on responses that omit it.
+    response_model_exclude_unset=True,
+)
+
 async def import_api_football_world_cup_source_bundle_route(
     replace: bool = Query(default=False),
     _auth: None = Depends(require_write_key),
@@ -913,7 +1012,7 @@ async def preview_football_data_world_cup_standings_route(
         _reject_invalid_payload(exc)
 
 
-@router.post("/sports/world-cup/data/bundle/football-data/import", response_model=IngestImportResponse)
+@router.post("/sports/world-cup/data/bundle/football-data/import", response_model=IngestFootballDataImportResponse)
 async def import_football_data_world_cup_standings_route(
     replace: bool = Query(default=False),
     _auth: None = Depends(require_write_key),
@@ -932,7 +1031,15 @@ async def import_football_data_world_cup_standings_route(
         _reject_invalid_payload(exc)
 
 
-@router.post("/sports/world-cup/data/bundle/sportmonks/preview", response_model=FlexibleResponse)
+@router.post(
+    "/sports/world-cup/data/bundle/sportmonks/preview",
+    response_model=IngestBundlePreviewResponse,
+    # 53.83: source_fetches is written only when the bundle payload
+    # carries the list; without the flag naming would materialise an
+    # explicit null key on responses that omit it.
+    response_model_exclude_unset=True,
+)
+
 async def preview_sportmonks_world_cup_source_bundle_route(
     _auth: None = Depends(require_write_key),
 ) -> dict[str, Any]:
@@ -943,7 +1050,15 @@ async def preview_sportmonks_world_cup_source_bundle_route(
         _reject_invalid_payload(exc)
 
 
-@router.post("/sports/world-cup/data/bundle/sportmonks/import", response_model=IngestImportResponse)
+@router.post(
+    "/sports/world-cup/data/bundle/sportmonks/import",
+    response_model=IngestBundleImportResponse,
+    # 53.83: source_fetches is written only when the bundle payload
+    # carries the list; without the flag naming would materialise an
+    # explicit null key on responses that omit it.
+    response_model_exclude_unset=True,
+)
+
 async def import_sportmonks_world_cup_source_bundle_route(
     replace: bool = Query(default=False),
     _auth: None = Depends(require_write_key),
@@ -989,7 +1104,7 @@ async def preview_configured_world_cup_data_source(
         _reject_invalid_payload(exc)
 
 
-@router.post("/sports/world-cup/data/source/import", response_model=IngestImportResponse)
+@router.post("/sports/world-cup/data/source/import", response_model=IngestDataSourceFileImportResponse)
 async def import_configured_world_cup_data_source(
     replace: bool = Query(default=False),
     _auth: None = Depends(require_write_key),
@@ -1018,7 +1133,7 @@ async def preview_world_cup_official_csv_source_route(
         _reject_invalid_payload(exc)
 
 
-@router.post("/sports/world-cup/official-csv/import", response_model=IngestImportResponse)
+@router.post("/sports/world-cup/official-csv/import", response_model=IngestOfficialCsvSourceImportResponse)
 async def import_world_cup_official_csv_source_route(
     payload: DictPayload = Body(...),
     replace: bool = Query(default=False),
@@ -1043,7 +1158,7 @@ async def preview_world_cup_match_source_route(
         _reject_invalid_payload(exc)
 
 
-@router.post("/sports/world-cup/matches/import", response_model=IngestImportResponse)
+@router.post("/sports/world-cup/matches/import", response_model=IngestMatchSourceImportResponse)
 async def import_world_cup_match_source_route(
     payload: DictPayload = Body(...),
     replace: bool = Query(default=False),
@@ -1068,7 +1183,7 @@ async def preview_world_cup_match_events_source_route(
         _reject_invalid_payload(exc)
 
 
-@router.post("/sports/world-cup/match-events/import", response_model=IngestImportResponse)
+@router.post("/sports/world-cup/match-events/import", response_model=IngestMatchEventsSourceImportResponse)
 async def import_world_cup_match_events_source_route(
     payload: DictPayload = Body(...),
     replace: bool = Query(default=False),
@@ -1093,7 +1208,7 @@ async def preview_world_cup_lineups_source_route(
         _reject_invalid_payload(exc)
 
 
-@router.post("/sports/world-cup/lineups/import", response_model=IngestImportResponse)
+@router.post("/sports/world-cup/lineups/import", response_model=IngestLineupsSourceImportResponse)
 async def import_world_cup_lineups_source_route(
     payload: DictPayload = Body(...),
     replace: bool = Query(default=False),
@@ -1118,7 +1233,7 @@ async def preview_world_cup_standings_source_route(
         _reject_invalid_payload(exc)
 
 
-@router.post("/sports/world-cup/standings/import", response_model=IngestImportResponse)
+@router.post("/sports/world-cup/standings/import", response_model=IngestStandingsSourceImportResponse)
 async def import_world_cup_standings_source_route(
     payload: DictPayload = Body(...),
     replace: bool = Query(default=False),
@@ -1143,7 +1258,7 @@ async def preview_world_cup_player_awards_source_route(
         _reject_invalid_payload(exc)
 
 
-@router.post("/sports/world-cup/player-awards/import", response_model=IngestImportResponse)
+@router.post("/sports/world-cup/player-awards/import", response_model=IngestPlayerAwardsSourceImportResponse)
 async def import_world_cup_player_awards_source_route(
     payload: DictPayload = Body(...),
     replace: bool = Query(default=False),
@@ -1168,7 +1283,7 @@ async def preview_world_cup_player_status_source_route(
         _reject_invalid_payload(exc)
 
 
-@router.post("/sports/world-cup/player-status/import", response_model=IngestImportResponse)
+@router.post("/sports/world-cup/player-status/import", response_model=IngestPlayerStatusSourceImportResponse)
 async def import_world_cup_player_status_source_route(
     payload: DictPayload = Body(...),
     replace: bool = Query(default=False),
@@ -1193,7 +1308,7 @@ async def preview_world_cup_statistics_source_route(
         _reject_source_configuration(exc)
 
 
-@router.post("/sports/world-cup/statistics/import", response_model=IngestImportResponse)
+@router.post("/sports/world-cup/statistics/import", response_model=IngestStatisticsSourceImportResponse)
 async def import_world_cup_statistics_source_route(
     payload: DictPayload = Body(...),
     replace: bool = Query(default=False),

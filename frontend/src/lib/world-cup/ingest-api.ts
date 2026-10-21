@@ -194,11 +194,13 @@ export const PAYLOAD_SOURCES: PayloadSource[] = [
 
 /**
  * Loose display bag for the ingest actions that are still bare on the
- * backend (preview / test / validate / the two status reads). The five
- * import-result keys are **derived** from the generated contract
- * (audit 53.82: the 18 import routes all publish ``IngestImportResponse``),
- * not re-declared by hand -- imports return the generated type directly via
- * the ``runConfigured`` / ``runPayload`` overloads.
+ * backend (test / validate / the two status reads) and for previews whose
+ * shape varies per path family (audit 53.83: the import family split into
+ * per-producer models, and the preview family is just as heterogeneous --
+ * `data/preview` returns `{converted_fact_count, facts}` while the bundle
+ * previews return the run-metadata envelope -- so a single "preview"
+ * overload would mislabel the non-bundle paths; they are typed per family
+ * when their backend slices name them).
  */
 export type IngestResult = Partial<
   Pick<
@@ -210,7 +212,7 @@ export type IngestResult = Partial<
   message?: string;
   ok?: boolean;
   count?: number;
-  /** preview-family keys: named in a later slice, read loosely until then. */
+  /** preview-family keys: named per path family in a later slice. */
   converted_fact_count?: number;
   facts?: unknown[];
   [key: string]: unknown;
@@ -300,9 +302,13 @@ export function parseIngestPayload(text: string): unknown {
 }
 
 /**
- * Run a no-body action against a configured source. Import responses are
- * strongly typed (all 18 import routes share ``IngestImportResponse``,
- * audit 53.82); the other actions stay loose until their slices name them.
+ * Run a no-body action against a configured source. The "import" overload
+ * types the result as the five-key base contract: the 53.83 census split
+ * the import family into per-producer subclasses that all extend
+ * ``IngestImportResponse``, and the caller reads only the shared base keys,
+ * so the base type stays truthful for every import route while each
+ * subclass widens it on the wire. The other actions stay loose until their
+ * slices name them (see IngestResult).
  */
 function runConfigured(
   path: string,

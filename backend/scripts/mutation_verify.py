@@ -290,6 +290,7 @@ _PIPELINE = "backend/app/services/world_cup_prediction_pipeline.py"
 _MATCH_SERVICE = "backend/app/services/world_cup_match_service.py"
 _ELO_ENGINE = "backend/app/kernel/engines/elo_odds_engine.py"
 _SPORTS_FACT = "backend/app/services/sports_fact_service.py"
+_WC_SOURCE_BUNDLE = "backend/app/services/world_cup_source_bundle.py"
 _LIMITLESS = "backend/app/services/limitless_event_source.py"
 _GBM_ENGINE = "backend/app/kernel/engines/gbm_engine.py"
 _CHALLENGE_ADAPTER = "backend/app/services/conclusion_challenge_world_cup_adapter.py"
@@ -1671,7 +1672,7 @@ SETS: tuple[MutationSet, ...] = (
     ),
     MutationSet(
         key="frontend-type-closure",
-        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6、J1–J180）",
+        title="前端类型闭合：可达的普通模型必须登记为根，开放集是拍过板的，且 api.ts 不自己声明副本（D1–D6、J1–J183）",
         rationale=(
             "§2 的「登记为根」规则（§53.49 立、§53.50 推广）。`pydantic2ts` 用 "
             "`inspect.getmembers(module)` 收集**模块命名空间里**的模型当根；只有根会被临时置 "
@@ -5785,12 +5786,13 @@ SETS: tuple[MutationSet, ...] = (
                 new=b'@router.post("/sports/world-cup/facts/import", response_model=FlexibleResponse)',
                 guard_file=_T_GENERATE_TYPES,
                 guards=(
-                    "test_every_ingest_import_route_binds_ingest_import_response",
+                    "test_every_ingest_route_binds_its_family_model",
                 ),
                 note=(
                     "§53.82（ingest 批 1）：18 条 import 路由全部共享 "
-                    "import_sports_facts 的单形状 —— 身份判据按「全族 18 条"
-                    "都绑 IngestImportResponse」断言，任何一条滑回裸类都红。"
+                    "import_sports_facts 的单形状 —— 身份判据按「表驱动逐条"
+                    "绑定各自层模型」断言，任何一条滑回裸类或兄弟层模型都红"
+                    "（53.83 换判据：普查 v3 揭示 18 条实际分四族）。"
                     "同时该守卫断言全族无 response_model_exclude_unset "
                     "（无条件写入 ⇒ 旗子是盲点不是保护，§Z4）。"
                     "● 针单行、无换行、命中 **1 次**（已实测；18 条同形装饰器"
@@ -5804,7 +5806,7 @@ SETS: tuple[MutationSet, ...] = (
                 new=b"    imported: int = 0\r\n",
                 guard_file=_T_GENERATE_TYPES,
                 guards=(
-                    "test_model_is_the_producer_five_keys_all_required",
+                    "test_models_are_the_producer_key_sets_in_producer_order",
                 ),
                 note=(
                     "§53.82（ingest 批 1）：两个 return 无条件写五键 ⇒ 全部"
@@ -5830,6 +5832,68 @@ SETS: tuple[MutationSet, ...] = (
                     "，所以「名字集==生产者键集」判据必须在源侧红（§Z6）。"
                     "选首个 return 的 total 键做针：它带独特表达式、与第二个 "
                     "return 的 `len(store[\"facts\"])` 字节不同。"
+                    "● 针单行、带 CRLF、命中 **1 次**（已实测）。"
+                ),
+            ),
+            Mutation(
+                label="J181 bundle/preview 拔旗：条件键的旗子判据脱钩",
+                path=_DIGEST_ROUTES,
+                old=b'    "/sports/world-cup/data/bundle/preview",\r\n'
+                    b'    response_model=IngestBundlePreviewResponse,\r\n'
+                    b'    # 53.83: source_fetches is written only when the bundle payload\r\n'
+                    b'    # carries the list; without the flag naming would materialise an\r\n'
+                    b'    # explicit null key on responses that omit it.\r\n'
+                    b'    response_model_exclude_unset=True,\r\n',
+                new=b'    "/sports/world-cup/data/bundle/preview",\r\n'
+                    b'    response_model=IngestBundlePreviewResponse,\r\n',
+                guard_file=_T_GENERATE_TYPES,
+                guards=(
+                    "test_bundle_routes_carry_exclude_unset_and_others_do_not",
+                ),
+                note=(
+                    "§53.83（批 2）：source_fetches 是条件写入（bundle payload 带"
+                    " source_fetches 列表才写），无旗子时具名会把缺席变成显式 null "
+                    "= 改线上字节（§Z3）。12 条 bundle 路由（6 import + 6 preview）"
+                    "都必须带旗；非 bundle 的 12 条 import 路由则必须无旗（无条件写"
+                    "入，§Z4）。拔旗后 bundle_unflagged 非空 ⇒ 红。"
+                    "● 针跨行、带 CRLF、命中 **1 次**（已实测；path 行消歧 12 条同"
+                    "型块）。删除型编辑。"
+                ),
+            ),
+            Mutation(
+                label="J182 IngestBundlePreviewResponse.run 撤名：模型键序判据脱钩",
+                path=_EVENT_MODEL,
+                old=b'    facts: list[dict[str, Any]]\r\n'
+                    b'    run: IngestBundleRunSummary\r\n',
+                new=b'    facts: list[dict[str, Any]]\r\n',
+                guard_file=_T_GENERATE_TYPES,
+                guards=(
+                    "test_models_are_the_producer_key_sets_in_producer_order",
+                ),
+                note=(
+                    "§53.83（批 2）：preview_world_cup_source_bundle 的四键字面量 + "
+                    "_attach_run_metadata 追加 run（无条件）与 source_fetches（条件）"
+                    "—— 模型键序必须等于生产者 dict 插入序（§Z21）。撤 run 后键序断"
+                    "言当场红。"
+                    "● 针两行、带 CRLF、命中 **1 次**（已实测；facts+run 相邻组合消"
+                    "歧 import 侧的 sources+run 相邻组合）。删除型编辑，删除数 1。"
+                ),
+            ),
+            Mutation(
+                label="J183 bundle wrapper 的 sources 追加撤名：增量写钉源判据脱钩",
+                path=_WC_SOURCE_BUNDLE,
+                old=b'    result["sources"] = sources\r\n',
+                new=b'    result["sources_renamed"] = sources\r\n',
+                guard_file=_T_GENERATE_TYPES,
+                guards=(
+                    "test_producer_key_set_is_pinned_from_source",
+                ),
+                note=(
+                    "§53.83：53.82 的单形状结论来自普查盲区——只追 return 字面量、不"
+                    "追 result[\"k\"] = ... 增量写。升级后的钉源守卫把 wrapper 的字面"
+                    "量键 + 下标追加键一并钉住（字面量 [source_count, "
+                    "converted_fact_count, sources] 与追加序必须同序）。sources 追加"
+                    "改名后追加序断言红。"
                     "● 针单行、带 CRLF、命中 **1 次**（已实测）。"
                 ),
             ),

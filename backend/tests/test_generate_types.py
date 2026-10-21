@@ -3289,17 +3289,11 @@ class FlexibleResponseIdentityTests(unittest.TestCase):
         "GET /api/world-cup/predictions/matches/{match_id}",
         "GET /api/world-cup/predictions/today",
         "POST /api/events/analyze",
-        "POST /api/events/sports/world-cup/data/bundle/api-football/preview",
         "POST /api/events/sports/world-cup/data/bundle/api-football/test",
         "POST /api/events/sports/world-cup/data/bundle/api-football/validate",
-        "POST /api/events/sports/world-cup/data/bundle/feeds/preview",
         "POST /api/events/sports/world-cup/data/bundle/football-data/preview",
-        "POST /api/events/sports/world-cup/data/bundle/preview",
-        "POST /api/events/sports/world-cup/data/bundle/source/preview",
-        "POST /api/events/sports/world-cup/data/bundle/sportmonks/preview",
         "POST /api/events/sports/world-cup/data/bundle/sportmonks/test",
         "POST /api/events/sports/world-cup/data/bundle/sportmonks/validate",
-        "POST /api/events/sports/world-cup/data/bundle/url/preview",
         "POST /api/events/sports/world-cup/data/preview",
         "POST /api/events/sports/world-cup/data/source/preview",
         "POST /api/events/sports/world-cup/lineups/preview",
@@ -3356,109 +3350,262 @@ class FlexibleResponseIdentityTests(unittest.TestCase):
 
 
 class IngestImportContractTests(unittest.TestCase):
-    """All 18 world-cup ingest ``*/import`` routes share one shape (53.82).
+    """The ingest import/preview families: one model per producer layer.
 
-    The AST census resolved every import chain to a single terminal producer,
-    ``import_sports_facts``, whose two return literals (partial-failure early
-    return and success return) write the same five keys unconditionally.
-    Judgments:
+    Audit 53.82 named a single model for all 18 import routes on a census
+    that traced return literals only. Audit 53.83 upgraded the census to
+    also trace the incremental ``result[...] =`` writes each wrapper layer
+    makes afterwards, which split the family: ``facts/import`` is the only
+    pure five-key route, the payload-source routes add
+    ``converted_fact_count`` plus their converter's keys, and the bundle
+    family adds the run metadata plus a conditional ``source_fetches`` --
+    the conditional key is why every bundle route (import and preview
+    alike) must carry ``response_model_exclude_unset`` while the
+    unconditional routes must not.
 
-    * every import route binds ``IngestImportResponse`` and carries no
-      ``response_model_exclude_unset`` -- unconditional writes make the flag
-      a no-op that would let a conditional key slip in unnoticed (§Z4);
-    * the model is the producer key set in producer order, all required
-      (a default would be a type lie, and a missing key must fail loudly);
-    * the producer key set is pinned from source by AST over
-      ``import_sports_facts`` -- a sixth key or a renamed key goes red here
-      instead of silently passing through the open tail;
-    * the generated TypeScript carries the five keys required and the
-      ``errors`` element as a closed two-key interface.
+    The route-to-model mapping is table-driven (one row per route, judged
+    against the app walk), so a route that slips back to the bare class --
+    or to a sibling layer's model -- goes red by name.
     """
 
-    _IMPORT_PREFIX = "/api/events/sports/world-cup/"
+    _BASE = ["imported", "error_count", "errors", "total", "replace"]
+    _NORM = "normalized_data: list[dict[str, Any]]"
 
-    def _import_routes(self):
+    _ROUTE_MODELS = {
+        "/api/events/sports/world-cup/facts/import": "IngestImportResponse",
+        "/api/events/sports/world-cup/data/import": "IngestDataImportResponse",
+        "/api/events/sports/world-cup/data/source/import":
+            "IngestDataSourceFileImportResponse",
+        "/api/events/sports/world-cup/official-csv/import":
+            "IngestOfficialCsvSourceImportResponse",
+        "/api/events/sports/world-cup/matches/import":
+            "IngestMatchSourceImportResponse",
+        "/api/events/sports/world-cup/match-events/import":
+            "IngestMatchEventsSourceImportResponse",
+        "/api/events/sports/world-cup/lineups/import":
+            "IngestLineupsSourceImportResponse",
+        "/api/events/sports/world-cup/standings/import":
+            "IngestStandingsSourceImportResponse",
+        "/api/events/sports/world-cup/player-awards/import":
+            "IngestPlayerAwardsSourceImportResponse",
+        "/api/events/sports/world-cup/player-status/import":
+            "IngestPlayerStatusSourceImportResponse",
+        "/api/events/sports/world-cup/statistics/import":
+            "IngestStatisticsSourceImportResponse",
+        "/api/events/sports/world-cup/data/bundle/football-data/import":
+            "IngestFootballDataImportResponse",
+        "/api/events/sports/world-cup/data/bundle/import":
+            "IngestBundleImportResponse",
+        "/api/events/sports/world-cup/data/bundle/source/import":
+            "IngestBundleFileImportResponse",
+        "/api/events/sports/world-cup/data/bundle/url/import":
+            "IngestBundleUrlImportResponse",
+        "/api/events/sports/world-cup/data/bundle/feeds/import":
+            "IngestBundleFeedsImportResponse",
+        "/api/events/sports/world-cup/data/bundle/api-football/import":
+            "IngestBundleImportResponse",
+        "/api/events/sports/world-cup/data/bundle/sportmonks/import":
+            "IngestBundleImportResponse",
+        "/api/events/sports/world-cup/data/bundle/preview":
+            "IngestBundlePreviewResponse",
+        "/api/events/sports/world-cup/data/bundle/source/preview":
+            "IngestBundleFilePreviewResponse",
+        "/api/events/sports/world-cup/data/bundle/url/preview":
+            "IngestBundleUrlPreviewResponse",
+        "/api/events/sports/world-cup/data/bundle/feeds/preview":
+            "IngestBundleFeedsPreviewResponse",
+        "/api/events/sports/world-cup/data/bundle/api-football/preview":
+            "IngestBundlePreviewResponse",
+        "/api/events/sports/world-cup/data/bundle/sportmonks/preview":
+            "IngestBundlePreviewResponse",
+    }
+
+    # Producer key order per model, base keys first (pydantic flattens the
+    # inheritance, and the wire order is the producer's dict insertion
+    # order: base five, then each wrapper's appends). The second element is
+    # the set of keys that are conditional at the producer, so optional with
+    # a default -- every other key must be required.
+    _MODEL_KEYS = {
+        "IngestImportResponse": (_BASE, []),
+        "IngestDataImportResponse": (_BASE + ["converted_fact_count"], []),
+        "IngestDataSourceFileImportResponse": (
+            _BASE + ["converted_fact_count", "source_file", "source_metadata"], []),
+        "IngestOfficialCsvSourceImportResponse": (
+            _BASE + ["converted_fact_count", "profile", "profile_counts",
+                     "normalized_data"], []),
+        "IngestMatchSourceImportResponse": (
+            _BASE + ["converted_fact_count", "normalized_match_count",
+                     "normalized_data"], []),
+        "IngestMatchEventsSourceImportResponse": (
+            _BASE + ["converted_fact_count", "normalized_event_count",
+                     "normalized_data"], []),
+        "IngestLineupsSourceImportResponse": (
+            _BASE + ["converted_fact_count", "normalized_lineup_count",
+                     "normalized_data"], []),
+        "IngestStandingsSourceImportResponse": (
+            _BASE + ["converted_fact_count", "normalized_qualification_count",
+                     "normalized_data"], []),
+        "IngestPlayerAwardsSourceImportResponse": (
+            _BASE + ["converted_fact_count", "normalized_award_count",
+                     "normalized_data"], []),
+        "IngestPlayerStatusSourceImportResponse": (
+            _BASE + ["converted_fact_count", "normalized_status_count",
+                     "normalized_data"], []),
+        "IngestStatisticsSourceImportResponse": (
+            _BASE + ["converted_fact_count", "normalized_team_stat_count",
+                     "normalized_player_stat_count", "normalized_data"], []),
+        "IngestFootballDataImportResponse": (
+            _BASE + ["converted_fact_count", "normalized_qualification_count",
+                     "normalized_data", "provider", "source_url"], []),
+        "IngestBundleImportResponse": (
+            _BASE + ["source_count", "converted_fact_count", "sources", "run",
+                     "source_fetches"], ["source_fetches"]),
+        "IngestBundleFileImportResponse": (
+            _BASE + ["source_count", "converted_fact_count", "sources", "run",
+                     "source_fetches", "source_file", "source_metadata"],
+            ["source_fetches"]),
+        "IngestBundleUrlImportResponse": (
+            _BASE + ["source_count", "converted_fact_count", "sources", "run",
+                     "source_fetches", "source_url", "source_metadata"],
+            ["source_fetches"]),
+        "IngestBundleFeedsImportResponse": (
+            _BASE + ["source_count", "converted_fact_count", "sources", "run",
+                     "source_fetches", "source_feeds", "source_metadata"],
+            ["source_fetches"]),
+        "IngestBundlePreviewResponse": (
+            ["source_count", "converted_fact_count", "sources", "facts",
+             "run", "source_fetches"], ["source_fetches"]),
+        "IngestBundleFilePreviewResponse": (
+            ["source_count", "converted_fact_count", "sources", "facts",
+             "run", "source_fetches", "source_file", "source_metadata"],
+            ["source_fetches"]),
+        "IngestBundleUrlPreviewResponse": (
+            ["source_count", "converted_fact_count", "sources", "facts",
+             "run", "source_fetches", "source_url", "source_metadata"],
+            ["source_fetches"]),
+        "IngestBundleFeedsPreviewResponse": (
+            ["source_count", "converted_fact_count", "sources", "facts",
+             "run", "source_fetches", "source_feeds", "source_metadata"],
+            ["source_fetches"]),
+        "IngestBundleRunSummary": (
+            ["status", "duration_ms", "source_count", "converted_fact_count",
+             "skipped_source_count", "source_fetch_count",
+             "source_fetch_duration_ms"],
+            ["source_fetch_count", "source_fetch_duration_ms"]),
+        "IngestBundleSourceEntry": (
+            ["index", "kind", "converted_fact_count", "duration_ms",
+             "status", "normalized_data"], []),
+        "IngestBundleSourceFeedSummary": (
+            ["kind", "source", "source_url", "observed_at"], []),
+    }
+
+    def _named_route(self, path):
         from app.main import app
 
-        routes = [
+        matches = [
             route for route in app.routes
-            if getattr(route, "path", "").startswith(self._IMPORT_PREFIX)
-            and route.path.endswith("/import")
+            if getattr(route, "path", "") == path
         ]
         self.assertEqual(
-            len(routes), 18,
-            "the ingest import family is 18 routes (census 53.82); a drift "
-            "here means a route was added or removed and this guard plus "
-            "BARE_FLEXIBLE_RESPONSE_ROUTES must be re-scoped together",
+            len(matches), 1,
+            f"route {path} is missing or duplicated in the app walk",
         )
-        return routes
+        return matches[0]
 
-    def test_every_ingest_import_route_binds_ingest_import_response(self):
-        from app.models.event import IngestImportResponse
+    def test_every_ingest_route_binds_its_family_model(self):
+        import app.models.event as event_models
 
-        routes = self._import_routes()
-        wrong = [
-            f"{route.path} -> "
-            f"{getattr(route.response_model, '__name__', '?')}"
-            for route in routes
-            if route.response_model is not IngestImportResponse
-        ]
+        self.assertEqual(
+            len(self._ROUTE_MODELS), 24,
+            "18 import routes + 6 bundle previews = 24; a drift here means "
+            "a route was added or removed and the census must be re-run "
+            "(audit 53.83)",
+        )
+        wrong = []
+        for path, model_name in self._ROUTE_MODELS.items():
+            route = self._named_route(path)
+            model = getattr(event_models, model_name)
+            if route.response_model is not model:
+                wrong.append(
+                    f"{path} -> "
+                    f"{getattr(route.response_model, '__name__', '?')} "
+                    f"(want {model_name})"
+                )
         self.assertEqual(
             wrong, [],
-            "every import route must bind the shared IngestImportResponse -- "
-            "all 18 chains terminate at import_sports_facts and publish the "
-            "same five-key shape: " + "; ".join(wrong),
-        )
-        flagged = [
-            route.path for route in routes
-            if getattr(route, "response_model_exclude_unset", False)
-        ]
-        self.assertEqual(
-            flagged, [],
-            "no import route may carry response_model_exclude_unset: both "
-            "producer returns write all five keys, so the flag is a no-op "
-            "today and a blind spot the day a key becomes conditional "
-            f"(audit 53.82): {flagged}",
+            "every ingest route must bind its own producer layer's model -- "
+            "the 53.82 single-model binding was the census blind spot (the "
+            "wrappers append keys the base model does not declare): "
+            + "; ".join(wrong),
         )
 
-    def test_model_is_the_producer_five_keys_all_required(self):
-        from app.models.event import IngestErrorEntry, IngestImportResponse
+    def test_bundle_routes_carry_exclude_unset_and_others_do_not(self):
+        bundle_flagged = []
+        bundle_unflagged = []
+        nonbundle_flagged = []
+        for path, model_name in self._ROUTE_MODELS.items():
+            route = self._named_route(path)
+            flagged = bool(
+                getattr(route, "response_model_exclude_unset", False)
+            )
+            # Judged by the bound model family, not the URL prefix:
+            # football-data/import lives under /data/bundle/ but binds a
+            # data-family subclass whose producer writes every key
+            # unconditionally, so it must stay unflagged.
+            if model_name.startswith("IngestBundle"):
+                (bundle_flagged if flagged else bundle_unflagged).append(path)
+            elif flagged:
+                nonbundle_flagged.append(path)
+        self.assertEqual(
+            bundle_unflagged, [],
+            "every bundle route must carry response_model_exclude_unset: "
+            "source_fetches is conditional at the producer, so without the "
+            "flag naming would materialise an explicit null on responses "
+            f"that omit it (§Z3, audit 53.83): {bundle_unflagged}",
+        )
+        self.assertEqual(
+            len(bundle_flagged), 12,
+            "12 bundle routes (6 import + 6 preview) carry the flag",
+        )
+        self.assertEqual(
+            nonbundle_flagged, [],
+            "non-bundle ingest routes write every key unconditionally, so "
+            "the flag would be a no-op today and a blind spot the day a key "
+            f"becomes conditional (§Z4, audit 53.83): {nonbundle_flagged}",
+        )
 
-        fields = IngestImportResponse.model_fields
-        self.assertEqual(
-            list(fields),
-            ["imported", "error_count", "errors", "total", "replace"],
-            "IngestImportResponse is no longer the producer's five keys in "
-            "producer order (audit 53.82)",
-        )
-        for name, field in fields.items():
-            with self.subTest(key=name):
-                self.assertTrue(
-                    field.is_required(),
-                    f"IngestImportResponse.{name} gained a default; both "
-                    "producer returns write it unconditionally, so a default "
-                    "would hide a producer regression instead of failing at "
-                    "the boundary (audit 53.82)",
+    def test_models_are_the_producer_key_sets_in_producer_order(self):
+        import app.models.event as event_models
+
+        for name, (keys, optional) in self._MODEL_KEYS.items():
+            model = getattr(event_models, name)
+            fields = model.model_fields
+            with self.subTest(model=name):
+                self.assertEqual(
+                    list(fields), keys,
+                    f"{name} is no longer the producer's keys in producer "
+                    "order -- the wire order is the producer's dict "
+                    "insertion order, base five first then each wrapper's "
+                    "appends (audit 53.83)",
                 )
-        self.assertEqual(
-            fields["errors"].annotation,
-            list[IngestErrorEntry],
-            "errors is no longer the list of {index, error} entries the two "
-            "append sites write (audit 53.82)",
-        )
-        entry_fields = IngestErrorEntry.model_fields
-        self.assertEqual(
-            list(entry_fields), ["index", "error"],
-            "IngestErrorEntry is no longer the two keys every append site "
-            "writes (audit 53.82)",
-        )
-        for name, field in entry_fields.items():
-            with self.subTest(entry_key=name):
-                self.assertTrue(
-                    field.is_required(),
-                    f"IngestErrorEntry.{name} gained a default; both append "
-                    "sites write it unconditionally (audit 53.82)",
-                )
+            for key, field in fields.items():
+                with self.subTest(model=name, key=key):
+                    if key in optional:
+                        self.assertFalse(
+                            field.is_required(),
+                            f"{name}.{key} became required; the producer "
+                            "writes it conditionally, so it must keep a "
+                            "default and the route must keep the flag "
+                            "(audit 53.83)",
+                        )
+                    else:
+                        self.assertTrue(
+                            field.is_required(),
+                            f"{name}.{key} gained a default; the producer "
+                            "writes it unconditionally, so a default would "
+                            "hide a producer regression instead of failing "
+                            "at the boundary (audit 53.83)",
+                        )
 
     def test_producer_key_set_is_pinned_from_source(self):
         import ast
@@ -3494,39 +3641,158 @@ class IngestImportContractTests(unittest.TestCase):
             self.assertEqual(
                 keys,
                 ["imported", "error_count", "errors", "total", "replace"],
-                "the producer's return key set drifted from the model; the "
-                "open tail would pass extra keys through unvalidated "
-                f"(audit 53.82): {keys}",
+                "the terminal producer's return key set drifted; the open "
+                f"tail would pass extra keys through unvalidated: {keys}",
             )
+
+        # The wrapper layers that motivated the 53.83 correction: their
+        # incremental writes are part of the contract the base-model census
+        # missed. Pinned as (literal keys, ordered subscript appends).
+        bundle = (
+            _BACKEND_DIR / "app" / "services" / "world_cup_source_bundle.py"
+        ).read_bytes().decode("utf-8")
+        btree = ast.parse(bundle)
+        bfn = next(
+            node for node in btree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == "import_world_cup_source_bundle"
+        )
+        literal_keys: list[str] = []
+        appended: list[str] = []
+
+        def _walk_source_order(node):
+            # Document order, not a LIFO stack: pop() visits the last child
+            # first, which reversed the append sequence and masked the very
+            # producer order this assertion pins (audit 53.83).
+            for child in ast.iter_child_nodes(node):
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                      ast.Lambda)):
+                    continue
+                yield child
+                yield from _walk_source_order(child)
+
+        nodes = list(_walk_source_order(bfn))
+        for node in nodes:
+            if isinstance(node, ast.Assign) and len(node.targets) == 1:
+                target = node.targets[0]
+                if (isinstance(target, ast.Name) and target.id == "result"
+                        and isinstance(node.value, ast.Dict)):
+                    literal_keys = [
+                        k.value for k in node.value.keys
+                        if isinstance(k, ast.Constant)
+                    ]
+                elif (isinstance(target, ast.Subscript)
+                        and isinstance(target.value, ast.Name)
+                        and target.value.id == "result"
+                        and isinstance(target.slice, ast.Constant)):
+                    appended.append(str(target.slice.value))
+        base_from_terminal = any(
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id == "result"
+            and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Name)
+            and node.value.func.id == "import_sports_facts"
+            for node in nodes
+        )
+        self.assertTrue(
+            base_from_terminal,
+            "import_world_cup_source_bundle no longer seeds its result from "
+            "the terminal producer import_sports_facts -- the base five "
+            "keys would lose their provenance (audit 53.83)",
+        )
+        self.assertEqual(
+            (literal_keys, appended),
+            ([], ["source_count", "converted_fact_count", "sources"]),
+            "import_world_cup_source_bundle builds no dict literal of its "
+            "own: it takes import_sports_facts's five-key result and "
+            "appends source_count / converted_fact_count / sources in that "
+            "order -- the append order is what IngestBundleImportResponse's "
+            "field order mirrors (audit 53.83)",
+        )
 
     def test_generated_types_carry_the_required_keys(self):
         text = _OUTPUT_PATH.read_bytes().decode("utf-8")
         bodies = _interface_bodies(text)
-        self.assertIn("IngestImportResponse", bodies)
-        self.assertIn("IngestErrorEntry", bodies)
-        for line in (
-            "  imported: number;",
-            "  error_count: number;",
-            "  errors: IngestErrorEntry[];",
-            "  total: number;",
-            "  replace: boolean;",
-        ):
-            self.assertIn(
-                line, bodies["IngestImportResponse"],
-                "the generated envelope lost a required key or grew a "
-                f"default (audit 53.82): {line!r}",
+
+        def normalized(name):
+            # Whitespace-normalised full-body compare: dict-typed fields
+            # expand to multi-line unions in the generator output, so a
+            # line-list assertion would over-fit the printer while a
+            # substring probe would under-fit it. The joined text still
+            # pins every key, its type, and its order.
+            return " ".join(
+                line.strip() for line in bodies[name] if line.strip()
             )
-        self.assertNotIn(
-            "  imported?: number", bodies["IngestImportResponse"],
-            "a key turned optional in the generated envelope; that means a "
-            "default slipped into the model (audit 53.82)",
+
+        _TAIL = "[k: string]: unknown;"
+        for name in (
+            "IngestImportResponse",
+            "IngestDataImportResponse",
+            "IngestBundleImportResponse",
+            "IngestBundlePreviewResponse",
+            "IngestBundleRunSummary",
+            "IngestBundleSourceEntry",
+            "IngestErrorEntry",
+        ):
+            self.assertIn(name, bodies)
+        _BASE = ("imported: number; error_count: number; "
+                 "errors: IngestErrorEntry[]; total: number; "
+                 "replace: boolean;")
+        # FlexibleResponse-derived interfaces keep the open tail; the plain
+        # BaseModel ones are closed. A drift either way changes the wire
+        # contract the frontend compiles against.
+        self.assertEqual(
+            normalized("IngestImportResponse"),
+            _BASE + " " + _TAIL,
+            "the generated base import interface drifted (audit 53.83)",
         )
         self.assertEqual(
-            bodies["IngestErrorEntry"],
-            ["  index: number;", "  error: string;"],
-            "IngestErrorEntry is no longer the closed two-key element "
-            "(audit 53.82)",
+            normalized("IngestDataImportResponse"),
+            _BASE + " converted_fact_count: number; " + _TAIL,
+            "the generated import family is no longer the flattened "
+            "producer key order (audit 53.83)",
         )
+        self.assertEqual(
+            normalized("IngestBundleImportResponse"),
+            _BASE
+            + " source_count: number; converted_fact_count: number; "
+            "sources: IngestBundleSourceEntry[]; run: "
+            "IngestBundleRunSummary; source_fetches?: | { " + _TAIL
+            + " }[] | null; " + _TAIL,
+            "the generated bundle import envelope drifted (audit 53.83)",
+        )
+        self.assertEqual(
+            normalized("IngestBundlePreviewResponse"),
+            "source_count: number; converted_fact_count: number; "
+            "sources: IngestBundleSourceEntry[]; facts: { " + _TAIL
+            + " }[]; run: IngestBundleRunSummary; source_fetches?: | { "
+            + _TAIL + " }[] | null; " + _TAIL,
+            "the generated bundle preview envelope drifted (audit 53.83)",
+        )
+        self.assertEqual(
+            normalized("IngestBundleRunSummary"),
+            'status: "success"; duration_ms: number; source_count: number; '
+            "converted_fact_count: number; skipped_source_count: number; "
+            "source_fetch_count?: number | null; "
+            "source_fetch_duration_ms?: number | null;",
+            "the generated run summary drifted (audit 53.83)",
+        )
+        self.assertEqual(
+            normalized("IngestBundleSourceEntry"),
+            'index: number; kind: string; converted_fact_count: number; '
+            'duration_ms: number; status: "converted"; '
+            "normalized_data: { " + _TAIL + " };",
+            "the generated sources element drifted from _convert_bundle's "
+            "six-key producer shape (audit 53.83)",
+        )
+        self.assertEqual(
+            normalized("IngestErrorEntry"),
+            "index: number; error: string;",
+            "IngestErrorEntry is no longer the closed two-key element",
+        )
+
 
 
 class WorldCupBatchCContractTests(unittest.TestCase):

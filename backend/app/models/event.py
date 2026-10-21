@@ -2130,21 +2130,25 @@ class IngestErrorEntry(BaseModel):
 
 
 class IngestImportResponse(FlexibleResponse):
-    """Response shared by all 18 world-cup ingest ``*/import`` routes (53.82).
+    """The five-key base import result (audit 53.82, corrected in 53.83).
 
-    Every import chain terminates at ``import_sports_facts``, whose two return
-    literals write the same five keys unconditionally (partial-failure early
-    return and the success return). Therefore:
+    53.82 bound this single model to all 18 ``*/import`` routes on the
+    census claim that every chain terminates at ``import_sports_facts``
+    writing exactly these five keys. The claim was a census blind spot:
+    the census traced return literals but not the incremental
+    ``result[...] =`` writes each wrapper layer makes afterwards. The
+    corrected mapping (53.83): ``facts/import`` is the **only** route whose
+    response is exactly this shape; the other 17 bind the subclasses below
+    (``IngestDataImportResponse`` and friends), each layer mirroring one
+    wrapper's append in producer order.
 
-    * no route in this family carries ``response_model_exclude_unset`` --
-      adding the flag would be a no-op and adding defaults would be wrong
+    Both producer returns write these five keys unconditionally, so:
+
+    * the route carries no ``response_model_exclude_unset`` -- adding the
+      flag would be a no-op and adding defaults would be wrong
       (the §Z4 case: unconditional writes ⇒ any default is a type lie);
     * all five fields are required -- a missing key is a producer regression
       and should fail loudly at the response boundary.
-
-    The 18 routes are listed in
-    ``tests.test_generate_types.ImportRouteContractTests``; each one must stay
-    bound to this model (and out of ``BARE_FLEXIBLE_RESPONSE_ROUTES``).
     """
 
     imported: int
@@ -2152,6 +2156,224 @@ class IngestImportResponse(FlexibleResponse):
     errors: list[IngestErrorEntry]
     total: int
     replace: bool
+
+
+class IngestBundleRunSummary(BaseModel):
+    """The ``run`` block every bundle preview/import attaches (audit 53.83).
+
+    ``_bundle_run_summary`` writes the first five keys unconditionally; the
+    two ``source_fetch_*`` keys appear only when the bundle payload carries a
+    ``source_fetches`` list, so they are optional with defaults and their
+    parent routes must carry ``response_model_exclude_unset``.
+    """
+
+    status: Literal["success"]
+    duration_ms: int
+    source_count: int
+    converted_fact_count: int
+    skipped_source_count: int
+    source_fetch_count: int | None = None
+    source_fetch_duration_ms: int | None = None
+
+
+class IngestBundleSourceEntry(BaseModel):
+    """One element of ``sources`` in a bundle preview/import (audit 53.83).
+
+    ``_convert_bundle`` writes exactly these six keys per converted source;
+    that is the only producer of response ``sources`` elements. The five-key
+    ``{kind, source, source_url, observed_at, payload}`` shape produced by
+    ``_source_feed_entry`` is the *input* bundle entry and never reaches a
+    response. ``normalized_data`` passes through unvalidated (its keys vary
+    per provider feed), so it stays a plain dict -- no frontend consumer
+    reads into it (the console prints the raw JSON).
+    """
+
+    index: int
+    kind: str
+    converted_fact_count: int
+    duration_ms: int
+    status: Literal["converted"]
+    normalized_data: dict[str, Any]
+
+
+class IngestBundleSourceFeedSummary(BaseModel):
+    """One element of ``source_feeds`` in the feeds-variant routes (53.83).
+
+    ``_source_feed_summary`` writes exactly these four keys per entry.
+    """
+
+    kind: str
+    source: str
+    source_url: str
+    observed_at: str
+
+
+class IngestDataImportResponse(IngestImportResponse):
+    """Import result for ``data/import`` (audit 53.83).
+
+    ``import_world_cup_data`` appends ``converted_fact_count`` to the
+    five-key base result -- so the plain ``IngestImportResponse`` is the
+    contract of ``facts/import`` **only**. The audit-53.82 claim that all
+    18 import routes share the five-key shape was a census blind spot
+    (incremental ``result[...] =`` writes were not traced); this family
+    hierarchy is the correction.
+    """
+
+    converted_fact_count: int
+
+
+class IngestDataSourceFileImportResponse(IngestDataImportResponse):
+    """``data/source/import``: the file variant adds the two source keys.
+
+    Its metadata producer is ``validate_world_cup_data_source_metadata``,
+    which returns a single dict -- not the per-entry list the bundle
+    variants' ``validate_world_cup_source_bundle_metadata`` returns.
+    """
+
+    source_file: str
+    source_metadata: dict[str, Any]
+
+
+class IngestOfficialCsvSourceImportResponse(IngestDataImportResponse):
+    """``official-csv/import``: the converter appends the profile block."""
+
+    profile: str
+    profile_counts: dict[str, Any]
+    normalized_data: dict[str, Any]
+
+
+class IngestMatchSourceImportResponse(IngestDataImportResponse):
+    """``matches/import``: count key first, then ``normalized_data``."""
+
+    normalized_match_count: int
+    normalized_data: dict[str, Any]
+
+
+class IngestMatchEventsSourceImportResponse(IngestDataImportResponse):
+    """``match-events/import`` (audit 53.83)."""
+
+    normalized_event_count: int
+    normalized_data: dict[str, Any]
+
+
+class IngestLineupsSourceImportResponse(IngestDataImportResponse):
+    """``lineups/import`` (audit 53.83)."""
+
+    normalized_lineup_count: int
+    normalized_data: dict[str, Any]
+
+
+class IngestStandingsSourceImportResponse(IngestDataImportResponse):
+    """``standings/import`` (audit 53.83)."""
+
+    normalized_qualification_count: int
+    normalized_data: dict[str, Any]
+
+
+class IngestPlayerAwardsSourceImportResponse(IngestDataImportResponse):
+    """``player-awards/import`` (audit 53.83)."""
+
+    normalized_award_count: int
+    normalized_data: dict[str, Any]
+
+
+class IngestPlayerStatusSourceImportResponse(IngestDataImportResponse):
+    """``player-status/import`` (audit 53.83)."""
+
+    normalized_status_count: int
+    normalized_data: dict[str, Any]
+
+
+class IngestStatisticsSourceImportResponse(IngestDataImportResponse):
+    """``statistics/import``: two count keys, then ``normalized_data``."""
+
+    normalized_team_stat_count: int
+    normalized_player_stat_count: int
+    normalized_data: dict[str, Any]
+
+
+class IngestFootballDataImportResponse(IngestStandingsSourceImportResponse):
+    """``football-data/import``: the provider wrapper adds the two keys."""
+
+    provider: str
+    source_url: str
+
+
+class IngestBundleImportResponse(IngestImportResponse):
+    """Import result for the six bundle-family import routes (audit 53.83).
+
+    ``import_world_cup_source_bundle`` appends ``source_count`` /
+    ``converted_fact_count`` / ``sources`` to the five-key base, then
+    ``_attach_run_metadata`` appends ``run`` (always) and ``source_fetches``
+    (only when the bundle payload carries the list). The optional key is why
+    every bundle import route must carry ``response_model_exclude_unset``.
+    """
+
+    source_count: int
+    converted_fact_count: int
+    sources: list[IngestBundleSourceEntry]
+    run: IngestBundleRunSummary
+    source_fetches: list[dict[str, Any]] | None = None
+
+
+class IngestBundleFileImportResponse(IngestBundleImportResponse):
+    """``data/bundle/source/import``: the file variant adds the two keys."""
+
+    source_file: str
+    source_metadata: list[dict[str, Any]]
+
+
+class IngestBundleUrlImportResponse(IngestBundleImportResponse):
+    """``data/bundle/url/import``: the URL variant adds the two keys."""
+
+    source_url: str
+    source_metadata: list[dict[str, Any]]
+
+
+class IngestBundleFeedsImportResponse(IngestBundleImportResponse):
+    """``data/bundle/feeds/import``: the feeds variant adds the two keys."""
+
+    source_feeds: list[IngestBundleSourceFeedSummary]
+    source_metadata: list[dict[str, Any]]
+
+
+class IngestBundlePreviewResponse(FlexibleResponse):
+    """Preview result for the bundle family (audit 53.82/53.83, batch 2).
+
+    ``preview_world_cup_source_bundle`` writes the four-key literal, then
+    ``_attach_run_metadata`` appends ``run`` (always) and ``source_fetches``
+    (only when the bundle payload carries the list) -- the audit-53.82
+    "four-key shape" was the same census blind spot. The optional key is why
+    every bundle preview route must carry ``response_model_exclude_unset``.
+    """
+
+    source_count: int
+    converted_fact_count: int
+    sources: list[IngestBundleSourceEntry]
+    facts: list[dict[str, Any]]
+    run: IngestBundleRunSummary
+    source_fetches: list[dict[str, Any]] | None = None
+
+
+class IngestBundleFilePreviewResponse(IngestBundlePreviewResponse):
+    """``data/bundle/source/preview``: the file variant adds the two keys."""
+
+    source_file: str
+    source_metadata: list[dict[str, Any]]
+
+
+class IngestBundleUrlPreviewResponse(IngestBundlePreviewResponse):
+    """``data/bundle/url/preview``: the URL variant adds the two keys."""
+
+    source_url: str
+    source_metadata: list[dict[str, Any]]
+
+
+class IngestBundleFeedsPreviewResponse(IngestBundlePreviewResponse):
+    """``data/bundle/feeds/preview``: the feeds variant adds the two keys."""
+
+    source_feeds: list[IngestBundleSourceFeedSummary]
+    source_metadata: list[dict[str, Any]]
 
 
 class MatchFixtureRecord(BaseModel):

@@ -1932,6 +1932,30 @@ export interface FreshEdgesResponse {
   [k: string]: unknown;
 }
 /**
+ * ``data/bundle/feeds/import``: the feeds variant adds the two keys.
+ */
+export interface IngestBundleFeedsImportResponse {
+  imported: number;
+  error_count: number;
+  errors: IngestErrorEntry[];
+  total: number;
+  replace: boolean;
+  source_count: number;
+  converted_fact_count: number;
+  sources: IngestBundleSourceEntry[];
+  run: IngestBundleRunSummary;
+  source_fetches?:
+    | {
+        [k: string]: unknown;
+      }[]
+    | null;
+  source_feeds: IngestBundleSourceFeedSummary[];
+  source_metadata: {
+    [k: string]: unknown;
+  }[];
+  [k: string]: unknown;
+}
+/**
  * One element of ``errors`` in an ingest import result (audit 53.82).
  *
  * ``import_sports_facts`` appends exactly ``{"index": <int>, "error": <str>}``
@@ -1943,21 +1967,295 @@ export interface IngestErrorEntry {
   error: string;
 }
 /**
- * Response shared by all 18 world-cup ingest ``* /import`` routes (53.82).
+ * One element of ``sources`` in a bundle preview/import (audit 53.83).
  *
- * Every import chain terminates at ``import_sports_facts``, whose two return
- * literals write the same five keys unconditionally (partial-failure early
- * return and the success return). Therefore:
+ * ``_convert_bundle`` writes exactly these six keys per converted source;
+ * that is the only producer of response ``sources`` elements. The five-key
+ * ``{kind, source, source_url, observed_at, payload}`` shape produced by
+ * ``_source_feed_entry`` is the *input* bundle entry and never reaches a
+ * response. ``normalized_data`` passes through unvalidated (its keys vary
+ * per provider feed), so it stays a plain dict -- no frontend consumer
+ * reads into it (the console prints the raw JSON).
+ */
+export interface IngestBundleSourceEntry {
+  index: number;
+  kind: string;
+  converted_fact_count: number;
+  duration_ms: number;
+  status: "converted";
+  normalized_data: {
+    [k: string]: unknown;
+  };
+}
+/**
+ * The ``run`` block every bundle preview/import attaches (audit 53.83).
  *
- * * no route in this family carries ``response_model_exclude_unset`` --
- *   adding the flag would be a no-op and adding defaults would be wrong
+ * ``_bundle_run_summary`` writes the first five keys unconditionally; the
+ * two ``source_fetch_*`` keys appear only when the bundle payload carries a
+ * ``source_fetches`` list, so they are optional with defaults and their
+ * parent routes must carry ``response_model_exclude_unset``.
+ */
+export interface IngestBundleRunSummary {
+  status: "success";
+  duration_ms: number;
+  source_count: number;
+  converted_fact_count: number;
+  skipped_source_count: number;
+  source_fetch_count?: number | null;
+  source_fetch_duration_ms?: number | null;
+}
+/**
+ * One element of ``source_feeds`` in the feeds-variant routes (53.83).
+ *
+ * ``_source_feed_summary`` writes exactly these four keys per entry.
+ */
+export interface IngestBundleSourceFeedSummary {
+  kind: string;
+  source: string;
+  source_url: string;
+  observed_at: string;
+}
+/**
+ * ``data/bundle/feeds/preview``: the feeds variant adds the two keys.
+ */
+export interface IngestBundleFeedsPreviewResponse {
+  source_count: number;
+  converted_fact_count: number;
+  sources: IngestBundleSourceEntry[];
+  facts: {
+    [k: string]: unknown;
+  }[];
+  run: IngestBundleRunSummary;
+  source_fetches?:
+    | {
+        [k: string]: unknown;
+      }[]
+    | null;
+  source_feeds: IngestBundleSourceFeedSummary[];
+  source_metadata: {
+    [k: string]: unknown;
+  }[];
+  [k: string]: unknown;
+}
+/**
+ * ``data/bundle/source/import``: the file variant adds the two keys.
+ */
+export interface IngestBundleFileImportResponse {
+  imported: number;
+  error_count: number;
+  errors: IngestErrorEntry[];
+  total: number;
+  replace: boolean;
+  source_count: number;
+  converted_fact_count: number;
+  sources: IngestBundleSourceEntry[];
+  run: IngestBundleRunSummary;
+  source_fetches?:
+    | {
+        [k: string]: unknown;
+      }[]
+    | null;
+  source_file: string;
+  source_metadata: {
+    [k: string]: unknown;
+  }[];
+  [k: string]: unknown;
+}
+/**
+ * ``data/bundle/source/preview``: the file variant adds the two keys.
+ */
+export interface IngestBundleFilePreviewResponse {
+  source_count: number;
+  converted_fact_count: number;
+  sources: IngestBundleSourceEntry[];
+  facts: {
+    [k: string]: unknown;
+  }[];
+  run: IngestBundleRunSummary;
+  source_fetches?:
+    | {
+        [k: string]: unknown;
+      }[]
+    | null;
+  source_file: string;
+  source_metadata: {
+    [k: string]: unknown;
+  }[];
+  [k: string]: unknown;
+}
+/**
+ * Import result for the six bundle-family import routes (audit 53.83).
+ *
+ * ``import_world_cup_source_bundle`` appends ``source_count`` /
+ * ``converted_fact_count`` / ``sources`` to the five-key base, then
+ * ``_attach_run_metadata`` appends ``run`` (always) and ``source_fetches``
+ * (only when the bundle payload carries the list). The optional key is why
+ * every bundle import route must carry ``response_model_exclude_unset``.
+ */
+export interface IngestBundleImportResponse {
+  imported: number;
+  error_count: number;
+  errors: IngestErrorEntry[];
+  total: number;
+  replace: boolean;
+  source_count: number;
+  converted_fact_count: number;
+  sources: IngestBundleSourceEntry[];
+  run: IngestBundleRunSummary;
+  source_fetches?:
+    | {
+        [k: string]: unknown;
+      }[]
+    | null;
+  [k: string]: unknown;
+}
+/**
+ * Preview result for the bundle family (audit 53.82/53.83, batch 2).
+ *
+ * ``preview_world_cup_source_bundle`` writes the four-key literal, then
+ * ``_attach_run_metadata`` appends ``run`` (always) and ``source_fetches``
+ * (only when the bundle payload carries the list) -- the audit-53.82
+ * "four-key shape" was the same census blind spot. The optional key is why
+ * every bundle preview route must carry ``response_model_exclude_unset``.
+ */
+export interface IngestBundlePreviewResponse {
+  source_count: number;
+  converted_fact_count: number;
+  sources: IngestBundleSourceEntry[];
+  facts: {
+    [k: string]: unknown;
+  }[];
+  run: IngestBundleRunSummary;
+  source_fetches?:
+    | {
+        [k: string]: unknown;
+      }[]
+    | null;
+  [k: string]: unknown;
+}
+/**
+ * ``data/bundle/url/import``: the URL variant adds the two keys.
+ */
+export interface IngestBundleUrlImportResponse {
+  imported: number;
+  error_count: number;
+  errors: IngestErrorEntry[];
+  total: number;
+  replace: boolean;
+  source_count: number;
+  converted_fact_count: number;
+  sources: IngestBundleSourceEntry[];
+  run: IngestBundleRunSummary;
+  source_fetches?:
+    | {
+        [k: string]: unknown;
+      }[]
+    | null;
+  source_url: string;
+  source_metadata: {
+    [k: string]: unknown;
+  }[];
+  [k: string]: unknown;
+}
+/**
+ * ``data/bundle/url/preview``: the URL variant adds the two keys.
+ */
+export interface IngestBundleUrlPreviewResponse {
+  source_count: number;
+  converted_fact_count: number;
+  sources: IngestBundleSourceEntry[];
+  facts: {
+    [k: string]: unknown;
+  }[];
+  run: IngestBundleRunSummary;
+  source_fetches?:
+    | {
+        [k: string]: unknown;
+      }[]
+    | null;
+  source_url: string;
+  source_metadata: {
+    [k: string]: unknown;
+  }[];
+  [k: string]: unknown;
+}
+/**
+ * Import result for ``data/import`` (audit 53.83).
+ *
+ * ``import_world_cup_data`` appends ``converted_fact_count`` to the
+ * five-key base result -- so the plain ``IngestImportResponse`` is the
+ * contract of ``facts/import`` **only**. The audit-53.82 claim that all
+ * 18 import routes share the five-key shape was a census blind spot
+ * (incremental ``result[...] =`` writes were not traced); this family
+ * hierarchy is the correction.
+ */
+export interface IngestDataImportResponse {
+  imported: number;
+  error_count: number;
+  errors: IngestErrorEntry[];
+  total: number;
+  replace: boolean;
+  converted_fact_count: number;
+  [k: string]: unknown;
+}
+/**
+ * ``data/source/import``: the file variant adds the two source keys.
+ *
+ * Its metadata producer is ``validate_world_cup_data_source_metadata``,
+ * which returns a single dict -- not the per-entry list the bundle
+ * variants' ``validate_world_cup_source_bundle_metadata`` returns.
+ */
+export interface IngestDataSourceFileImportResponse {
+  imported: number;
+  error_count: number;
+  errors: IngestErrorEntry[];
+  total: number;
+  replace: boolean;
+  converted_fact_count: number;
+  source_file: string;
+  source_metadata: {
+    [k: string]: unknown;
+  };
+  [k: string]: unknown;
+}
+/**
+ * ``football-data/import``: the provider wrapper adds the two keys.
+ */
+export interface IngestFootballDataImportResponse {
+  imported: number;
+  error_count: number;
+  errors: IngestErrorEntry[];
+  total: number;
+  replace: boolean;
+  converted_fact_count: number;
+  normalized_qualification_count: number;
+  normalized_data: {
+    [k: string]: unknown;
+  };
+  provider: string;
+  source_url: string;
+  [k: string]: unknown;
+}
+/**
+ * The five-key base import result (audit 53.82, corrected in 53.83).
+ *
+ * 53.82 bound this single model to all 18 ``* /import`` routes on the
+ * census claim that every chain terminates at ``import_sports_facts``
+ * writing exactly these five keys. The claim was a census blind spot:
+ * the census traced return literals but not the incremental
+ * ``result[...] =`` writes each wrapper layer makes afterwards. The
+ * corrected mapping (53.83): ``facts/import`` is the **only** route whose
+ * response is exactly this shape; the other 17 bind the subclasses below
+ * (``IngestDataImportResponse`` and friends), each layer mirroring one
+ * wrapper's append in producer order.
+ *
+ * Both producer returns write these five keys unconditionally, so:
+ *
+ * * the route carries no ``response_model_exclude_unset`` -- adding the
+ *   flag would be a no-op and adding defaults would be wrong
  *   (the §Z4 case: unconditional writes ⇒ any default is a type lie);
  * * all five fields are required -- a missing key is a producer regression
  *   and should fail loudly at the response boundary.
- *
- * The 18 routes are listed in
- * ``tests.test_generate_types.ImportRouteContractTests``; each one must stay
- * bound to this model (and out of ``BARE_FLEXIBLE_RESPONSE_ROUTES``).
  */
 export interface IngestImportResponse {
   imported: number;
@@ -1965,6 +2263,138 @@ export interface IngestImportResponse {
   errors: IngestErrorEntry[];
   total: number;
   replace: boolean;
+  [k: string]: unknown;
+}
+/**
+ * ``lineups/import`` (audit 53.83).
+ */
+export interface IngestLineupsSourceImportResponse {
+  imported: number;
+  error_count: number;
+  errors: IngestErrorEntry[];
+  total: number;
+  replace: boolean;
+  converted_fact_count: number;
+  normalized_lineup_count: number;
+  normalized_data: {
+    [k: string]: unknown;
+  };
+  [k: string]: unknown;
+}
+/**
+ * ``match-events/import`` (audit 53.83).
+ */
+export interface IngestMatchEventsSourceImportResponse {
+  imported: number;
+  error_count: number;
+  errors: IngestErrorEntry[];
+  total: number;
+  replace: boolean;
+  converted_fact_count: number;
+  normalized_event_count: number;
+  normalized_data: {
+    [k: string]: unknown;
+  };
+  [k: string]: unknown;
+}
+/**
+ * ``matches/import``: count key first, then ``normalized_data``.
+ */
+export interface IngestMatchSourceImportResponse {
+  imported: number;
+  error_count: number;
+  errors: IngestErrorEntry[];
+  total: number;
+  replace: boolean;
+  converted_fact_count: number;
+  normalized_match_count: number;
+  normalized_data: {
+    [k: string]: unknown;
+  };
+  [k: string]: unknown;
+}
+/**
+ * ``official-csv/import``: the converter appends the profile block.
+ */
+export interface IngestOfficialCsvSourceImportResponse {
+  imported: number;
+  error_count: number;
+  errors: IngestErrorEntry[];
+  total: number;
+  replace: boolean;
+  converted_fact_count: number;
+  profile: string;
+  profile_counts: {
+    [k: string]: unknown;
+  };
+  normalized_data: {
+    [k: string]: unknown;
+  };
+  [k: string]: unknown;
+}
+/**
+ * ``player-awards/import`` (audit 53.83).
+ */
+export interface IngestPlayerAwardsSourceImportResponse {
+  imported: number;
+  error_count: number;
+  errors: IngestErrorEntry[];
+  total: number;
+  replace: boolean;
+  converted_fact_count: number;
+  normalized_award_count: number;
+  normalized_data: {
+    [k: string]: unknown;
+  };
+  [k: string]: unknown;
+}
+/**
+ * ``player-status/import`` (audit 53.83).
+ */
+export interface IngestPlayerStatusSourceImportResponse {
+  imported: number;
+  error_count: number;
+  errors: IngestErrorEntry[];
+  total: number;
+  replace: boolean;
+  converted_fact_count: number;
+  normalized_status_count: number;
+  normalized_data: {
+    [k: string]: unknown;
+  };
+  [k: string]: unknown;
+}
+/**
+ * ``standings/import`` (audit 53.83).
+ */
+export interface IngestStandingsSourceImportResponse {
+  imported: number;
+  error_count: number;
+  errors: IngestErrorEntry[];
+  total: number;
+  replace: boolean;
+  converted_fact_count: number;
+  normalized_qualification_count: number;
+  normalized_data: {
+    [k: string]: unknown;
+  };
+  [k: string]: unknown;
+}
+/**
+ * ``statistics/import``: two count keys, then ``normalized_data``.
+ */
+export interface IngestStatisticsSourceImportResponse {
+  imported: number;
+  error_count: number;
+  errors: IngestErrorEntry[];
+  total: number;
+  replace: boolean;
+  converted_fact_count: number;
+  normalized_team_stat_count: number;
+  normalized_player_stat_count: number;
+  normalized_data: {
+    [k: string]: unknown;
+  };
   [k: string]: unknown;
 }
 /**

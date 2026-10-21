@@ -15067,3 +15067,95 @@ missing 双向列出漂移的 path** —— 不再是「数量变了」而是「
 **待办**：ingest 族 40+ 条具名（新队列，先普查生产者）；L2 剩 3 条真零消费
 者维持现状；`GET /events/discover/status` 的松读 `Record<string, unknown>`
 （api.ts:897）值得下一片顺手具名（消费者就在 api.ts 自己手里）。
+
+
+### 53.82 —— ingest 批 1：18 条 `*/import` 路由共用一个形状（2026-10-21）
+
+**勘察（只读普查，43/43 闭合）**。ingest 族 43 条裸路由全部集中在
+`events.py`（`/sports/world-cup/*`，575-1208 行）。AST 普查脚本
+（`.workbuddy/audit-2026-10-03/_census_ingest.py`，产物
+`_census_ingest_routes.txt`）按「谁返回给路由」切：路由层是薄委托，契约
+= 底层 service 函数的顶层 return；脚本沿「handler 顶层 return → 局部赋值
+→ service 函数链」递归展开（排除嵌套 helper——53.79 判据），把 43 条全部
+解析到最终生产者。八群聚类：**① Import 族 18 条**（全部汇聚到
+`import_sports_facts`，两个 dict 字面量 return 键集相同 =
+`{imported, error_count, errors, total, replace}`）；② Bundle preview 6 条
+（`{source_count, converted_fact_count, sources, facts}`）；③ 资源 preview
+11 条（公共核 `{normalized_data, converted_fact_count, facts}` + 各资源
+count 键；`data/preview` 仅 2 键、`official-csv` 5 键、`statistics` 双
+count）；④ test 2 条（api-football/sportmonks 各 2 形状：详情形 +
+`{ok, error}` 退化形）；⑤ validate 2 条（api-football 是递增 builder ≥3
+形状：`{steps}` 早退 / `+ok,error` / 成功 `+coverage,summary`；sportmonks
+`{steps}` 单键）；⑥ status 2 条（`data/sources/status` 深嵌套
+`configured_sources{data_file,bundle_file,bundle_url,feeds[],api_football{},football_data{},sportmonks{}}`）；
+⑦ facts 1 条（`{count, facts}`，元素是磁盘 JSONL 透传——磁盘形状问题）；
+⑧ resolve 1 条（7 键，`matches` 元素 `{actual_outcome, confidence,
+reason, facts}`）。**旗子现状：43 条全裸无 `response_model_exclude_unset`**
+⇒ ①②③ 单形状无条件写入不需要旗子（§Z4）；④⑤⑥ 条件写入 ⇒ 具名必须同
+改动补旗子+断言（§Z3）。
+
+**消费侧缺陷实证**（`ingest-console.tsx`，单一消费者）：
+(a) `summarize()` 的 `replaced`/`skipped` 分支是**死键**——生产者发
+`replace: bool`（回显参数）、从不发 `skipped`，两行摘要永不显示（与
+53.72 标定面板「恒显兜底」同族）；(b) `ResolveResult` 声明
+`resolved`/`candidates`，而生产者发 `resolved_count`/`pending_count`
+——**失实副本第三形态再现**，resolve 面板实际只显示 status 串+原始 JSON
+（键名漂移在松读+索引签名下 tsc 全绿）。
+
+**批 1 落地（用户拍板「以生产者为准」批序第一片）**：
+- `IngestImportResponse(FlexibleResponse)`（5 键全必填、无默认值、无旗子）
+  + `IngestErrorEntry(BaseModel)`（`{index: int, error: str}`，两个 append
+  点无条件写）登记进 `_frontend_export.py`；18 条路由同提交绑定具名；
+  哨兵清单 48→30（18 条 import 路径整批删除）。
+- 守卫 `IngestImportContractTests`（4 例）：①18 条路由身份绑定+全族无旗
+  子（分母断言 18）；②模型 = 生产者键序、逐键 `is_required()`；③生产者
+  键集按 AST 从 `import_sports_facts` 源码钉住（两个 return 的常量键集都
+  必须等于模型键序——开放尾巴会透传多余键，判据必须在源侧红，§Z6）；④
+  生成物必需键 + `IngestErrorEntry` 闭合 2 键。
+- 变异 J178（facts/import 解绑回裸类）→ 身份守卫红；J179（`imported` 加
+  默认值）→ `is_required` 红；J180（首个 return 的 `total` 键改名）→ 键
+  集钉源红。三条四阶段过。**清单 263→266**（`list` 自打印核实）。
+- 前端：`IngestResult` 从手写松 interface 退役为**派生**类型
+  （`Partial<Pick<IngestImportResponse, 5键>>` + 松 extras + 索引签名）——
+  松读不再手写生成物已有的键；`ResolveResult` interface-extends 改交叉
+  （interface 不能 extends type alias）；`runConfigured`/`runPayload` 拆
+  重载（`"import"` → `Promise<IngestImportResponse>`，其余 → 松类型），
+  调用点三元收窄字面量；`summarize` 删 `replaced`/`skipped` 死分支（记
+  代码卫生）。
+
+**读数**：`test_generate_types.py` 96 passed / 700 subtests（junit
+`junit_guard_5382.xml`）；ruff / mypy / `generate_types` 全绿；tsc 0 错；
+vitest **127 files / 755 tests**（`_vitest_full_5382.log`）；全量 pytest 见
+`junit_full_5382.xml`。**针审计 266/266**：本片触及 event.py / events.py /
+test_generate_types.py / generated-types.ts 多个既有 `m.path`，全量针计数
+零漂移——🔴 **审计口径必须用 harness 的 `count_needle`（LF/CRLF 双变体）
+而不是裸 `bytes.count`**：首跑用裸 count 假报 6 条「count=0」（J29/J37/
+J38/J39/J44/J45 都是跨行 LF 针），换 harness 同款判据后归零。
+
+**杂项教训**：TS 块注释里写 ``*/import`` 会把注释提前闭合（`*/` 序列），
+tsc 以「201 行语法错」的远端报错现形——措辞避开 `*/`。
+
+**待办**：② Bundle preview 6 条 → ③ 资源 preview 11 条（继承族：公共核 +
+资源 count 子类）→ ④ test+validate 4 条（**必须补旗子+断言**）→ ⑥ status
+2 条（深嵌套最重）→ ⑦+⑧ facts/resolve（元素形状探针；resolve 具名时
+`ResolveResult` 的 `resolved`/`candidates` 失实键一并退役，面板可首次显示
+`resolved_count`）。
+
+
+**53.82 补记（同日）：全量 2 failed = 具名让不忠实桩现形（§Z12 第三形态
+再现）**。首轮全量（`junit_full_5382.xml`，6715 passed / 2 failed）红的
+两条都在 `WorldCupFactRouteTests`：`test_api_football_import_runs_after_
+successful_pipeline_validation` 与 `test_world_cup_football_data_import_
+uses_configured_provider`。根因**不是**模型错、也不是普查漏形状：两个测
+试的替身 `patch(... return_value={"imported": 1, "provider": "api_football"})`
+/ `{provider, normalized_qualification_count, imported}` 是**失实桩**——
+真实生产者链路全部终结于 `import_sports_facts` 的五键结果，`provider` /
+`normalized_qualification_count` 从不出现在 import 响应里；裸模型时代替
+身与生产者的偏差无人校验，具名后响应边界当场
+`ResponseValidationError: 4 validation errors`。处置（以生产者为准）：修
+桩对齐五键形状、删失实断言（`resp.json()["provider"]`）改钉真实键
+（`total`/`replace`），`test_events_routes.py` 复跑 **131 passed / 14
+subtests**（`junit_events_routes_5382.xml`）。教训：替身返回值也是形状承
+诺——具名片的收尾清单里，「单跑测试文件绿」之外必须看替身 return_value
+的键集是否与模型同形；偏离的桩是隐性生产者文档谎言，具名是把它变红的
+机制而不是回归的原因。

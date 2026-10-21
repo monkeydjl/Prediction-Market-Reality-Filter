@@ -15011,3 +15011,59 @@ missing 双向列出漂移的 path** —— 不再是「数量变了」而是「
 
 **待办**：L2（48 条零消费者）待拍板 —— 哨兵改造收口后，批 A/B/C 全部具名
 工作的工程侧只剩这一个决策点。
+
+
+### 53.81 — L2 勘察推翻零消费者口径：ingest-console 整 UI 线上 404、PREFIX 修复与具名队列开队（用户拍板 A）
+
+**日期**：2026-10-21。分支 `main`，基线 `10c1b92`（53.80 收口态）。
+
+#### 勘察：L2 的「48 条零消费者」口径反转
+
+按 53.70 的调用点解析口径复核 L2（48 条）：两轮探针（先全词段、再对可疑项
+用完整 path 片段）+ **TestClient 运行时验证**，结论分三类——
+
+1. **活消费者 2 条**：`POST /api/events/analyze`（`api.ts:727`，读具名
+   `EventRecord`）、`GET /api/events/discover/status`（`api.ts:897`，松读
+   `Record<string, unknown>`）。
+2. **坏掉的消费者 40+ 条**：`ingest-api.ts` 的 `PREFIX = "/sports/world-cup"`
+   **缺 `/events` 段**，拼出 `/api/sports/...`；TestClient 实测该前缀 **404**，
+   对照 `/api/events/sports/world-cup/status` = 200、`data/sources/status` =
+   503（内核未启但路由存在）。它经 `runConfigured`/`runPayload` + 两张注册表
+   数据驱动地消费整个 data-ingest 家族（31 条 bundle/import/preview/test/
+   validate + status/facts/resolve/sourceStatus）—— **ingest-console UI 的
+   每次操作线上都是 404**。
+3. **真零消费者 3 条**：`GET /world-cup/predictions/today`、
+   `GET /world-cup/predictions/matches/{match_id}`（单比赛）、
+   `POST /world-cup/predictions/init-db`。
+
+**为什么 53.70 判成零消费者**：ingest-api 的 URL 是
+`` `${PREFIX}/${path}/${action}` `` 模板字面量 + 注册表数据驱动，字面量探针
+读不到 —— 「模板字面量读不到 ⇒ 假阴」教训的又一形态，这次连「消费者存在」
+都读漏了。**组件测试 mock 了整个 client ⇒ 每个测试都在 mock 层通过而线上每
+发必 404** —— 「跑通了 ≠ 对」的最重实证：mock 掉被测物的恰恰是 URL 合同性。
+
+#### 修复（用户拍板 A：修前缀 + 40+ 条进具名队列）
+
+- `ingest-api.ts`：`PREFIX` 补 `/events` 段（4 行 diff，注释记录 53.81 教训）。
+- 新增 `ingest-api.test.ts`（4 例）钉 **URL 合同**：简单 GET 的挂载路径逐字
+  断言（含查询串）、`runConfigured`/`runPayload` 的注册表拼接、注册表
+  path 全集正则（防后端改名段静默滑过）。第一版两处当场归因：`new Response`
+  在 stub 链路抛 TypeError ⇒ 换普通对象 mock（`ingestFetch` 只读
+  `ok/text/json`）；我写的注册表正则漏了 `data/source`、还有一处
+  `expect(合法集合, action).toContain(action)` 恒真断言（§4.2 空头）当场删。
+- 生产者普查与具名分队列：**后续片**。消费读法是 `IngestResult`（松读 +
+  索引签名）/`FactsResponse`/`ResolveResult`；40+ 条的 return 形状需要先对
+  `events.py` 的 ingest 处理器逐条普查聚类，再按批 A/B/C 的「以生产者为准」
+  模式分队列落地。
+
+#### 门
+
+- tsc 0 错；vitest 全量见 `_vitest_full_5381.log`（含 4 例新 URL 合同用例）。
+- 后端文件本轮未动，backend 四道门沿用 53.80 收口态。
+- **L2 口径更正**：零消费者集合从 48 收窄到 3（本片发现：2 活 + 40+ 坏
+  转「待具名」）—— `BARE_FLEXIBLE_RESPONSE_ROUTES` 清单不动（路由仍裸），
+  具名队列推进时逐片删条。
+
+**待办**：ingest 族 40+ 条具名（新队列，先普查生产者）；L2 剩 3 条真零消费
+者维持现状；`GET /events/discover/status` 的松读 `Record<string, unknown>`
+（api.ts:897）值得下一片顺手具名（消费者就在 api.ts 自己手里）。

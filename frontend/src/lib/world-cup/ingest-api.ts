@@ -26,7 +26,10 @@ import {
 
 const API_BASE = getApiBase();
 const INGEST_CLIENT_SOURCE = "world-cup-ingest-console";
-const PREFIX = "/sports/world-cup";
+// The ingest routes mount at /api/events/sports/world-cup/* (events router);
+// the missing /events segment made every call 404 in production while the
+// mocked component tests stayed green (audit 53.81).
+const PREFIX = "/events/sports/world-cup";
 const DEFAULT_TIMEOUT_MS = 60_000;
 /** Provider imports fetch remote feeds and rewrite the fact store. */
 const IMPORT_TIMEOUT_MS = 300_000;

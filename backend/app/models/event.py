@@ -2760,6 +2760,54 @@ class WorldCupDataSourceStatusResponse(FlexibleResponse):
     matchday_refresh: WorldCupMatchdayRefreshStatus
     runs: WorldCupDataSourceRuns
 
+class WorldCupFactsResponse(FlexibleResponse):
+    """Response for GET /sports/world-cup/facts (audit 53.87). The
+    envelope is two unconditional keys; the element stays an opaque
+    dict on purpose: a normalized fact carries sixteen base keys that
+    the producer's empty-value filter can each drop, plus up to thirty
+    per-kind conditional fields (str / number / bool / score dicts),
+    so the element shape varies row by row -- naming a closed element
+    would either invent defaults the producer never writes or
+    silently delete the conditional keys from the wire (§53.58
+    opaque-element precedent, IngestBundlePreviewResponse.facts)."""
+
+    count: int
+    facts: list[dict[str, Any]]
+
+
+class WorldCupResolveMatch(BaseModel):
+    """One deterministic match of ``resolve_world_cup_events`` (audit
+    53.87): seven keys written unconditionally per match;
+    ``actual_outcome`` / ``confidence`` are floats by construction
+    (``_decision`` / ``_min_confidence``) and ``facts`` carries fact
+    ids, not fact objects."""
+
+    event_id: str
+    event_title: str
+    actual_outcome: float
+    confidence: float
+    reason: str
+    facts: list[str]
+    result: str
+
+
+class WorldCupResolveResponse(FlexibleResponse):
+    """Response for POST /sports/world-cup/resolve (audit 53.87). The
+    producer writes all seven keys unconditionally in this order, so
+    no defaults and no ``response_model_exclude_unset`` flag. The
+    frontend's retired ``ResolveResult`` declared ``resolved`` /
+    ``candidates`` -- keys the producer never sends; the real keys
+    are ``resolved_count`` / ``pending_count``."""
+
+    status: str
+    dry_run: bool
+    resolved_count: int
+    pending_count: int
+    checked_count: int
+    unresolved_events: int
+    matches: list[WorldCupResolveMatch]
+
+
 
 
 class MatchFixtureRecord(BaseModel):

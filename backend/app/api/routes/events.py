@@ -193,6 +193,8 @@ from app.models.event import (
     SimTradeListResponse,
     TradeStats,
     WorldCupDataSourceStatusResponse,
+    WorldCupFactsResponse,
+    WorldCupResolveResponse,
     WorldCupStatusResponse,
 )
 
@@ -644,7 +646,7 @@ async def get_world_cup_data_source_status(
     }
 
 
-@router.get("/sports/world-cup/facts", response_model=FlexibleResponse)
+@router.get("/sports/world-cup/facts", response_model=WorldCupFactsResponse)
 async def list_world_cup_facts(
     kind: str | None = Query(default=None, max_length=40),
     team: str | None = Query(default=None, max_length=80),
@@ -1361,7 +1363,7 @@ async def import_world_cup_statistics_source_route(
         _reject_invalid_payload(exc)
 
 
-@router.post("/sports/world-cup/resolve", response_model=FlexibleResponse)
+@router.post("/sports/world-cup/resolve", response_model=WorldCupResolveResponse)
 async def resolve_world_cup_sports_events(
     dry_run: bool = Query(default=True),
     limit: int = Query(default=200, ge=1, le=1000),

@@ -166,6 +166,13 @@ class WorldCupFactRouteTests(unittest.TestCase):
         self.assertEqual(status_resp.status_code, 200)
         self.assertEqual(status_resp.json()["count"], 1)
         self.assertEqual(facts_resp.status_code, 200)
+        # 53.87: the route is named now, so the wire envelope is the
+        # model's two-key shape (the element itself stays opaque by
+        # design -- per-kind conditional fields).
+        self.assertEqual(
+            list(facts_resp.json().keys()),
+            ["count", "facts"],
+        )
         self.assertEqual(facts_resp.json()["count"], 1)
         self.assertEqual(facts_resp.json()["facts"][0]["player"], "Player A")
 

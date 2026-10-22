@@ -3718,3 +3718,55 @@ export interface WorldCupMatchdayRefreshStatus {
   interval_minutes: number;
   window_hours: number;
 }
+/**
+ * Response for GET /sports/world-cup/facts (audit 53.87). The
+ * envelope is two unconditional keys; the element stays an opaque
+ * dict on purpose: a normalized fact carries sixteen base keys that
+ * the producer's empty-value filter can each drop, plus up to thirty
+ * per-kind conditional fields (str / number / bool / score dicts),
+ * so the element shape varies row by row -- naming a closed element
+ * would either invent defaults the producer never writes or
+ * silently delete the conditional keys from the wire (§53.58
+ * opaque-element precedent, IngestBundlePreviewResponse.facts).
+ */
+export interface WorldCupFactsResponse {
+  count: number;
+  facts: {
+    [k: string]: unknown;
+  }[];
+  [k: string]: unknown;
+}
+/**
+ * One deterministic match of ``resolve_world_cup_events`` (audit
+ * 53.87): seven keys written unconditionally per match;
+ * ``actual_outcome`` / ``confidence`` are floats by construction
+ * (``_decision`` / ``_min_confidence``) and ``facts`` carries fact
+ * ids, not fact objects.
+ */
+export interface WorldCupResolveMatch {
+  event_id: string;
+  event_title: string;
+  actual_outcome: number;
+  confidence: number;
+  reason: string;
+  facts: string[];
+  result: string;
+}
+/**
+ * Response for POST /sports/world-cup/resolve (audit 53.87). The
+ * producer writes all seven keys unconditionally in this order, so
+ * no defaults and no ``response_model_exclude_unset`` flag. The
+ * frontend's retired ``ResolveResult`` declared ``resolved`` /
+ * ``candidates`` -- keys the producer never sends; the real keys
+ * are ``resolved_count`` / ``pending_count``.
+ */
+export interface WorldCupResolveResponse {
+  status: string;
+  dry_run: boolean;
+  resolved_count: number;
+  pending_count: number;
+  checked_count: number;
+  unresolved_events: number;
+  matches: WorldCupResolveMatch[];
+  [k: string]: unknown;
+}

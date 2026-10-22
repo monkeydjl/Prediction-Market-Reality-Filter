@@ -294,6 +294,7 @@ _WC_SOURCE_BUNDLE = "backend/app/services/world_cup_source_bundle.py"
 _WC_MATCH_SOURCE = "backend/app/services/world_cup_match_source.py"
 _WC_API_FOOTBALL = "backend/app/services/world_cup_api_football_source.py"
 _WC_DATA_SOURCE_STATUS = "backend/app/services/world_cup_data_source_status_service.py"
+_WC_RESOLUTION = "backend/app/services/sports_resolution_service.py"
 _LIMITLESS = "backend/app/services/limitless_event_source.py"
 _GBM_ENGINE = "backend/app/kernel/engines/gbm_engine.py"
 _CHALLENGE_ADAPTER = "backend/app/services/conclusion_challenge_world_cup_adapter.py"
@@ -6042,6 +6043,57 @@ SETS: tuple[MutationSet, ...] = (
                 note=(
                     "§53.86：两条 status 读具名后哨兵裸清单 9→7；滑回裸类 ⇒ observed "
                     "多出该路由 ⇒ 集合相等断言红（named-slice 同提交删条目的约定反向钉住）。"
+                    "● 针单行、无换行、命中 **1 次**（已实测）。"
+                ),
+            ),
+            Mutation(
+                label="J193 facts 信封 count 键改名：钉源键序判据脱钩",
+                path=_DIGEST_ROUTES,
+                old=b'    return {"count": len(facts), "facts": facts}\r\n',
+                new=b'    return {"count_x": len(facts), "facts": facts}\r\n',
+                guard_file=_T_GENERATE_TYPES,
+                guards=(
+                    "test_resolve_and_facts_producers_pinned_from_source",
+                ),
+                note=(
+                    "§53.87（facts/resolve）：facts 信封只具名两键（count/facts），"
+                    "元素刻意保持不透明 dict——16 个基键经空值过滤可逐行缺席 + 30+ "
+                    "per-kind 条件字段（§53.58 不透明元素先例）。顶层键改名后钉源键序"
+                    "断言红（必填 count 字段缺键同时 422）。"
+                    "● 针单行、带 CRLF、命中 **1 次**（已实测）。"
+                ),
+            ),
+            Mutation(
+                label="J194 WorldCupResolveMatch.confidence 撤名：模型键序判据脱钩",
+                path=_EVENT_MODEL,
+                old=b'    actual_outcome: float\r\n    confidence: float\r\n',
+                new=b'    actual_outcome: float\r\n    confidence_x: float\r\n',
+                guard_file=_T_GENERATE_TYPES,
+                guards=(
+                    "test_facts_resolve_models_match_producer_key_sets",
+                ),
+                note=(
+                    "§53.87：matches 元素七键无条件写（actual_outcome/confidence "
+                    "按 _decision/_min_confidence 构造恒 float，facts 携带 fact_id "
+                    "而非事实对象）。撤名后 _MODEL_KEYS 键序断言红（线上键静默丢键）。"
+                    "● 针跨两行、带 CRLF、命中 **1 次**（已实测；confidence 单行"
+                    "在全文件多义，actual_outcome+confidence 两行消歧）。"
+                ),
+            ),
+            Mutation(
+                label="J195 resolve 回绑裸 FlexibleResponse：哨兵集合判据脱钩",
+                path=_DIGEST_ROUTES,
+                old=b'@router.post("/sports/world-cup/resolve", response_model=WorldCupResolveResponse)',
+                new=b'@router.post("/sports/world-cup/resolve", response_model=FlexibleResponse)',
+                guard_file=_T_GENERATE_TYPES,
+                guards=(
+                    "test_every_flexible_response_route_binds_the_canonical_class",
+                ),
+                note=(
+                    "§53.87：facts/resolve 具名后哨兵裸清单 7→5；滑回裸类 ⇒ "
+                    "observed 多出该路由 ⇒ 集合相等断言红。前端退役的 ResolveResult "
+                    "曾声明 resolved/candidates 两个生产者从不发的键（真键 "
+                    "resolved_count/pending_count）——具名让这类失实副本现形。"
                     "● 针单行、无换行、命中 **1 次**（已实测）。"
                 ),
             ),

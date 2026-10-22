@@ -8,6 +8,7 @@ import {
   parseIngestPayload,
   type FactsResponse,
   type IngestResult,
+  type ResolveResult,
   type SourceAction,
 } from "@/lib/world-cup/ingest-api";
 
@@ -37,7 +38,7 @@ type PendingConfirm = {
   execute: () => void;
 };
 
-function summarize(result: IngestResult): string {
+function summarize(result: IngestResult | ResolveResult): string {
   const parts: string[] = [];
   if (typeof result.converted_fact_count === "number") {
     parts.push(`可转换 ${result.converted_fact_count} 条事实`);
@@ -48,13 +49,21 @@ function summarize(result: IngestResult): string {
   // producer sends either (the import result echoes the request as the boolean
   // `replace`) — audit 53.82.
   if (typeof result.count === "number" && parts.length === 0) parts.push(`共 ${result.count} 条`);
+  // 53.87: the resolver's real keys -- the retired loose copy showed
+  // `resolved` / `candidates`, keys the producer never sends.
+  if (typeof result.resolved_count === "number") {
+    parts.push(`可解析 ${result.resolved_count}`);
+  }
+  if (typeof result.pending_count === "number") {
+    parts.push(`待定 ${result.pending_count}`);
+  }
   if (typeof result.ok === "boolean") parts.push(result.ok ? "校验通过" : "校验未通过");
   if (parts.length === 0 && result.status) parts.push(String(result.status));
   const head = parts.join(" / ");
   return result.message ? (head ? `${head} · ${result.message}` : String(result.message)) : head;
 }
 
-function ResultBlock({ testId, result }: { testId: string; result: IngestResult }) {
+function ResultBlock({ testId, result }: { testId: string; result: IngestResult | ResolveResult }) {
   const line = summarize(result);
   return (
     <div data-testid={testId} className="mt-3 space-y-2 text-sm">
@@ -87,7 +96,7 @@ export function IngestConsole() {
   const [sourceStatus, setSourceStatus] = useState<IngestResult | null>(null);
   const [sourceResult, setSourceResult] = useState<IngestResult | null>(null);
   const [payloadResult, setPayloadResult] = useState<IngestResult | null>(null);
-  const [resolveResult, setResolveResult] = useState<IngestResult | null>(null);
+  const [resolveResult, setResolveResult] = useState<ResolveResult | null>(null);
 
   const [replace, setReplace] = useState(false);
   const [payloadKey, setPayloadKey] = useState(PAYLOAD_SOURCES[0].key);

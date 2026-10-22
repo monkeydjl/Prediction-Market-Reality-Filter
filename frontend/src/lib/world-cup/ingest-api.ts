@@ -17,7 +17,10 @@
  */
 
 import { getApiBase } from "@/lib/env";
-import type { IngestImportResponse } from "@/lib/generated-types";
+import type {
+  IngestImportResponse,
+  WorldCupResolveResponse,
+} from "@/lib/generated-types";
 import {
   ApiError,
   buildApiErrorMessage,
@@ -235,16 +238,15 @@ export interface FactsResponse {
 }
 
 /**
- * Resolve reads, widened to the producer's real keys (audit 53.82: the
- * retired copy declared `resolved` / `candidates`, keys the producer never
- * sends — it sends `resolved_count` / `pending_count`). Still loose until
- * the resolve route is named in a later slice.
+ * Retired loose copy (audit 53.87): the resolve route is named now, so
+ * this is a pure alias of the generated envelope. History: the first
+ * copy declared `resolved` / `candidates` -- keys the producer never
+ * sends (audit 53.82 found the real keys `resolved_count` /
+ * `pending_count`); the 53.82 widening still carried them as dead
+ * optionals until the route got its model and this alias retired them
+ * for good.
  */
-export type ResolveResult = IngestResult & {
-  dry_run?: boolean;
-  resolved?: number;
-  candidates?: number;
-};
+export type ResolveResult = WorldCupResolveResponse;
 
 function ingestHeaders(withBody: boolean): Record<string, string> {
   const headers: Record<string, string> = {

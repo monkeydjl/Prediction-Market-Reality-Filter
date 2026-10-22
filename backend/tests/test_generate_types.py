@@ -3283,11 +3283,9 @@ class FlexibleResponseIdentityTests(unittest.TestCase):
     # mount, HEAD/OPTIONS are stripped).
     BARE_FLEXIBLE_RESPONSE_ROUTES = frozenset({
         "GET /api/events/discover/status",
-        "GET /api/events/sports/world-cup/facts",
         "GET /api/world-cup/predictions/matches/{match_id}",
         "GET /api/world-cup/predictions/today",
         "POST /api/events/analyze",
-        "POST /api/events/sports/world-cup/resolve",
         "POST /api/world-cup/predictions/init-db",
     })
 
@@ -4289,6 +4287,247 @@ class WorldCupStatusContractTests(unittest.TestCase):
             + _TAIL,
             "the generated data-source status envelope drifted (audit "
             "53.86)",
+        )
+
+
+class WorldCupFactsResolveContractTests(unittest.TestCase):
+    """The facts list and the deterministic resolver, named in audit
+    53.87.
+
+    ``GET /sports/world-cup/facts`` names only its two-key envelope: a
+    normalized fact carries sixteen base keys that the producer's
+    empty-value filter can each drop, plus up to thirty per-kind
+    conditional fields (str / number / bool / score dicts), so the
+    element shape varies row by row and stays an opaque dict (§53.58
+    precedent). ``POST /sports/world-cup/resolve`` names the full
+    envelope and its ``matches`` element -- seven unconditional keys
+    each; the frontend's retired ``ResolveResult`` declared ``resolved``
+    / ``candidates``, keys the producer never sends (the real keys are
+    ``resolved_count`` / ``pending_count``).
+    """
+
+    _ROUTE_MODELS = {
+        "/api/events/sports/world-cup/facts": "WorldCupFactsResponse",
+        "/api/events/sports/world-cup/resolve": "WorldCupResolveResponse",
+    }
+
+    _MODEL_KEYS = {
+        "WorldCupFactsResponse": (["count", "facts"], []),
+        "WorldCupResolveMatch": (
+            ["event_id", "event_title", "actual_outcome", "confidence",
+             "reason", "facts", "result"], []),
+        "WorldCupResolveResponse": (
+            ["status", "dry_run", "resolved_count", "pending_count",
+             "checked_count", "unresolved_events", "matches"], []),
+    }
+
+    def _named_route(self, path):
+        from app.main import app
+
+        matches = [
+            route for route in app.routes
+            if getattr(route, "path", "") == path
+        ]
+        self.assertEqual(
+            len(matches), 1,
+            f"route {path} is missing or duplicated in the app walk",
+        )
+        return matches[0]
+
+    def test_facts_and_resolve_routes_bind_their_models(self):
+        import app.models.event as event_models
+
+        self.assertEqual(
+            len(self._ROUTE_MODELS), 2,
+            "1 facts read + 1 resolve write = 2; a drift here means a "
+            "route was added or removed and the census must be re-run "
+            "(audit 53.87)",
+        )
+        wrong = []
+        for path, model_name in self._ROUTE_MODELS.items():
+            route = self._named_route(path)
+            model = getattr(event_models, model_name)
+            if route.response_model is not model:
+                wrong.append(
+                    f"{path} -> "
+                    f"{getattr(route.response_model, '__name__', '?')} "
+                    f"(want {model_name})"
+                )
+        self.assertEqual(
+            wrong, [],
+            "each route must bind its named envelope -- the bare "
+            "FlexibleResponse binding kept the resolve shape invisible "
+            "to the generated frontend types (audit 53.87): "
+            + "; ".join(wrong),
+        )
+
+    def test_facts_resolve_routes_do_not_carry_exclude_unset(self):
+        flagged = []
+        for path in self._ROUTE_MODELS:
+            route = self._named_route(path)
+            if getattr(route, "response_model_exclude_unset", False):
+                flagged.append(path)
+        self.assertEqual(
+            flagged, [],
+            "both producers write every envelope key unconditionally (the "
+            "facts element is opaque precisely so the variable element "
+            "shape never needs the flag), so the flag would be a no-op "
+            "today and a blind spot the day a key becomes conditional "
+            "(§Z4, audit 53.87): " + "; ".join(flagged),
+        )
+
+    def test_facts_resolve_models_match_producer_key_sets(self):
+        import app.models.event as event_models
+
+        for name, (keys, optional) in self._MODEL_KEYS.items():
+            model = getattr(event_models, name)
+            fields = model.model_fields
+            with self.subTest(model=name):
+                self.assertEqual(
+                    list(fields), keys,
+                    f"{name} is no longer the producer's keys in producer "
+                    "order (audit 53.87)",
+                )
+            for key, field in fields.items():
+                with self.subTest(model=name, key=key):
+                    self.assertTrue(
+                        field.is_required(),
+                        f"{name}.{key} gained a default; both producers "
+                        "write every key unconditionally, so a default "
+                        "would hide a producer regression instead of "
+                        "failing at the boundary (audit 53.87)",
+                    )
+
+    def test_resolve_and_facts_producers_pinned_from_source(self):
+        import ast
+
+        def _walk(node):
+            # Document order, not a LIFO stack (audit 53.83 lesson).
+            for child in ast.iter_child_nodes(node):
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                      ast.Lambda)):
+                    continue
+                yield child
+                yield from _walk(child)
+
+        def _return_keys(fn):
+            return [
+                [key.value for key in node.value.keys
+                 if isinstance(key, ast.Constant)]
+                for node in _walk(fn)
+                if isinstance(node, ast.Return)
+                and isinstance(node.value, ast.Dict)
+            ]
+
+        def _module_fn(source, name):
+            tree = ast.parse(source)
+            return next(
+                node for node in tree.body
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name == name
+            )
+
+        # resolve_world_cup_events: one dict-literal return, seven keys --
+        # the wire order WorldCupResolveResponse mirrors.
+        src = (
+            _BACKEND_DIR / "app" / "services"
+            / "sports_resolution_service.py"
+        ).read_bytes().decode("utf-8")
+        fn = _module_fn(src, "resolve_world_cup_events")
+        key_sets = _return_keys(fn)
+        self.assertEqual(
+            len(key_sets), 1,
+            "resolve_world_cup_events no longer has exactly one "
+            "dict-literal return; the single-shape decision needs a "
+            "re-census (audit 53.87)",
+        )
+        self.assertEqual(
+            key_sets[0],
+            ["status", "dry_run", "resolved_count", "pending_count",
+             "checked_count", "unresolved_events", "matches"],
+            "the resolve producer's return key order drifted; that order "
+            "is what WorldCupResolveResponse's field order mirrors "
+            "(audit 53.87)",
+        )
+
+        # The matches element literal lives inside matches.append({...}):
+        # pin its seven keys via that call (the element order is what
+        # WorldCupResolveMatch mirrors).
+        append_keys = []
+        for node in _walk(fn):
+            if (isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "append"
+                    and node.args
+                    and isinstance(node.args[0], ast.Dict)):
+                append_keys.append([
+                    key.value for key in node.args[0].keys
+                    if isinstance(key, ast.Constant)
+                ])
+        self.assertEqual(
+            len(append_keys), 1,
+            "resolve_world_cup_events no longer builds exactly one "
+            "append({...}) match literal; re-census (audit 53.87)",
+        )
+        self.assertEqual(
+            append_keys[0],
+            ["event_id", "event_title", "actual_outcome", "confidence",
+             "reason", "facts", "result"],
+            "the match literal's key order drifted; that order is what "
+            "WorldCupResolveMatch's field order mirrors (audit 53.87)",
+        )
+
+        # _decision feeds four of the match keys; its order matches the
+        # literal's middle section.
+        key_sets = _return_keys(_module_fn(src, "_decision"))
+        self.assertEqual(
+            (len(key_sets), key_sets[0]),
+            (1, ["actual_outcome", "confidence", "reason", "facts"]),
+            "the decision dict's key order drifted; the match literal "
+            "spreads it between event_title and result (audit 53.87)",
+        )
+
+        # The facts handler: one return, two envelope keys.
+        src = (
+            _BACKEND_DIR / "app" / "api" / "routes" / "events.py"
+        ).read_bytes().decode("utf-8")
+        key_sets = _return_keys(_module_fn(src, "list_world_cup_facts"))
+        self.assertEqual(
+            (len(key_sets), key_sets[0]),
+            (1, ["count", "facts"]),
+            "the facts handler's envelope key set/order drifted (audit "
+            "53.87)",
+        )
+
+    def test_generated_types_carry_the_facts_resolve_envelopes(self):
+        text = _OUTPUT_PATH.read_bytes().decode("utf-8")
+        bodies = _interface_bodies(text)
+
+        def normalized(name):
+            return " ".join(
+                line.strip() for line in bodies[name] if line.strip()
+            )
+
+        _TAIL = "[k: string]: unknown;"
+        self.assertEqual(
+            normalized("WorldCupFactsResponse"),
+            "count: number; facts: { [k: string]: unknown; }[]; " + _TAIL,
+            "the generated facts envelope drifted (audit 53.87)",
+        )
+        self.assertEqual(
+            normalized("WorldCupResolveMatch"),
+            "event_id: string; event_title: string; actual_outcome: "
+            "number; confidence: number; reason: string; facts: "
+            "string[]; result: string;",
+            "the generated resolve match element drifted (audit 53.87)",
+        )
+        self.assertEqual(
+            normalized("WorldCupResolveResponse"),
+            "status: string; dry_run: boolean; resolved_count: number; "
+            "pending_count: number; checked_count: number; "
+            "unresolved_events: number; matches: WorldCupResolveMatch[]; "
+            + _TAIL,
+            "the generated resolve envelope drifted (audit 53.87)",
         )
 
 

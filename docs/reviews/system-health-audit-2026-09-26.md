@@ -15243,3 +15243,51 @@ preview 保持松读（调用点传 `source.path: string`，TS 无法按 path �
 
 **下一片队列（不变）：** ③ 资源 preview 11 条 → ④ test+validate 4 条 →
 ⑥ status 2 条 → ⑦+⑧ facts/resolve。
+
+**53.84 补记（同日）：资源 preview 11 条具名——preview 族与 import 族同族
+不同形，全部无条件写。** 队列 ③ 落地：`data/preview`（handler 内联两键字
+面量 `{converted_fact_count, facts}`）、`data/source/preview`
+（`preview_world_cup_data_file` 四键，`source_metadata` 沿 53.83 的单
+dict 形状）、`official-csv/preview`（profile 块在前）与 7 条资源 preview
+（matches/match-events/lineups/standings/player-awards/player-status/
+statistics，各自的 count 键 + `normalized_data`(dict) +
+`converted_fact_count` + `facts`）——11 个新模型全部继承
+`FlexibleResponse`、全部**纯字面量 return、无条件写 ⇒ 全部无旗**（§Z4；
+与 bundle 族的条件 `source_fetches` 相反）。`football-data/preview` 继承
+`IngestStandingsSourcePreviewResponse` 只声明追加的
+`provider`/`source_url`（与 import 双胞片同构造）。普查全部为纯字面量
+return、无增量赋值——53.83 的普查 v3 方法论（追增量写）在本片复核为
+「形状从生产者函数体逐条读出」，preview 转换器没有 wrapper 层。
+
+**具名让不忠实桩现形（§Z12 第三形态第 4/5 例）**：football-data/preview
+的两个桩被 `ResponseValidationError` 抓出——功能测试的三键桩
+`{provider, normalized_qualification_count, source_url}`（丢了 standings
+preview 的 4 个基础键）与 Blocking 测试的 `{"ok": True}`（此前裸绑定下
+零校验通过）。修桩对齐 6 键生产者形状。哨兵
+`BARE_FLEXIBLE_RESPONSE_ROUTES` 删 11 条（裸清单 24→13）。
+
+**守卫与变异**：`_ROUTE_MODELS` 24→35 行、`_MODEL_KEYS` +11、数量断言
+35（"18 import + 6 bundle preview + 11 resource preview"）；生成物断言
+加 `IngestMatchSourcePreviewResponse` 与 `IngestFootballDataPreviewResponse`
+两条规范化全文（含开放尾巴）；钉源守卫加 preview_world_cup_match_source
+的 return 键序（家族代表，单 return 纯字面量）。变异 +3：J184
+（statistics/preview 解绑——35 条身份判据）、J185（转换器
+normalized_data 键改名——钉源键序）、J186（FootballDataPreview 撤继承——
+家族基础键来自 standings 继承），清单 269→**272**（list 自打印）。
+
+**harness 编辑操作教训（新坑，写入 SKILL 9ba⑦ 之后的执行面）**：向
+mutation_verify.py 追加含 `b'...\r\n'` 字面量的 Mutation 块时，生成脚
+本必须把转义序列**双反斜杠**写出（生成侧的 `\r\n` 会被 Python 先解析
+成真实字节，落盘后宿主文件里字符串字面量被截断 → SyntaxError）；且
+「锚 = set 收尾四行」的做法会把**前一条 Mutation 的收尾行**吞进锚——首
+次插入后 J183 的 Mutation 闭合丢失（`'(' never closed`），修复时先补回
+J183 收尾、再删重复行。恢复路径：`git checkout` 单文件（HEAD 即上一片
+已提交态）后重写生成脚本，比就地修补可靠。
+
+**验证链读数**：ruff 全过；mypy 331 文件零问题；`generate_types --check`
+up to date；全量 pytest 读数见下（junit 判据）；J184–J186 四阶段全
+`[OK]`；针审计 **272/272** 恰命中 1 次（count_needle 双变体）；tsc 零
+错；vitest 94 文件 / 447 测试全过。
+
+**下一片队列（不变）：** ④ test+validate 4 条 → ⑥ status 2 条 →
+⑦+⑧ facts/resolve。

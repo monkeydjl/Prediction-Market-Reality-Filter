@@ -152,6 +152,7 @@ from app.models.event import (
     IngestBundlePreviewResponse,
     IngestBundleUrlImportResponse,
     IngestBundleUrlPreviewResponse,
+    IngestApiFootballTestResponse,
     IngestDataImportResponse,
     IngestDataPreviewResponse,
     IngestDataSourceFileImportResponse,
@@ -175,6 +176,8 @@ from app.models.event import (
     IngestStatisticsSourcePreviewResponse,
     IngestFootballDataImportResponse,
     IngestFootballDataPreviewResponse,
+    IngestPipelineValidateResponse,
+    IngestSportmonksTestResponse,
     LoopStatusResponse,
     OpenDecisionsResponse,
     PendingLinksResponse,
@@ -942,7 +945,13 @@ def _require_successful_api_football_validation_before_import() -> None:
         )
 
 
-@router.post("/sports/world-cup/data/bundle/api-football/test", response_model=FlexibleResponse)
+@router.post(
+    "/sports/world-cup/data/bundle/api-football/test",
+    response_model=IngestApiFootballTestResponse,
+    # 53.85: subscription/requests_* are written only on the success path;
+    response_model_exclude_unset=True,
+)
+
 async def test_api_football_connection_route(
     _auth: None = Depends(require_write_key),
 ) -> dict[str, Any]:
@@ -950,7 +959,13 @@ async def test_api_football_connection_route(
     return await asyncio.to_thread(test_world_cup_api_football_connection)
 
 
-@router.post("/sports/world-cup/data/bundle/api-football/validate", response_model=FlexibleResponse)
+@router.post(
+    "/sports/world-cup/data/bundle/api-football/validate",
+    response_model=IngestPipelineValidateResponse,
+    # 53.85: coverage/summary appear only on success, error only on failure;
+    response_model_exclude_unset=True,
+)
+
 async def validate_api_football_pipeline_route(
     _auth: None = Depends(require_write_key),
 ) -> dict[str, Any]:
@@ -1083,7 +1098,13 @@ async def import_sportmonks_world_cup_source_bundle_route(
         _reject_invalid_payload(exc)
 
 
-@router.post("/sports/world-cup/data/bundle/sportmonks/test", response_model=FlexibleResponse)
+@router.post(
+    "/sports/world-cup/data/bundle/sportmonks/test",
+    response_model=IngestSportmonksTestResponse,
+    # 53.85: feed_tested/item_count/rate_limit are written only on success;
+    response_model_exclude_unset=True,
+)
+
 async def test_sportmonks_connection_route(
     _auth: None = Depends(require_write_key),
 ) -> dict[str, Any]:
@@ -1091,7 +1112,13 @@ async def test_sportmonks_connection_route(
     return await asyncio.to_thread(test_world_cup_sportmonks_connection)
 
 
-@router.post("/sports/world-cup/data/bundle/sportmonks/validate", response_model=FlexibleResponse)
+@router.post(
+    "/sports/world-cup/data/bundle/sportmonks/validate",
+    response_model=IngestPipelineValidateResponse,
+    # 53.85: coverage/summary appear only on success, error only on failure;
+    response_model_exclude_unset=True,
+)
+
 async def validate_sportmonks_pipeline_route(
     _auth: None = Depends(require_write_key),
 ) -> dict[str, Any]:

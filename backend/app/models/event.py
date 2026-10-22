@@ -2319,6 +2319,103 @@ class IngestFootballDataPreviewResponse(IngestStandingsSourcePreviewResponse):
     source_url: str
 
 
+class IngestApiFootballSubscription(BaseModel):
+    """The ``subscription`` block of a successful connection test (53.85).
+
+    ``test_world_cup_api_football_connection`` writes all three keys on
+    the success path with ``.get`` fallbacks for plan/active; ``end`` is
+    the provider's raw value and may be null.
+    """
+
+    plan: str
+    active: bool
+    end: str | None
+
+
+class IngestApiFootballTestResponse(FlexibleResponse):
+    """``data/bundle/api-football/test``: connection probe (audit 53.85).
+
+    Two shapes: the failure paths return ``{ok, error}`` only, the
+    success path appends ``subscription`` / ``requests_today`` /
+    ``requests_limit`` and writes ``error: None``. The three appended
+    keys are conditional, so they carry defaults and the route must carry
+    ``response_model_exclude_unset``; ``ok``/``error`` are written on
+    every path and stay required.
+    """
+
+    ok: bool
+    subscription: IngestApiFootballSubscription | None = None
+    requests_today: int | None = None
+    requests_limit: int | None = None
+    error: str | None
+
+
+class IngestSportmonksTestResponse(FlexibleResponse):
+    """``data/bundle/sportmonks/test``: connection probe (audit 53.85).
+
+    Two shapes: failure paths return ``{ok, error}``, the success path
+    appends ``feed_tested`` / ``item_count`` / ``rate_limit`` (the latter
+    is the provider's raw rate-limit object and may be absent or null).
+    The appended keys are conditional: defaults + flag.
+    """
+
+    ok: bool
+    feed_tested: str | None = None
+    item_count: int | None = None
+    rate_limit: dict[str, Any] | None = None
+    error: str | None
+
+
+class IngestPipelineStep(BaseModel):
+    """One element of ``steps`` in a pipeline-validate response (53.85).
+
+    ``name``/``ok`` are written on every step; ``detail`` (connection /
+    fact_coverage), ``fixture_count`` + ``fixture_ids_sample`` (fixture
+    fetch success) and ``error`` (failures) are per-step conditionals
+    with defaults -- the parent routes' flag keeps the unset ones off the
+    wire.
+    """
+
+    name: str
+    ok: bool
+    detail: dict[str, Any] | None = None
+    fixture_count: int | None = None
+    fixture_ids_sample: list[str] | None = None
+    error: str | None = None
+
+
+class IngestPipelineCoverage(BaseModel):
+    """The ``coverage`` block of a successful pipeline validate (53.85).
+
+    Both validate producers build these six keys unconditionally on the
+    success path, in this order.
+    """
+
+    api_fixture_count: int
+    stored_fact_count: int
+    covered: int
+    missing_from_store: int
+    missing_ids_sample: list[str]
+    extra_in_store: int
+
+
+class IngestPipelineValidateResponse(FlexibleResponse):
+    """``data/bundle/{api-football,sportmonks}/validate`` (audit 53.85).
+
+    Both producers share this shape: ``steps`` starts the dict and ``ok``
+    is written on every return path; ``coverage``/``summary`` appear only
+    on success and ``error`` only on failure. Field order mirrors the
+    success path (steps, ok, coverage, summary); on failure the unset
+    keys are excluded, so the wire reads steps, ok, error.
+    """
+
+    steps: list[IngestPipelineStep]
+    ok: bool
+    coverage: IngestPipelineCoverage | None = None
+    summary: str | None = None
+    error: str | None = None
+
+
 class IngestDataImportResponse(IngestImportResponse):
     """Import result for ``data/import`` (audit 53.83).
 

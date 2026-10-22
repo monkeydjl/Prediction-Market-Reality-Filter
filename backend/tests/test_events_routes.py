@@ -3361,12 +3361,27 @@ class BlockingSourceRouteOffloadTests(unittest.TestCase):
         (
             "/events/sports/world-cup/data/bundle/api-football/test",
             "test_world_cup_api_football_connection",
-            {"ok": True},
+            {
+                # The success-path producer shape (audit 53.85): the
+                # previous {"ok": True} stub only validated while the
+                # route was still bare FlexibleResponse.
+                "ok": True,
+                "subscription": {"plan": "free", "active": True, "end": None},
+                "requests_today": 1,
+                "requests_limit": 100,
+                "error": None,
+            },
         ),
         (
             "/events/sports/world-cup/data/bundle/sportmonks/test",
             "test_world_cup_sportmonks_connection",
-            {"ok": True},
+            {
+                "ok": True,
+                "feed_tested": "matches",
+                "item_count": 0,
+                "rate_limit": None,
+                "error": None,
+            },
         ),
         (
             "/events/sports/world-cup/data/bundle/url/preview",

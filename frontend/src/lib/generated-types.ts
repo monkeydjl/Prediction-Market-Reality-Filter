@@ -1932,6 +1932,36 @@ export interface FreshEdgesResponse {
   [k: string]: unknown;
 }
 /**
+ * The ``subscription`` block of a successful connection test (53.85).
+ *
+ * ``test_world_cup_api_football_connection`` writes all three keys on
+ * the success path with ``.get`` fallbacks for plan/active; ``end`` is
+ * the provider's raw value and may be null.
+ */
+export interface IngestApiFootballSubscription {
+  plan: string;
+  active: boolean;
+  end: string | null;
+}
+/**
+ * ``data/bundle/api-football/test``: connection probe (audit 53.85).
+ *
+ * Two shapes: the failure paths return ``{ok, error}`` only, the
+ * success path appends ``subscription`` / ``requests_today`` /
+ * ``requests_limit`` and writes ``error: None``. The three appended
+ * keys are conditional, so they carry defaults and the route must carry
+ * ``response_model_exclude_unset``; ``ok``/``error`` are written on
+ * every path and stay required.
+ */
+export interface IngestApiFootballTestResponse {
+  ok: boolean;
+  subscription?: IngestApiFootballSubscription | null;
+  requests_today?: number | null;
+  requests_limit?: number | null;
+  error: string | null;
+  [k: string]: unknown;
+}
+/**
  * ``data/bundle/feeds/import``: the feeds variant adds the two keys.
  */
 export interface IngestBundleFeedsImportResponse {
@@ -2443,6 +2473,56 @@ export interface IngestOfficialCsvSourcePreviewResponse {
   [k: string]: unknown;
 }
 /**
+ * The ``coverage`` block of a successful pipeline validate (53.85).
+ *
+ * Both validate producers build these six keys unconditionally on the
+ * success path, in this order.
+ */
+export interface IngestPipelineCoverage {
+  api_fixture_count: number;
+  stored_fact_count: number;
+  covered: number;
+  missing_from_store: number;
+  missing_ids_sample: string[];
+  extra_in_store: number;
+}
+/**
+ * One element of ``steps`` in a pipeline-validate response (53.85).
+ *
+ * ``name``/``ok`` are written on every step; ``detail`` (connection /
+ * fact_coverage), ``fixture_count`` + ``fixture_ids_sample`` (fixture
+ * fetch success) and ``error`` (failures) are per-step conditionals
+ * with defaults -- the parent routes' flag keeps the unset ones off the
+ * wire.
+ */
+export interface IngestPipelineStep {
+  name: string;
+  ok: boolean;
+  detail?: {
+    [k: string]: unknown;
+  } | null;
+  fixture_count?: number | null;
+  fixture_ids_sample?: string[] | null;
+  error?: string | null;
+}
+/**
+ * ``data/bundle/{api-football,sportmonks}/validate`` (audit 53.85).
+ *
+ * Both producers share this shape: ``steps`` starts the dict and ``ok``
+ * is written on every return path; ``coverage``/``summary`` appear only
+ * on success and ``error`` only on failure. Field order mirrors the
+ * success path (steps, ok, coverage, summary); on failure the unset
+ * keys are excluded, so the wire reads steps, ok, error.
+ */
+export interface IngestPipelineValidateResponse {
+  steps: IngestPipelineStep[];
+  ok: boolean;
+  coverage?: IngestPipelineCoverage | null;
+  summary?: string | null;
+  error?: string | null;
+  [k: string]: unknown;
+}
+/**
  * ``player-awards/import`` (audit 53.83).
  */
 export interface IngestPlayerAwardsSourceImportResponse {
@@ -2500,6 +2580,24 @@ export interface IngestPlayerStatusSourcePreviewResponse {
   facts: {
     [k: string]: unknown;
   }[];
+  [k: string]: unknown;
+}
+/**
+ * ``data/bundle/sportmonks/test``: connection probe (audit 53.85).
+ *
+ * Two shapes: failure paths return ``{ok, error}``, the success path
+ * appends ``feed_tested`` / ``item_count`` / ``rate_limit`` (the latter
+ * is the provider's raw rate-limit object and may be absent or null).
+ * The appended keys are conditional: defaults + flag.
+ */
+export interface IngestSportmonksTestResponse {
+  ok: boolean;
+  feed_tested?: string | null;
+  item_count?: number | null;
+  rate_limit?: {
+    [k: string]: unknown;
+  } | null;
+  error: string | null;
   [k: string]: unknown;
 }
 /**

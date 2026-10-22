@@ -292,6 +292,7 @@ _ELO_ENGINE = "backend/app/kernel/engines/elo_odds_engine.py"
 _SPORTS_FACT = "backend/app/services/sports_fact_service.py"
 _WC_SOURCE_BUNDLE = "backend/app/services/world_cup_source_bundle.py"
 _WC_MATCH_SOURCE = "backend/app/services/world_cup_match_source.py"
+_WC_API_FOOTBALL = "backend/app/services/world_cup_api_football_source.py"
 _LIMITLESS = "backend/app/services/limitless_event_source.py"
 _GBM_ENGINE = "backend/app/kernel/engines/gbm_engine.py"
 _CHALLENGE_ADAPTER = "backend/app/services/conclusion_challenge_world_cup_adapter.py"
@@ -5943,6 +5944,54 @@ SETS: tuple[MutationSet, ...] = (
                     "source_url —— 4 个基础键来自继承，模型只声明追加的两键（与 import 双胞片同构造）。"
                     "撤继承后模型丢 4 键，_MODEL_KEYS 键序断言红（生成物断言也会红，同根判据）。"
                     "● 针单行、带 CRLF、命中 **1 次**（已实测；class 行全文件唯一）。"
+                ),
+            ),
+            Mutation(
+                label="J187 api-football/test 拔旗：条件键旗子判据脱钩",
+                path=_DIGEST_ROUTES,
+                old=b'    response_model=IngestApiFootballTestResponse,\r\n'
+                     b'    # 53.85: subscription/requests_* are written only on the success path;\r\n'
+                     b'    response_model_exclude_unset=True,\r\n',
+                new=b'    response_model=IngestApiFootballTestResponse,\r\n',
+                guard_file=_T_GENERATE_TYPES,
+                guards=(
+                    "test_bundle_routes_carry_exclude_unset_and_others_do_not",
+                ),
+                note=(
+                    "§53.85（test+validate 4 条）：test 探针两形状 —— 失败 {ok, error}、成功追加 subscription/requests_*"
+                    "（sportmonks 为 feed_tested/item_count/rate_limit）—— 追加键条件写 ⇒ 默认值+旗（§Z3）。"
+                    "拔旗后 conditional_unflagged 非空 ⇒ 红（守卫 53.85 起分三组：bundle 12 / 条件旗 4 / 其余无旗）。"
+                    "● 针跨行、带 CRLF、命中 **1 次**（已实测；注释行消歧）。删除型编辑。"
+                ),
+            ),
+            Mutation(
+                label="J188 IngestPipelineValidateResponse.coverage 撤名：模型键序判据脱钩",
+                path=_EVENT_MODEL,
+                old=b'    coverage: IngestPipelineCoverage | None = None\r\n',
+                new=b'    coverage_x: IngestPipelineCoverage | None = None\r\n',
+                guard_file=_T_GENERATE_TYPES,
+                guards=(
+                    "test_models_are_the_producer_key_sets_in_producer_order",
+                ),
+                note=(
+                    "§53.85：两个 validate 生产者同形状（steps/ok 恒写＋coverage/summary 仅成功＋error 仅失败）"
+                    "⇒ 共享 IngestPipelineValidateResponse；字段序镜像成功路径（§Z21）。coverage 撤名后键序断言红。"
+                    "● 针单行、带 CRLF、命中 **1 次**（已实测；coverage 字段声明全文件唯一）。"
+                ),
+            ),
+            Mutation(
+                label="J189 连接测试成功 return 的 requests_today 键改名：钉源键序判据脱钩",
+                path=_WC_API_FOOTBALL,
+                old=b'        "requests_today": requests_info.get("current", 0),\r\n',
+                new=b'        "requests_today_x": requests_info.get("current", 0),\r\n',
+                guard_file=_T_GENERATE_TYPES,
+                guards=(
+                    "test_producer_key_set_is_pinned_from_source",
+                ),
+                note=(
+                    "§53.85：test 探针成功 return 是纯 dict 字面量，钉源守卫按「含 subscription 键的 return」选出成功形状钉键序"
+                    "（失败形状 {ok, error} 不占 —— 判据带前提：唯一成功 return）。键改名后键序断言红。"
+                    "● 针单行、带 CRLF、命中 **1 次**（已实测）。"
                 ),
             ),
         ),

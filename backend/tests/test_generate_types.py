@@ -3289,10 +3289,6 @@ class FlexibleResponseIdentityTests(unittest.TestCase):
         "GET /api/world-cup/predictions/matches/{match_id}",
         "GET /api/world-cup/predictions/today",
         "POST /api/events/analyze",
-        "POST /api/events/sports/world-cup/data/bundle/api-football/test",
-        "POST /api/events/sports/world-cup/data/bundle/api-football/validate",
-        "POST /api/events/sports/world-cup/data/bundle/sportmonks/test",
-        "POST /api/events/sports/world-cup/data/bundle/sportmonks/validate",
         "POST /api/events/sports/world-cup/resolve",
         "POST /api/world-cup/predictions/init-db",
     })
@@ -3429,6 +3425,14 @@ class IngestImportContractTests(unittest.TestCase):
             "IngestStatisticsSourcePreviewResponse",
         "/api/events/sports/world-cup/data/bundle/football-data/preview":
             "IngestFootballDataPreviewResponse",
+        "/api/events/sports/world-cup/data/bundle/api-football/test":
+            "IngestApiFootballTestResponse",
+        "/api/events/sports/world-cup/data/bundle/api-football/validate":
+            "IngestPipelineValidateResponse",
+        "/api/events/sports/world-cup/data/bundle/sportmonks/test":
+            "IngestSportmonksTestResponse",
+        "/api/events/sports/world-cup/data/bundle/sportmonks/validate":
+            "IngestPipelineValidateResponse",
     }
 
     # Producer key order per model, base keys first (pydantic flattens the
@@ -3540,6 +3544,26 @@ class IngestImportContractTests(unittest.TestCase):
         "IngestFootballDataPreviewResponse": (
             ["normalized_qualification_count", "normalized_data",
              "converted_fact_count", "facts", "provider", "source_url"], []),
+        "IngestApiFootballSubscription": (
+            ["plan", "active", "end"], []),
+        "IngestApiFootballTestResponse": (
+            ["ok", "subscription", "requests_today", "requests_limit",
+             "error"],
+            ["subscription", "requests_today", "requests_limit"]),
+        "IngestSportmonksTestResponse": (
+            ["ok", "feed_tested", "item_count", "rate_limit", "error"],
+            ["feed_tested", "item_count", "rate_limit"]),
+        "IngestPipelineStep": (
+            ["name", "ok", "detail", "fixture_count", "fixture_ids_sample",
+             "error"],
+            ["detail", "fixture_count", "fixture_ids_sample", "error"]),
+        "IngestPipelineCoverage": (
+            ["api_fixture_count", "stored_fact_count", "covered",
+             "missing_from_store", "missing_ids_sample", "extra_in_store"],
+            []),
+        "IngestPipelineValidateResponse": (
+            ["steps", "ok", "coverage", "summary", "error"],
+            ["coverage", "summary", "error"]),
     }
 
     def _named_route(self, path):
@@ -3559,10 +3583,10 @@ class IngestImportContractTests(unittest.TestCase):
         import app.models.event as event_models
 
         self.assertEqual(
-            len(self._ROUTE_MODELS), 35,
-            "18 import routes + 6 bundle previews + 11 resource previews "
-            "= 35; a drift here means a route was added or removed and "
-            "the census must be re-run (audit 53.83/53.84)",
+            len(self._ROUTE_MODELS), 39,
+            "18 import + 6 bundle previews + 11 resource previews + 4 "
+            "test/validate = 39; a drift here means a route was added or "
+            "removed and the census must be re-run (audit 53.83-53.85)",
         )
         wrong = []
         for path, model_name in self._ROUTE_MODELS.items():
@@ -3582,9 +3606,21 @@ class IngestImportContractTests(unittest.TestCase):
             + "; ".join(wrong),
         )
 
+    # Routes whose producer writes at least one key conditionally: the
+    # bundle family (conditional source_fetches) plus the 53.85
+    # test/validate probes (success-only keys / failure-only error).
+    # Everything else must stay unflagged (§Z4).
+    _CONDITIONAL_FLAG_MODELS = frozenset({
+        "IngestApiFootballTestResponse",
+        "IngestSportmonksTestResponse",
+        "IngestPipelineValidateResponse",
+    })
+
     def test_bundle_routes_carry_exclude_unset_and_others_do_not(self):
         bundle_flagged = []
         bundle_unflagged = []
+        conditional_flagged = []
+        conditional_unflagged = []
         nonbundle_flagged = []
         for path, model_name in self._ROUTE_MODELS.items():
             route = self._named_route(path)
@@ -3597,6 +3633,8 @@ class IngestImportContractTests(unittest.TestCase):
             # unconditionally, so it must stay unflagged.
             if model_name.startswith("IngestBundle"):
                 (bundle_flagged if flagged else bundle_unflagged).append(path)
+            elif model_name in self._CONDITIONAL_FLAG_MODELS:
+                (conditional_flagged if flagged else conditional_unflagged).append(path)
             elif flagged:
                 nonbundle_flagged.append(path)
         self.assertEqual(
@@ -3611,9 +3649,21 @@ class IngestImportContractTests(unittest.TestCase):
             "12 bundle routes (6 import + 6 preview) carry the flag",
         )
         self.assertEqual(
+            conditional_unflagged, [],
+            "every test/validate route must carry the flag: the probes "
+            "success-only keys and the validators failure-only error "
+            "are conditional at the producer, so without the flag naming "
+            f"would materialise explicit nulls (§Z3, audit 53.85): "
+            f"{conditional_unflagged}",
+        )
+        self.assertEqual(
+            len(conditional_flagged), 4,
+            "4 test/validate routes (2 test + 2 validate) carry the flag",
+        )
+        self.assertEqual(
             nonbundle_flagged, [],
-            "non-bundle ingest routes write every key unconditionally, so "
-            "the flag would be a no-op today and a blind spot the day a key "
+            "unconditional ingest routes must not carry the flag: it "
+            "would be a no-op today and a blind spot the day a key "
             f"becomes conditional (§Z4, audit 53.83): {nonbundle_flagged}",
         )
 
@@ -3791,6 +3841,44 @@ class IngestImportContractTests(unittest.TestCase):
             "field order mirrors (audit 53.84)",
         )
 
+        # The connection-test probes (53.85): test_world_cup_api_football_connection
+        # has multiple returns -- the failure shapes are {ok, error} and
+        # the success shape carries the subscription block. Pin the
+        # success return (the one containing the "subscription" key).
+        probe_src = (
+            _BACKEND_DIR / "app" / "services"
+            / "world_cup_api_football_source.py"
+        ).read_bytes().decode("utf-8")
+        ptree = ast.parse(probe_src)
+        pfn = next(
+            node for node in ptree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == "test_world_cup_api_football_connection"
+        )
+        success_returns: list[list[str]] = []
+        for node in _walk_source_order(pfn):
+            if isinstance(node, ast.Return) and isinstance(node.value, ast.Dict):
+                keys = [
+                    key.value for key in node.value.keys
+                    if isinstance(key, ast.Constant)
+                ]
+                if "subscription" in keys:
+                    success_returns.append(keys)
+        self.assertEqual(
+            len(success_returns), 1,
+            "test_world_cup_api_football_connection no longer has exactly "
+            "one success-shaped dict-literal return; the two-shape "
+            "decision needs a re-census (audit 53.85)",
+        )
+        self.assertEqual(
+            success_returns[0],
+            ["ok", "subscription", "requests_today", "requests_limit",
+             "error"],
+            "the connection-test success shape drifted; that literal "
+            "order is what IngestApiFootballTestResponse's field order "
+            "mirrors (audit 53.85)",
+        )
+
     def test_generated_types_carry_the_required_keys(self):
         text = _OUTPUT_PATH.read_bytes().decode("utf-8")
         bodies = _interface_bodies(text)
@@ -3816,6 +3904,8 @@ class IngestImportContractTests(unittest.TestCase):
             "IngestErrorEntry",
             "IngestMatchSourcePreviewResponse",
             "IngestFootballDataPreviewResponse",
+            "IngestApiFootballTestResponse",
+            "IngestPipelineValidateResponse",
         ):
             self.assertIn(name, bodies)
         _BASE = ("imported: number; error_count: number; "
@@ -3883,6 +3973,23 @@ class IngestImportContractTests(unittest.TestCase):
             + " }[]; provider: string; source_url: string; " + _TAIL,
             "the generated provider preview drifted from the standings "
             "shape plus the two appended wrapper keys (audit 53.84)",
+        )
+        self.assertEqual(
+            normalized("IngestApiFootballTestResponse"),
+            "ok: boolean; subscription?: IngestApiFootballSubscription "
+            "| null; requests_today?: number | null; "
+            "requests_limit?: number | null; error: string | null; "
+            + _TAIL,
+            "the generated connection-test probe drifted from the two "
+            "producer shapes (audit 53.85)",
+        )
+        self.assertEqual(
+            normalized("IngestPipelineValidateResponse"),
+            "steps: IngestPipelineStep[]; ok: boolean; coverage?: "
+            "IngestPipelineCoverage | null; summary?: string | null; "
+            "error?: string | null; " + _TAIL,
+            "the generated pipeline-validate envelope drifted (audit "
+            "53.85)",
         )
         self.assertEqual(
             normalized("IngestErrorEntry"),

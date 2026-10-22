@@ -153,17 +153,28 @@ from app.models.event import (
     IngestBundleUrlImportResponse,
     IngestBundleUrlPreviewResponse,
     IngestDataImportResponse,
+    IngestDataPreviewResponse,
     IngestDataSourceFileImportResponse,
+    IngestDataSourceFilePreviewResponse,
     IngestImportResponse,
     IngestLineupsSourceImportResponse,
+    IngestLineupsSourcePreviewResponse,
     IngestMatchEventsSourceImportResponse,
+    IngestMatchEventsSourcePreviewResponse,
     IngestMatchSourceImportResponse,
+    IngestMatchSourcePreviewResponse,
     IngestOfficialCsvSourceImportResponse,
+    IngestOfficialCsvSourcePreviewResponse,
     IngestPlayerAwardsSourceImportResponse,
+    IngestPlayerAwardsSourcePreviewResponse,
     IngestPlayerStatusSourceImportResponse,
+    IngestPlayerStatusSourcePreviewResponse,
     IngestStandingsSourceImportResponse,
+    IngestStandingsSourcePreviewResponse,
     IngestStatisticsSourceImportResponse,
+    IngestStatisticsSourcePreviewResponse,
     IngestFootballDataImportResponse,
+    IngestFootballDataPreviewResponse,
     LoopStatusResponse,
     OpenDecisionsResponse,
     PendingLinksResponse,
@@ -682,7 +693,7 @@ async def import_world_cup_data_source(
     return result
 
 
-@router.post("/sports/world-cup/data/preview", response_model=FlexibleResponse)
+@router.post("/sports/world-cup/data/preview", response_model=IngestDataPreviewResponse)
 async def preview_world_cup_data_source(
     payload: DictPayload = Body(...),
     _auth: None = Depends(require_write_key),
@@ -996,7 +1007,7 @@ def _api_football_validation_run_summary(result: dict[str, Any]) -> dict[str, An
     }
 
 
-@router.post("/sports/world-cup/data/bundle/football-data/preview", response_model=FlexibleResponse)
+@router.post("/sports/world-cup/data/bundle/football-data/preview", response_model=IngestFootballDataPreviewResponse)
 async def preview_football_data_world_cup_standings_route(
     _auth: None = Depends(require_write_key),
 ) -> dict[str, Any]:
@@ -1088,7 +1099,7 @@ async def validate_sportmonks_pipeline_route(
     return await asyncio.to_thread(validate_world_cup_sportmonks_pipeline)
 
 
-@router.post("/sports/world-cup/data/source/preview", response_model=FlexibleResponse)
+@router.post("/sports/world-cup/data/source/preview", response_model=IngestDataSourceFilePreviewResponse)
 async def preview_configured_world_cup_data_source(
     _auth: None = Depends(require_write_key),
 ) -> dict[str, Any]:
@@ -1121,7 +1132,7 @@ async def import_configured_world_cup_data_source(
         _reject_invalid_payload(exc)
 
 
-@router.post("/sports/world-cup/official-csv/preview", response_model=FlexibleResponse)
+@router.post("/sports/world-cup/official-csv/preview", response_model=IngestOfficialCsvSourcePreviewResponse)
 async def preview_world_cup_official_csv_source_route(
     payload: DictPayload = Body(...),
     _auth: None = Depends(require_write_key),
@@ -1146,7 +1157,7 @@ async def import_world_cup_official_csv_source_route(
         _reject_invalid_payload(exc)
 
 
-@router.post("/sports/world-cup/matches/preview", response_model=FlexibleResponse)
+@router.post("/sports/world-cup/matches/preview", response_model=IngestMatchSourcePreviewResponse)
 async def preview_world_cup_match_source_route(
     payload: DictPayload = Body(...),
     _auth: None = Depends(require_write_key),
@@ -1171,7 +1182,7 @@ async def import_world_cup_match_source_route(
         _reject_invalid_payload(exc)
 
 
-@router.post("/sports/world-cup/match-events/preview", response_model=FlexibleResponse)
+@router.post("/sports/world-cup/match-events/preview", response_model=IngestMatchEventsSourcePreviewResponse)
 async def preview_world_cup_match_events_source_route(
     payload: DictPayload = Body(...),
     _auth: None = Depends(require_write_key),
@@ -1196,7 +1207,7 @@ async def import_world_cup_match_events_source_route(
         _reject_invalid_payload(exc)
 
 
-@router.post("/sports/world-cup/lineups/preview", response_model=FlexibleResponse)
+@router.post("/sports/world-cup/lineups/preview", response_model=IngestLineupsSourcePreviewResponse)
 async def preview_world_cup_lineups_source_route(
     payload: DictPayload = Body(...),
     _auth: None = Depends(require_write_key),
@@ -1221,7 +1232,7 @@ async def import_world_cup_lineups_source_route(
         _reject_invalid_payload(exc)
 
 
-@router.post("/sports/world-cup/standings/preview", response_model=FlexibleResponse)
+@router.post("/sports/world-cup/standings/preview", response_model=IngestStandingsSourcePreviewResponse)
 async def preview_world_cup_standings_source_route(
     payload: DictPayload = Body(...),
     _auth: None = Depends(require_write_key),
@@ -1246,7 +1257,7 @@ async def import_world_cup_standings_source_route(
         _reject_invalid_payload(exc)
 
 
-@router.post("/sports/world-cup/player-awards/preview", response_model=FlexibleResponse)
+@router.post("/sports/world-cup/player-awards/preview", response_model=IngestPlayerAwardsSourcePreviewResponse)
 async def preview_world_cup_player_awards_source_route(
     payload: DictPayload = Body(...),
     _auth: None = Depends(require_write_key),
@@ -1271,7 +1282,7 @@ async def import_world_cup_player_awards_source_route(
         _reject_invalid_payload(exc)
 
 
-@router.post("/sports/world-cup/player-status/preview", response_model=FlexibleResponse)
+@router.post("/sports/world-cup/player-status/preview", response_model=IngestPlayerStatusSourcePreviewResponse)
 async def preview_world_cup_player_status_source_route(
     payload: DictPayload = Body(...),
     _auth: None = Depends(require_write_key),
@@ -1296,7 +1307,7 @@ async def import_world_cup_player_status_source_route(
         _reject_invalid_payload(exc)
 
 
-@router.post("/sports/world-cup/statistics/preview", response_model=FlexibleResponse)
+@router.post("/sports/world-cup/statistics/preview", response_model=IngestStatisticsSourcePreviewResponse)
 async def preview_world_cup_statistics_source_route(
     payload: DictPayload = Body(...),
     _auth: None = Depends(require_write_key),

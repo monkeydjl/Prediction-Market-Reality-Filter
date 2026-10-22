@@ -1240,9 +1240,17 @@ class WorldCupFactRouteTests(unittest.TestCase):
                 patch(
                     "app.api.routes.events.preview_world_cup_football_data_standings",
                     return_value={
-                        "provider": "football_data",
+                        # The real producer is preview_world_cup_standings_source
+                        # plus provider/source_url (audit 53.84): the
+                        # three-key stub was an unfaithful double that the
+                        # named response model exposed at the boundary.
                         "normalized_qualification_count": 48,
-                        "source_url": "https://api.football-data.org/v4/competitions/WC/standings",
+                        "normalized_data": {"qualifications": []},
+                        "converted_fact_count": 48,
+                        "facts": [],
+                        "provider": "football_data",
+                        "source_url":
+                            "https://api.football-data.org/v4/competitions/WC/standings",
                     },
                 ) as mock_preview:
             client = _events_client()
@@ -3381,7 +3389,18 @@ class BlockingSourceRouteOffloadTests(unittest.TestCase):
         (
             "/events/sports/world-cup/data/bundle/football-data/preview",
             "preview_world_cup_football_data_standings",
-            {"ok": True},
+            {
+                # The real producer is the standings preview converter plus
+                # provider/source_url (audit 53.84); the previous
+                # {"ok": True} stub only validated because the route was
+                # still bare FlexibleResponse.
+                "normalized_qualification_count": 0,
+                "normalized_data": {"qualifications": []},
+                "converted_fact_count": 0,
+                "facts": [],
+                "provider": "football_data",
+                "source_url": "https://upstream.example/standings",
+            },
         ),
         (
             "/events/sports/world-cup/data/bundle/sportmonks/preview",

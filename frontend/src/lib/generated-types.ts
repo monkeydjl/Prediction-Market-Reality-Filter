@@ -2199,6 +2199,19 @@ export interface IngestDataImportResponse {
   [k: string]: unknown;
 }
 /**
+ * ``data/preview``: the trusted-payload converter (audit 53.84).
+ *
+ * The route handler builds this two-key literal itself and writes both
+ * keys unconditionally, so the route carries no exclude_unset flag.
+ */
+export interface IngestDataPreviewResponse {
+  converted_fact_count: number;
+  facts: {
+    [k: string]: unknown;
+  }[];
+  [k: string]: unknown;
+}
+/**
  * ``data/source/import``: the file variant adds the two source keys.
  *
  * Its metadata producer is ``validate_world_cup_data_source_metadata``,
@@ -2219,6 +2232,24 @@ export interface IngestDataSourceFileImportResponse {
   [k: string]: unknown;
 }
 /**
+ * ``data/source/preview``: ``preview_world_cup_data_file`` (53.84).
+ *
+ * Its metadata producer is ``validate_world_cup_data_source_metadata``,
+ * which returns a single dict -- not the per-entry list the bundle
+ * variants' ``validate_world_cup_source_bundle_metadata`` returns.
+ */
+export interface IngestDataSourceFilePreviewResponse {
+  source_file: string;
+  source_metadata: {
+    [k: string]: unknown;
+  };
+  converted_fact_count: number;
+  facts: {
+    [k: string]: unknown;
+  }[];
+  [k: string]: unknown;
+}
+/**
  * ``football-data/import``: the provider wrapper adds the two keys.
  */
 export interface IngestFootballDataImportResponse {
@@ -2232,6 +2263,26 @@ export interface IngestFootballDataImportResponse {
   normalized_data: {
     [k: string]: unknown;
   };
+  provider: string;
+  source_url: string;
+  [k: string]: unknown;
+}
+/**
+ * ``data/bundle/football-data/preview``: provider wrapper adds two (53.84).
+ *
+ * ``preview_world_cup_football_data_standings`` appends ``provider`` /
+ * ``source_url`` after the standings preview result -- the same append
+ * order as its import twin (53.83).
+ */
+export interface IngestFootballDataPreviewResponse {
+  normalized_qualification_count: number;
+  normalized_data: {
+    [k: string]: unknown;
+  };
+  converted_fact_count: number;
+  facts: {
+    [k: string]: unknown;
+  }[];
   provider: string;
   source_url: string;
   [k: string]: unknown;
@@ -2282,6 +2333,20 @@ export interface IngestLineupsSourceImportResponse {
   [k: string]: unknown;
 }
 /**
+ * ``lineups/preview`` (audit 53.84).
+ */
+export interface IngestLineupsSourcePreviewResponse {
+  normalized_lineup_count: number;
+  normalized_data: {
+    [k: string]: unknown;
+  };
+  converted_fact_count: number;
+  facts: {
+    [k: string]: unknown;
+  }[];
+  [k: string]: unknown;
+}
+/**
  * ``match-events/import`` (audit 53.83).
  */
 export interface IngestMatchEventsSourceImportResponse {
@@ -2298,6 +2363,20 @@ export interface IngestMatchEventsSourceImportResponse {
   [k: string]: unknown;
 }
 /**
+ * ``match-events/preview`` (audit 53.84).
+ */
+export interface IngestMatchEventsSourcePreviewResponse {
+  normalized_event_count: number;
+  normalized_data: {
+    [k: string]: unknown;
+  };
+  converted_fact_count: number;
+  facts: {
+    [k: string]: unknown;
+  }[];
+  [k: string]: unknown;
+}
+/**
  * ``matches/import``: count key first, then ``normalized_data``.
  */
 export interface IngestMatchSourceImportResponse {
@@ -2311,6 +2390,20 @@ export interface IngestMatchSourceImportResponse {
   normalized_data: {
     [k: string]: unknown;
   };
+  [k: string]: unknown;
+}
+/**
+ * ``matches/preview``: count key, then the normalized document (53.84).
+ */
+export interface IngestMatchSourcePreviewResponse {
+  normalized_match_count: number;
+  normalized_data: {
+    [k: string]: unknown;
+  };
+  converted_fact_count: number;
+  facts: {
+    [k: string]: unknown;
+  }[];
   [k: string]: unknown;
 }
 /**
@@ -2333,6 +2426,23 @@ export interface IngestOfficialCsvSourceImportResponse {
   [k: string]: unknown;
 }
 /**
+ * ``official-csv/preview``: the converter's profile block first (53.84).
+ */
+export interface IngestOfficialCsvSourcePreviewResponse {
+  profile: string;
+  profile_counts: {
+    [k: string]: unknown;
+  };
+  normalized_data: {
+    [k: string]: unknown;
+  };
+  converted_fact_count: number;
+  facts: {
+    [k: string]: unknown;
+  }[];
+  [k: string]: unknown;
+}
+/**
  * ``player-awards/import`` (audit 53.83).
  */
 export interface IngestPlayerAwardsSourceImportResponse {
@@ -2346,6 +2456,20 @@ export interface IngestPlayerAwardsSourceImportResponse {
   normalized_data: {
     [k: string]: unknown;
   };
+  [k: string]: unknown;
+}
+/**
+ * ``player-awards/preview`` (audit 53.84).
+ */
+export interface IngestPlayerAwardsSourcePreviewResponse {
+  normalized_award_count: number;
+  normalized_data: {
+    [k: string]: unknown;
+  };
+  converted_fact_count: number;
+  facts: {
+    [k: string]: unknown;
+  }[];
   [k: string]: unknown;
 }
 /**
@@ -2365,6 +2489,20 @@ export interface IngestPlayerStatusSourceImportResponse {
   [k: string]: unknown;
 }
 /**
+ * ``player-status/preview`` (audit 53.84).
+ */
+export interface IngestPlayerStatusSourcePreviewResponse {
+  normalized_status_count: number;
+  normalized_data: {
+    [k: string]: unknown;
+  };
+  converted_fact_count: number;
+  facts: {
+    [k: string]: unknown;
+  }[];
+  [k: string]: unknown;
+}
+/**
  * ``standings/import`` (audit 53.83).
  */
 export interface IngestStandingsSourceImportResponse {
@@ -2378,6 +2516,20 @@ export interface IngestStandingsSourceImportResponse {
   normalized_data: {
     [k: string]: unknown;
   };
+  [k: string]: unknown;
+}
+/**
+ * ``standings/preview`` (audit 53.84).
+ */
+export interface IngestStandingsSourcePreviewResponse {
+  normalized_qualification_count: number;
+  normalized_data: {
+    [k: string]: unknown;
+  };
+  converted_fact_count: number;
+  facts: {
+    [k: string]: unknown;
+  }[];
   [k: string]: unknown;
 }
 /**
@@ -2395,6 +2547,21 @@ export interface IngestStatisticsSourceImportResponse {
   normalized_data: {
     [k: string]: unknown;
   };
+  [k: string]: unknown;
+}
+/**
+ * ``statistics/preview``: two count keys, then the document (53.84).
+ */
+export interface IngestStatisticsSourcePreviewResponse {
+  normalized_team_stat_count: number;
+  normalized_player_stat_count: number;
+  normalized_data: {
+    [k: string]: unknown;
+  };
+  converted_fact_count: number;
+  facts: {
+    [k: string]: unknown;
+  }[];
   [k: string]: unknown;
 }
 /**

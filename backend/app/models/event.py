@@ -2208,6 +2208,117 @@ class IngestBundleSourceFeedSummary(BaseModel):
     observed_at: str
 
 
+class IngestDataPreviewResponse(FlexibleResponse):
+    """``data/preview``: the trusted-payload converter (audit 53.84).
+
+    The route handler builds this two-key literal itself and writes both
+    keys unconditionally, so the route carries no exclude_unset flag.
+    """
+
+    converted_fact_count: int
+    facts: list[dict[str, Any]]
+
+
+class IngestDataSourceFilePreviewResponse(FlexibleResponse):
+    """``data/source/preview``: ``preview_world_cup_data_file`` (53.84).
+
+    Its metadata producer is ``validate_world_cup_data_source_metadata``,
+    which returns a single dict -- not the per-entry list the bundle
+    variants' ``validate_world_cup_source_bundle_metadata`` returns.
+    """
+
+    source_file: str
+    source_metadata: dict[str, Any]
+    converted_fact_count: int
+    facts: list[dict[str, Any]]
+
+
+class IngestOfficialCsvSourcePreviewResponse(FlexibleResponse):
+    """``official-csv/preview``: the converter's profile block first (53.84)."""
+
+    profile: str
+    profile_counts: dict[str, Any]
+    normalized_data: dict[str, Any]
+    converted_fact_count: int
+    facts: list[dict[str, Any]]
+
+
+class IngestMatchSourcePreviewResponse(FlexibleResponse):
+    """``matches/preview``: count key, then the normalized document (53.84)."""
+
+    normalized_match_count: int
+    normalized_data: dict[str, Any]
+    converted_fact_count: int
+    facts: list[dict[str, Any]]
+
+
+class IngestMatchEventsSourcePreviewResponse(FlexibleResponse):
+    """``match-events/preview`` (audit 53.84)."""
+
+    normalized_event_count: int
+    normalized_data: dict[str, Any]
+    converted_fact_count: int
+    facts: list[dict[str, Any]]
+
+
+class IngestLineupsSourcePreviewResponse(FlexibleResponse):
+    """``lineups/preview`` (audit 53.84)."""
+
+    normalized_lineup_count: int
+    normalized_data: dict[str, Any]
+    converted_fact_count: int
+    facts: list[dict[str, Any]]
+
+
+class IngestStandingsSourcePreviewResponse(FlexibleResponse):
+    """``standings/preview`` (audit 53.84)."""
+
+    normalized_qualification_count: int
+    normalized_data: dict[str, Any]
+    converted_fact_count: int
+    facts: list[dict[str, Any]]
+
+
+class IngestPlayerAwardsSourcePreviewResponse(FlexibleResponse):
+    """``player-awards/preview`` (audit 53.84)."""
+
+    normalized_award_count: int
+    normalized_data: dict[str, Any]
+    converted_fact_count: int
+    facts: list[dict[str, Any]]
+
+
+class IngestPlayerStatusSourcePreviewResponse(FlexibleResponse):
+    """``player-status/preview`` (audit 53.84)."""
+
+    normalized_status_count: int
+    normalized_data: dict[str, Any]
+    converted_fact_count: int
+    facts: list[dict[str, Any]]
+
+
+class IngestStatisticsSourcePreviewResponse(FlexibleResponse):
+    """``statistics/preview``: two count keys, then the document (53.84)."""
+
+    normalized_team_stat_count: int
+    normalized_player_stat_count: int
+    normalized_data: dict[str, Any]
+    converted_fact_count: int
+    facts: list[dict[str, Any]]
+
+
+class IngestFootballDataPreviewResponse(IngestStandingsSourcePreviewResponse):
+    """``data/bundle/football-data/preview``: provider wrapper adds two (53.84).
+
+    ``preview_world_cup_football_data_standings`` appends ``provider`` /
+    ``source_url`` after the standings preview result -- the same append
+    order as its import twin (53.83).
+    """
+
+    provider: str
+    source_url: str
+
+
 class IngestDataImportResponse(IngestImportResponse):
     """Import result for ``data/import`` (audit 53.83).
 

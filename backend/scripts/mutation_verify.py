@@ -291,6 +291,7 @@ _MATCH_SERVICE = "backend/app/services/world_cup_match_service.py"
 _ELO_ENGINE = "backend/app/kernel/engines/elo_odds_engine.py"
 _SPORTS_FACT = "backend/app/services/sports_fact_service.py"
 _WC_SOURCE_BUNDLE = "backend/app/services/world_cup_source_bundle.py"
+_WC_MATCH_SOURCE = "backend/app/services/world_cup_match_source.py"
 _LIMITLESS = "backend/app/services/limitless_event_source.py"
 _GBM_ENGINE = "backend/app/kernel/engines/gbm_engine.py"
 _CHALLENGE_ADAPTER = "backend/app/services/conclusion_challenge_world_cup_adapter.py"
@@ -5895,6 +5896,53 @@ SETS: tuple[MutationSet, ...] = (
                     "converted_fact_count, sources] 与追加序必须同序）。sources 追加"
                     "改名后追加序断言红。"
                     "● 针单行、带 CRLF、命中 **1 次**（已实测）。"
+                ),
+            ),
+            Mutation(
+                label="J184 statistics/preview 解绑具名模型：35 条身份判据脱钩",
+                path=_DIGEST_ROUTES,
+                old=b'@router.post("/sports/world-cup/statistics/preview", response_model=IngestStatisticsSourcePreviewResponse)',
+                new=b'@router.post("/sports/world-cup/statistics/preview", response_model=FlexibleResponse)',
+                guard_file=_T_GENERATE_TYPES,
+                guards=(
+                    "test_every_ingest_route_binds_its_family_model",
+                ),
+                note=(
+                    "§53.84（资源 preview 11 条）：身份判据表驱动逐条绑定各自层模型，任何一条滑回裸类都红。"
+                    "选 statistics/preview 做针：它是家族里键最多的（两个 count 键），装饰器单行全文件唯一。"
+                    "● 针单行、无换行、命中 **1 次**（已实测）。"
+                ),
+            ),
+            Mutation(
+                label="J185 preview 转换器 normalized_data 键改名：钉源键序判据脱钩",
+                path=_WC_MATCH_SOURCE,
+                old=b'        "normalized_data": data,\r\n',
+                new=b'        "normalized_doc": data,\r\n',
+                guard_file=_T_GENERATE_TYPES,
+                guards=(
+                    "test_producer_key_set_is_pinned_from_source",
+                ),
+                note=(
+                    "§53.84：preview 转换器是单个纯 dict 字面量 return，键序就是线上键序（§Z21）——"
+                    "钉源守卫从源码把 preview_world_cup_match_source 的 return 键序钉住（家族代表，"
+                    "其余成员由 _MODEL_KEYS 在模型层覆盖）。键改名后键序断言红。"
+                    "● 针单行、带 CRLF、命中 **1 次**（已实测；to_data 侧的 normalized_data 是输入键不同字节）。"
+                ),
+            ),
+            Mutation(
+                label="J186 IngestFootballDataPreviewResponse 撤继承：家族基础键判据脱钩",
+                path=_EVENT_MODEL,
+                old=b'class IngestFootballDataPreviewResponse(IngestStandingsSourcePreviewResponse):\r\n',
+                new=b'class IngestFootballDataPreviewResponse(FlexibleResponse):\r\n',
+                guard_file=_T_GENERATE_TYPES,
+                guards=(
+                    "test_models_are_the_producer_key_sets_in_producer_order",
+                ),
+                note=(
+                    "§53.84：football-data preview 的生产者是 standings preview 转换器 + wrapper 追加 provider/"
+                    "source_url —— 4 个基础键来自继承，模型只声明追加的两键（与 import 双胞片同构造）。"
+                    "撤继承后模型丢 4 键，_MODEL_KEYS 键序断言红（生成物断言也会红，同根判据）。"
+                    "● 针单行、带 CRLF、命中 **1 次**（已实测；class 行全文件唯一）。"
                 ),
             ),
         ),

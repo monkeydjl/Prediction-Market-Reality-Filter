@@ -3291,20 +3291,9 @@ class FlexibleResponseIdentityTests(unittest.TestCase):
         "POST /api/events/analyze",
         "POST /api/events/sports/world-cup/data/bundle/api-football/test",
         "POST /api/events/sports/world-cup/data/bundle/api-football/validate",
-        "POST /api/events/sports/world-cup/data/bundle/football-data/preview",
         "POST /api/events/sports/world-cup/data/bundle/sportmonks/test",
         "POST /api/events/sports/world-cup/data/bundle/sportmonks/validate",
-        "POST /api/events/sports/world-cup/data/preview",
-        "POST /api/events/sports/world-cup/data/source/preview",
-        "POST /api/events/sports/world-cup/lineups/preview",
-        "POST /api/events/sports/world-cup/match-events/preview",
-        "POST /api/events/sports/world-cup/matches/preview",
-        "POST /api/events/sports/world-cup/official-csv/preview",
-        "POST /api/events/sports/world-cup/player-awards/preview",
-        "POST /api/events/sports/world-cup/player-status/preview",
         "POST /api/events/sports/world-cup/resolve",
-        "POST /api/events/sports/world-cup/standings/preview",
-        "POST /api/events/sports/world-cup/statistics/preview",
         "POST /api/world-cup/predictions/init-db",
     })
 
@@ -3418,6 +3407,28 @@ class IngestImportContractTests(unittest.TestCase):
             "IngestBundlePreviewResponse",
         "/api/events/sports/world-cup/data/bundle/sportmonks/preview":
             "IngestBundlePreviewResponse",
+        "/api/events/sports/world-cup/data/preview":
+            "IngestDataPreviewResponse",
+        "/api/events/sports/world-cup/data/source/preview":
+            "IngestDataSourceFilePreviewResponse",
+        "/api/events/sports/world-cup/official-csv/preview":
+            "IngestOfficialCsvSourcePreviewResponse",
+        "/api/events/sports/world-cup/matches/preview":
+            "IngestMatchSourcePreviewResponse",
+        "/api/events/sports/world-cup/match-events/preview":
+            "IngestMatchEventsSourcePreviewResponse",
+        "/api/events/sports/world-cup/lineups/preview":
+            "IngestLineupsSourcePreviewResponse",
+        "/api/events/sports/world-cup/standings/preview":
+            "IngestStandingsSourcePreviewResponse",
+        "/api/events/sports/world-cup/player-awards/preview":
+            "IngestPlayerAwardsSourcePreviewResponse",
+        "/api/events/sports/world-cup/player-status/preview":
+            "IngestPlayerStatusSourcePreviewResponse",
+        "/api/events/sports/world-cup/statistics/preview":
+            "IngestStatisticsSourcePreviewResponse",
+        "/api/events/sports/world-cup/data/bundle/football-data/preview":
+            "IngestFootballDataPreviewResponse",
     }
 
     # Producer key order per model, base keys first (pydantic flattens the
@@ -3497,6 +3508,38 @@ class IngestImportContractTests(unittest.TestCase):
              "status", "normalized_data"], []),
         "IngestBundleSourceFeedSummary": (
             ["kind", "source", "source_url", "observed_at"], []),
+        "IngestDataPreviewResponse": (
+            ["converted_fact_count", "facts"], []),
+        "IngestDataSourceFilePreviewResponse": (
+            ["source_file", "source_metadata", "converted_fact_count",
+             "facts"], []),
+        "IngestOfficialCsvSourcePreviewResponse": (
+            ["profile", "profile_counts", "normalized_data",
+             "converted_fact_count", "facts"], []),
+        "IngestMatchSourcePreviewResponse": (
+            ["normalized_match_count", "normalized_data",
+             "converted_fact_count", "facts"], []),
+        "IngestMatchEventsSourcePreviewResponse": (
+            ["normalized_event_count", "normalized_data",
+             "converted_fact_count", "facts"], []),
+        "IngestLineupsSourcePreviewResponse": (
+            ["normalized_lineup_count", "normalized_data",
+             "converted_fact_count", "facts"], []),
+        "IngestStandingsSourcePreviewResponse": (
+            ["normalized_qualification_count", "normalized_data",
+             "converted_fact_count", "facts"], []),
+        "IngestPlayerAwardsSourcePreviewResponse": (
+            ["normalized_award_count", "normalized_data",
+             "converted_fact_count", "facts"], []),
+        "IngestPlayerStatusSourcePreviewResponse": (
+            ["normalized_status_count", "normalized_data",
+             "converted_fact_count", "facts"], []),
+        "IngestStatisticsSourcePreviewResponse": (
+            ["normalized_team_stat_count", "normalized_player_stat_count",
+             "normalized_data", "converted_fact_count", "facts"], []),
+        "IngestFootballDataPreviewResponse": (
+            ["normalized_qualification_count", "normalized_data",
+             "converted_fact_count", "facts", "provider", "source_url"], []),
     }
 
     def _named_route(self, path):
@@ -3516,10 +3559,10 @@ class IngestImportContractTests(unittest.TestCase):
         import app.models.event as event_models
 
         self.assertEqual(
-            len(self._ROUTE_MODELS), 24,
-            "18 import routes + 6 bundle previews = 24; a drift here means "
-            "a route was added or removed and the census must be re-run "
-            "(audit 53.83)",
+            len(self._ROUTE_MODELS), 35,
+            "18 import routes + 6 bundle previews + 11 resource previews "
+            "= 35; a drift here means a route was added or removed and "
+            "the census must be re-run (audit 53.83/53.84)",
         )
         wrong = []
         for path, model_name in self._ROUTE_MODELS.items():
@@ -3712,6 +3755,42 @@ class IngestImportContractTests(unittest.TestCase):
             "field order mirrors (audit 53.83)",
         )
 
+        # The resource-preview converters (53.84): each is a single pure
+        # dict-literal return, so the wire order is the literal's key
+        # order. Pinned via the matches converter as the family
+        # representative; the per-model key rows in _MODEL_KEYS cover the
+        # rest of the family at the model layer.
+        msrc = (
+            _BACKEND_DIR / "app" / "services" / "world_cup_match_source.py"
+        ).read_bytes().decode("utf-8")
+        mtree = ast.parse(msrc)
+        mfn = next(
+            node for node in mtree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == "preview_world_cup_match_source"
+        )
+        preview_key_sets: list[list[str]] = []
+        for node in _walk_source_order(mfn):
+            if isinstance(node, ast.Return) and isinstance(node.value, ast.Dict):
+                preview_key_sets.append([
+                    key.value for key in node.value.keys
+                    if isinstance(key, ast.Constant)
+                ])
+        self.assertEqual(
+            len(preview_key_sets), 1,
+            "preview_world_cup_match_source no longer has exactly one "
+            "dict-literal return; the single-shape decision needs a "
+            "re-census (audit 53.84)",
+        )
+        self.assertEqual(
+            preview_key_sets[0],
+            ["normalized_match_count", "normalized_data",
+             "converted_fact_count", "facts"],
+            "the preview converter's return key order drifted; that "
+            "literal order is what IngestMatchSourcePreviewResponse's "
+            "field order mirrors (audit 53.84)",
+        )
+
     def test_generated_types_carry_the_required_keys(self):
         text = _OUTPUT_PATH.read_bytes().decode("utf-8")
         bodies = _interface_bodies(text)
@@ -3735,6 +3814,8 @@ class IngestImportContractTests(unittest.TestCase):
             "IngestBundleRunSummary",
             "IngestBundleSourceEntry",
             "IngestErrorEntry",
+            "IngestMatchSourcePreviewResponse",
+            "IngestFootballDataPreviewResponse",
         ):
             self.assertIn(name, bodies)
         _BASE = ("imported: number; error_count: number; "
@@ -3786,6 +3867,22 @@ class IngestImportContractTests(unittest.TestCase):
             "normalized_data: { " + _TAIL + " };",
             "the generated sources element drifted from _convert_bundle's "
             "six-key producer shape (audit 53.83)",
+        )
+        self.assertEqual(
+            normalized("IngestMatchSourcePreviewResponse"),
+            "normalized_match_count: number; normalized_data: { " + _TAIL
+            + " }; converted_fact_count: number; facts: { " + _TAIL
+            + " }[]; " + _TAIL,
+            "the generated resource preview drifted from the converter's "
+            "four-key producer shape (audit 53.84)",
+        )
+        self.assertEqual(
+            normalized("IngestFootballDataPreviewResponse"),
+            "normalized_qualification_count: number; normalized_data: { "
+            + _TAIL + " }; converted_fact_count: number; facts: { " + _TAIL
+            + " }[]; provider: string; source_url: string; " + _TAIL,
+            "the generated provider preview drifted from the standings "
+            "shape plus the two appended wrapper keys (audit 53.84)",
         )
         self.assertEqual(
             normalized("IngestErrorEntry"),

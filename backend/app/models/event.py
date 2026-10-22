@@ -2583,6 +2583,184 @@ class IngestBundleFeedsPreviewResponse(IngestBundlePreviewResponse):
     source_feeds: list[IngestBundleSourceFeedSummary]
     source_metadata: list[dict[str, Any]]
 
+class WorldCupStatusResponse(FlexibleResponse):
+    """Response for GET /sports/world-cup/status (audit 53.86). The
+    producer ``sports_fact_status`` writes all seven keys
+    unconditionally in this order, and the route overlays only
+    ``configured_path`` (same key, same type -- "redacted"), so the
+    envelope needs no defaults and no ``response_model_exclude_unset``
+    flag. ``file_mtime`` is required but nullable: the producer writes
+    the key on both paths (isoformat when the file exists, ``None``
+    when it does not). The sibling consumer of the same producer dict
+    is the ``facts`` block of ``WorldCupDataSourceStatusResponse``,
+    which reuses this model rather than declaring a second copy
+    (53.64 precedent).
+    """
+
+    tournament: str
+    configured_path: str
+    exists: bool
+    updated_at: str
+    file_mtime: str | None
+    count: int
+    by_kind: dict[str, int]
+
+
+class WorldCupFileSourceConfig(BaseModel):
+    """One ``_file_config`` entry of ``configured_sources`` (audit
+    53.86): all three keys written unconditionally."""
+
+    configured: bool
+    path: str
+    exists: bool
+
+
+class WorldCupUrlSourceConfig(BaseModel):
+    """One ``_url_config`` entry (audit 53.86): both keys
+    unconditional."""
+
+    configured: bool
+    source_url: str
+
+
+class WorldCupFeedSourceConfig(BaseModel):
+    """One feeds element: the ``kind`` literal spread over
+    ``_url_config`` (audit 53.86) -- key order kind / configured /
+    source_url."""
+
+    kind: str
+    configured: bool
+    source_url: str
+
+
+class WorldCupApiFootballSourceConfig(BaseModel):
+    """The ``api_football`` block (audit 53.86): eight settings reads,
+    all unconditional; the three fetch toggles are bools and
+    ``max_detail_calls`` an int in settings."""
+
+    configured: bool
+    base_url: str
+    league_id: str
+    season: str
+    fetch_events: bool
+    fetch_lineups: bool
+    fetch_statistics: bool
+    max_detail_calls: int
+
+
+class WorldCupFootballDataSourceConfig(BaseModel):
+    """The ``football_data`` block (audit 53.86): three unconditional
+    keys."""
+
+    configured: bool
+    base_url: str
+    competition: str
+
+
+class WorldCupSportmonksSourceConfig(BaseModel):
+    """The ``sportmonks`` block (audit 53.86): its feeds reuse the
+    same element shape as the top-level feeds list."""
+
+    configured: bool
+    feeds: list[WorldCupFeedSourceConfig]
+
+
+class WorldCupConfiguredSources(BaseModel):
+    """The ``configured_sources`` block (audit 53.86): seven keys in
+    producer order; the route overlays only the two file paths."""
+
+    data_file: WorldCupFileSourceConfig
+    bundle_file: WorldCupFileSourceConfig
+    bundle_url: WorldCupUrlSourceConfig
+    feeds: list[WorldCupFeedSourceConfig]
+    api_football: WorldCupApiFootballSourceConfig
+    football_data: WorldCupFootballDataSourceConfig
+    sportmonks: WorldCupSportmonksSourceConfig
+
+
+class WorldCupReadinessIssueDetail(BaseModel):
+    """One ``_readiness_issue_detail`` element (audit 53.86): four
+    string keys, all unconditional."""
+
+    code: str
+    severity: str
+    message: str
+    action: str
+
+
+class WorldCupRealDataReadiness(BaseModel):
+    """The ``real_data_readiness`` block (audit 53.86): fourteen keys
+    written unconditionally by ``_real_data_readiness`` in this order;
+    ``issues`` is the code list and ``issue_details`` its per-code
+    detail."""
+
+    ok: bool
+    qualification_source_configured: bool
+    qualification_source_state: str
+    qualification_fact_count: int
+    untrusted_qualification_fact_count: int
+    match_result_count: int
+    recommended_qualification_import_mode: str
+    recommended_qualification_import_label: str
+    scheduled_import_enabled: bool
+    last_import_failed: bool
+    recommended_provider_last_validation_status: str
+    recommended_provider_last_validation_error: str
+    issues: list[str]
+    issue_details: list[WorldCupReadinessIssueDetail]
+
+
+class WorldCupScheduledImportStatus(BaseModel):
+    """The ``scheduled_import`` block (audit 53.86): five settings
+    reads."""
+
+    enabled: bool
+    mode: str
+    replace: bool
+    hour_utc: int
+    minute_utc: int
+
+
+class WorldCupMatchdayRefreshStatus(BaseModel):
+    """The ``matchday_refresh`` block (audit 53.86): three settings
+    reads."""
+
+    enabled: bool
+    interval_minutes: int
+    window_hours: int
+
+
+class WorldCupDataSourceRuns(BaseModel):
+    """The ``runs`` block (audit 53.86): three fixed job names, each
+    the full ``_row_to_dict`` row (all eight keys always written) or
+    ``None`` when the job has never run -- so ``LoopRunView`` is
+    reused and its three detail-only defaults can never materialise
+    here: unlike the loop/status route's two-shape split, this route
+    serves whole rows without the exclude-unset projection."""
+
+    world_cup_source_bundle_import: LoopRunView | None
+    world_cup_matchday_refresh: LoopRunView | None
+    world_cup_api_football_validate: LoopRunView | None
+
+
+class WorldCupDataSourceStatusResponse(FlexibleResponse):
+    """Response for GET /sports/world-cup/data/sources/status (audit
+    53.86). ``world_cup_data_source_status`` writes the six keys
+    unconditionally in this order and the route overlays only the
+    redacted paths (``facts.configured_path`` and the two
+    ``configured_sources`` file paths -- same keys, same types), so
+    no defaults and no ``response_model_exclude_unset`` flag.
+    ``facts`` reuses ``WorldCupStatusResponse``: same producer
+    function, same seven keys."""
+
+    facts: WorldCupStatusResponse
+    configured_sources: WorldCupConfiguredSources
+    real_data_readiness: WorldCupRealDataReadiness
+    scheduled_import: WorldCupScheduledImportStatus
+    matchday_refresh: WorldCupMatchdayRefreshStatus
+    runs: WorldCupDataSourceRuns
+
+
 
 class MatchFixtureRecord(BaseModel):
     """The ``match`` block of one ``/matches`` element (audit 53.76).

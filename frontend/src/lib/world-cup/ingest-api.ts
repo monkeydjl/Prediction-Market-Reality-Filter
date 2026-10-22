@@ -193,14 +193,17 @@ export const PAYLOAD_SOURCES: PayloadSource[] = [
 ];
 
 /**
- * Loose display bag for the ingest actions that are still bare on the
- * backend (test / validate / the two status reads) and for previews whose
- * shape varies per path family (audit 53.83: the import family split into
- * per-producer models, and the preview family is just as heterogeneous --
- * `data/preview` returns `{converted_fact_count, facts}` while the bundle
- * previews return the run-metadata envelope -- so a single "preview"
- * overload would mislabel the non-bundle paths; they are typed per family
- * when their backend slices name them).
+ * Loose display bag for the ingest actions whose client call sites stay
+ * loose (backend naming is complete through audit 53.86 -- test / validate
+ * and the two status reads are named in generated-types; binding the
+ * literal call sites is the consumption-side slice's job) and for
+ * previews whose shape varies per path family (audit 53.83: the import
+ * family split into per-producer models, and the preview family is just
+ * as heterogeneous -- `data/preview` returns `{converted_fact_count,
+ * facts}` while the bundle previews return the run-metadata envelope --
+ * so a single "preview" overload would mislabel the non-bundle paths;
+ * they are typed per family when their consumption-side slices bind
+ * them).
  */
 export type IngestResult = Partial<
   Pick<
@@ -308,7 +311,7 @@ export function parseIngestPayload(text: string): unknown {
  * ``IngestImportResponse``, and the caller reads only the shared base keys,
  * so the base type stays truthful for every import route while each
  * subclass widens it on the wire. The other actions stay loose until their
- * slices name them (see IngestResult).
+ * consumption-side slices bind them (see IngestResult).
  */
 function runConfigured(
   path: string,

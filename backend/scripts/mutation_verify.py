@@ -293,6 +293,7 @@ _SPORTS_FACT = "backend/app/services/sports_fact_service.py"
 _WC_SOURCE_BUNDLE = "backend/app/services/world_cup_source_bundle.py"
 _WC_MATCH_SOURCE = "backend/app/services/world_cup_match_source.py"
 _WC_API_FOOTBALL = "backend/app/services/world_cup_api_football_source.py"
+_WC_DATA_SOURCE_STATUS = "backend/app/services/world_cup_data_source_status_service.py"
 _LIMITLESS = "backend/app/services/limitless_event_source.py"
 _GBM_ENGINE = "backend/app/kernel/engines/gbm_engine.py"
 _CHALLENGE_ADAPTER = "backend/app/services/conclusion_challenge_world_cup_adapter.py"
@@ -5992,6 +5993,56 @@ SETS: tuple[MutationSet, ...] = (
                     "§53.85：test 探针成功 return 是纯 dict 字面量，钉源守卫按「含 subscription 键的 return」选出成功形状钉键序"
                     "（失败形状 {ok, error} 不占 —— 判据带前提：唯一成功 return）。键改名后键序断言红。"
                     "● 针单行、带 CRLF、命中 **1 次**（已实测）。"
+                ),
+            ),
+            Mutation(
+                label="J190 WorldCupStatusResponse.file_mtime 撤名：模型键序判据脱钩",
+                path=_EVENT_MODEL,
+                old=b'    file_mtime: str | None\r\n',
+                new=b'    file_mtime_x: str | None\r\n',
+                guard_file=_T_GENERATE_TYPES,
+                guards=(
+                    "test_models_are_the_producer_key_sets_in_producer_order",
+                ),
+                note=(
+                    "§53.86（status 2 条）：sports_fact_status 无条件写 7 键"
+                    "（file_mtime 必存可 null：文件不存在写 None），路由只覆写 "
+                    "configured_path 同键同型 ⇒ 无默认值无旗（§Z4）。撤名后新守卫类"
+                    "的 _MODEL_KEYS 键序断言红。"
+                    "● 针单行、带 CRLF、命中 **1 次**（已实测；file_mtime 字段声明"
+                    "全文件唯一）。"
+                ),
+            ),
+            Mutation(
+                label="J191 data_source_status 的 matchday_refresh 键改名：钉源键序判据脱钩",
+                path=_WC_DATA_SOURCE_STATUS,
+                old=b'        "matchday_refresh": {\r\n',
+                new=b'        "matchday_refresh_x": {\r\n',
+                guard_file=_T_GENERATE_TYPES,
+                guards=(
+                    "test_producer_key_sets_are_pinned_from_source",
+                ),
+                note=(
+                    "§53.86：world_cup_data_source_status 单个 dict 字面量 return，"
+                    "六键序即线上键序（路由 ** 展开覆写同键不增位）。顶层键改名后"
+                    "钉源键序断言红（必填 matchday_refresh 字段缺键同时 422）。"
+                    "● 针单行、带 CRLF、命中 **1 次**（已实测；块内嵌套键是 "
+                    "settings 读、字节不同）。"
+                ),
+            ),
+            Mutation(
+                label="J192 data/sources/status 回绑裸 FlexibleResponse：哨兵集合判据脱钩",
+                path=_DIGEST_ROUTES,
+                old=b'@router.get("/sports/world-cup/data/sources/status", response_model=WorldCupDataSourceStatusResponse)',
+                new=b'@router.get("/sports/world-cup/data/sources/status", response_model=FlexibleResponse)',
+                guard_file=_T_GENERATE_TYPES,
+                guards=(
+                    "test_every_flexible_response_route_binds_the_canonical_class",
+                ),
+                note=(
+                    "§53.86：两条 status 读具名后哨兵裸清单 9→7；滑回裸类 ⇒ observed "
+                    "多出该路由 ⇒ 集合相等断言红（named-slice 同提交删条目的约定反向钉住）。"
+                    "● 针单行、无换行、命中 **1 次**（已实测）。"
                 ),
             ),
         ),

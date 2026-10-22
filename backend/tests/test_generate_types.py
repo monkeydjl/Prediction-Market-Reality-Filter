@@ -3283,9 +3283,7 @@ class FlexibleResponseIdentityTests(unittest.TestCase):
     # mount, HEAD/OPTIONS are stripped).
     BARE_FLEXIBLE_RESPONSE_ROUTES = frozenset({
         "GET /api/events/discover/status",
-        "GET /api/events/sports/world-cup/data/sources/status",
         "GET /api/events/sports/world-cup/facts",
-        "GET /api/events/sports/world-cup/status",
         "GET /api/world-cup/predictions/matches/{match_id}",
         "GET /api/world-cup/predictions/today",
         "POST /api/events/analyze",
@@ -3997,6 +3995,301 @@ class IngestImportContractTests(unittest.TestCase):
             "IngestErrorEntry is no longer the closed two-key element",
         )
 
+
+
+class WorldCupStatusContractTests(unittest.TestCase):
+    """The two world-cup status reads named in audit 53.86.
+
+    ``GET /sports/world-cup/status`` and ``GET .../data/sources/status``
+    published bare ``FlexibleResponse`` while both producers write every
+    key unconditionally -- the route layer only overlays same-typed
+    "redacted" paths -- so the envelopes need neither defaults nor the
+    exclude-unset flag. ``facts`` reuses ``WorldCupStatusResponse`` (same
+    producer function, same seven keys) and ``runs`` reuses
+    ``LoopRunView``: this route serves whole ``_row_to_dict`` rows, all
+    eight keys written, unlike the loop/status route's two-shape split.
+    """
+
+    _ROUTE_MODELS = {
+        "/api/events/sports/world-cup/status": "WorldCupStatusResponse",
+        "/api/events/sports/world-cup/data/sources/status":
+            "WorldCupDataSourceStatusResponse",
+    }
+
+    # (keys, optional) per model; every key here is written
+    # unconditionally by its producer, so all fields are required and
+    # none carries a default -- optional-with-default would need a
+    # conditional write plus the flag (§Z4), and neither route has one.
+    _MODEL_KEYS = {
+        "WorldCupStatusResponse": (
+            ["tournament", "configured_path", "exists", "updated_at",
+             "file_mtime", "count", "by_kind"], []),
+        "WorldCupFileSourceConfig": (["configured", "path", "exists"], []),
+        "WorldCupUrlSourceConfig": (["configured", "source_url"], []),
+        "WorldCupFeedSourceConfig": (["kind", "configured", "source_url"],
+                                     []),
+        "WorldCupApiFootballSourceConfig": (
+            ["configured", "base_url", "league_id", "season",
+             "fetch_events", "fetch_lineups", "fetch_statistics",
+             "max_detail_calls"], []),
+        "WorldCupFootballDataSourceConfig": (
+            ["configured", "base_url", "competition"], []),
+        "WorldCupSportmonksSourceConfig": (["configured", "feeds"], []),
+        "WorldCupConfiguredSources": (
+            ["data_file", "bundle_file", "bundle_url", "feeds",
+             "api_football", "football_data", "sportmonks"], []),
+        "WorldCupReadinessIssueDetail": (
+            ["code", "severity", "message", "action"], []),
+        "WorldCupRealDataReadiness": (
+            ["ok", "qualification_source_configured",
+             "qualification_source_state", "qualification_fact_count",
+             "untrusted_qualification_fact_count", "match_result_count",
+             "recommended_qualification_import_mode",
+             "recommended_qualification_import_label",
+             "scheduled_import_enabled", "last_import_failed",
+             "recommended_provider_last_validation_status",
+             "recommended_provider_last_validation_error", "issues",
+             "issue_details"], []),
+        "WorldCupScheduledImportStatus": (
+            ["enabled", "mode", "replace", "hour_utc", "minute_utc"], []),
+        "WorldCupMatchdayRefreshStatus": (
+            ["enabled", "interval_minutes", "window_hours"], []),
+        "WorldCupDataSourceRuns": (
+            ["world_cup_source_bundle_import", "world_cup_matchday_refresh",
+             "world_cup_api_football_validate"], []),
+        "WorldCupDataSourceStatusResponse": (
+            ["facts", "configured_sources", "real_data_readiness",
+             "scheduled_import", "matchday_refresh", "runs"], []),
+    }
+
+    def _named_route(self, path):
+        from app.main import app
+
+        matches = [
+            route for route in app.routes
+            if getattr(route, "path", "") == path
+        ]
+        self.assertEqual(
+            len(matches), 1,
+            f"route {path} is missing or duplicated in the app walk",
+        )
+        return matches[0]
+
+    def test_every_status_route_binds_its_model(self):
+        import app.models.event as event_models
+
+        self.assertEqual(
+            len(self._ROUTE_MODELS), 2,
+            "2 status reads (fact store + data sources) = 2; a drift here "
+            "means a route was added or removed and the census must be "
+            "re-run (audit 53.86)",
+        )
+        wrong = []
+        for path, model_name in self._ROUTE_MODELS.items():
+            route = self._named_route(path)
+            model = getattr(event_models, model_name)
+            if route.response_model is not model:
+                wrong.append(
+                    f"{path} -> "
+                    f"{getattr(route.response_model, '__name__', '?')} "
+                    f"(want {model_name})"
+                )
+        self.assertEqual(
+            wrong, [],
+            "each status route must bind its named envelope -- the bare "
+            "FlexibleResponse binding hid the whole nested shape from the "
+            "generated frontend types (audit 53.86): " + "; ".join(wrong),
+        )
+
+    def test_status_routes_do_not_carry_exclude_unset(self):
+        flagged = []
+        for path in self._ROUTE_MODELS:
+            route = self._named_route(path)
+            if getattr(route, "response_model_exclude_unset", False):
+                flagged.append(path)
+        self.assertEqual(
+            flagged, [],
+            "the status producers write every key unconditionally and the "
+            "route layer only overlays same-typed redacted paths, so the "
+            "flag would be a no-op today and a blind spot the day a key "
+            "becomes conditional (§Z4, audit 53.86): " + "; ".join(flagged),
+        )
+
+    def test_models_are_the_producer_key_sets_in_producer_order(self):
+        import app.models.event as event_models
+
+        for name, (keys, optional) in self._MODEL_KEYS.items():
+            model = getattr(event_models, name)
+            fields = model.model_fields
+            with self.subTest(model=name):
+                self.assertEqual(
+                    list(fields), keys,
+                    f"{name} is no longer the producer's keys in producer "
+                    "order -- the wire order is the producer's dict "
+                    "insertion order (audit 53.86)",
+                )
+            for key, field in fields.items():
+                with self.subTest(model=name, key=key):
+                    if key in optional:
+                        self.assertFalse(
+                            field.is_required(),
+                            f"{name}.{key} became required; the producer "
+                            "writes it conditionally (audit 53.86)",
+                        )
+                    else:
+                        self.assertTrue(
+                            field.is_required(),
+                            f"{name}.{key} gained a default; the producer "
+                            "writes it unconditionally, so a default would "
+                            "hide a producer regression instead of failing "
+                            "at the boundary (audit 53.86)",
+                        )
+
+    def test_producer_key_sets_are_pinned_from_source(self):
+        import ast
+
+        def _walk(node):
+            # Document order, not a LIFO stack (audit 53.83 lesson).
+            for child in ast.iter_child_nodes(node):
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                      ast.Lambda)):
+                    continue
+                yield child
+                yield from _walk(child)
+
+        def _return_keys(fn):
+            return [
+                [key.value for key in node.value.keys
+                 if isinstance(key, ast.Constant)]
+                for node in _walk(fn)
+                if isinstance(node, ast.Return)
+                and isinstance(node.value, ast.Dict)
+            ]
+
+        def _module_fn(source, name):
+            tree = ast.parse(source)
+            return next(
+                node for node in tree.body
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name == name
+            )
+
+        # sports_fact_status: one dict-literal return, seven keys -- the
+        # wire order WorldCupStatusResponse mirrors.
+        src = (
+            _BACKEND_DIR / "app" / "services" / "sports_fact_service.py"
+        ).read_bytes().decode("utf-8")
+        key_sets = _return_keys(_module_fn(src, "sports_fact_status"))
+        self.assertEqual(
+            len(key_sets), 1,
+            "sports_fact_status no longer has exactly one dict-literal "
+            "return; the single-shape decision needs a re-census "
+            "(audit 53.86)",
+        )
+        self.assertEqual(
+            key_sets[0],
+            ["tournament", "configured_path", "exists", "updated_at",
+             "file_mtime", "count", "by_kind"],
+            "the fact-status producer's return key order drifted; that "
+            "order is what WorldCupStatusResponse's field order mirrors "
+            "(audit 53.86)",
+        )
+
+        # world_cup_data_source_status: one dict-literal return, six keys.
+        src = (
+            _BACKEND_DIR / "app" / "services"
+            / "world_cup_data_source_status_service.py"
+        ).read_bytes().decode("utf-8")
+        key_sets = _return_keys(_module_fn(src, "world_cup_data_source_status"))
+        self.assertEqual(
+            len(key_sets), 1,
+            "world_cup_data_source_status no longer has exactly one "
+            "dict-literal return; the single-shape decision needs a "
+            "re-census (audit 53.86)",
+        )
+        self.assertEqual(
+            key_sets[0],
+            ["facts", "configured_sources", "real_data_readiness",
+             "scheduled_import", "matchday_refresh", "runs"],
+            "the data-source status producer's return key order drifted; "
+            "that order is what WorldCupDataSourceStatusResponse's field "
+            "order mirrors (audit 53.86)",
+        )
+        key_sets = _return_keys(_module_fn(src, "_real_data_readiness"))
+        self.assertEqual(
+            len(key_sets), 1,
+            "_real_data_readiness no longer has exactly one dict-literal "
+            "return; the nested-block census needs a re-run (audit 53.86)",
+        )
+        self.assertEqual(
+            key_sets[0],
+            ["ok", "qualification_source_configured",
+             "qualification_source_state", "qualification_fact_count",
+             "untrusted_qualification_fact_count", "match_result_count",
+             "recommended_qualification_import_mode",
+             "recommended_qualification_import_label",
+             "scheduled_import_enabled", "last_import_failed",
+             "recommended_provider_last_validation_status",
+             "recommended_provider_last_validation_error", "issues",
+             "issue_details"],
+            "the readiness block's return key order drifted; that order is "
+            "what WorldCupRealDataReadiness's field order mirrors "
+            "(audit 53.86)",
+        )
+
+        # The route layer may only overlay same-typed redacted paths: each
+        # handler's return dict carries exactly the override keys, the
+        # rest arrives via ** spread (an added key here would silently
+        # widen the wire shape past the model's named fields).
+        src = (
+            _BACKEND_DIR / "app" / "api" / "routes" / "events.py"
+        ).read_bytes().decode("utf-8")
+        for name, expected in (
+            ("get_world_cup_status", ["configured_path"]),
+            ("get_world_cup_data_source_status",
+             ["facts", "configured_sources"]),
+        ):
+            overlays = _return_keys(_module_fn(src, name))
+            self.assertEqual(
+                len(overlays), 1,
+                f"{name} no longer has exactly one return; re-census "
+                "(audit 53.86)",
+            )
+            self.assertEqual(
+                overlays[0], expected,
+                f"{name}'s overlay key set drifted; the route may only "
+                "rewrite existing same-typed keys, never add new ones "
+                "(audit 53.86)",
+            )
+
+    def test_generated_types_carry_the_status_envelopes(self):
+        text = _OUTPUT_PATH.read_bytes().decode("utf-8")
+        bodies = _interface_bodies(text)
+
+        def normalized(name):
+            return " ".join(
+                line.strip() for line in bodies[name] if line.strip()
+            )
+
+        _TAIL = "[k: string]: unknown;"
+        self.assertEqual(
+            normalized("WorldCupStatusResponse"),
+            "tournament: string; configured_path: string; exists: boolean; "
+            "updated_at: string; file_mtime: string | null; count: number; "
+            "by_kind: { [k: string]: number; }; " + _TAIL,
+            "the generated world-cup status envelope drifted (audit 53.86)",
+        )
+        self.assertEqual(
+            normalized("WorldCupDataSourceStatusResponse"),
+            "facts: WorldCupStatusResponse; configured_sources: "
+            "WorldCupConfiguredSources; real_data_readiness: "
+            "WorldCupRealDataReadiness; scheduled_import: "
+            "WorldCupScheduledImportStatus; matchday_refresh: "
+            "WorldCupMatchdayRefreshStatus; runs: WorldCupDataSourceRuns; "
+            + _TAIL,
+            "the generated data-source status envelope drifted (audit "
+            "53.86)",
+        )
 
 
 class WorldCupBatchCContractTests(unittest.TestCase):

@@ -192,6 +192,8 @@ from app.models.event import (
     SimTrade,
     SimTradeListResponse,
     TradeStats,
+    WorldCupDataSourceStatusResponse,
+    WorldCupStatusResponse,
 )
 
 
@@ -606,7 +608,7 @@ async def get_loop_status(x_api_key: str | None = Header(default=None)) -> dict[
     )
 
 
-@router.get("/sports/world-cup/status", response_model=FlexibleResponse)
+@router.get("/sports/world-cup/status", response_model=WorldCupStatusResponse)
 async def get_world_cup_status() -> dict[str, Any]:
     """Return World Cup fact-store status for the sports vertical."""
     return {
@@ -615,7 +617,7 @@ async def get_world_cup_status() -> dict[str, Any]:
     }
 
 
-@router.get("/sports/world-cup/data/sources/status", response_model=FlexibleResponse)
+@router.get("/sports/world-cup/data/sources/status", response_model=WorldCupDataSourceStatusResponse)
 async def get_world_cup_data_source_status(
     _auth: None = Depends(require_write_key),
 ) -> dict[str, Any]:

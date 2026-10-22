@@ -178,6 +178,13 @@ class WorldCupFactRouteTests(unittest.TestCase):
             response = client.get("/events/sports/world-cup/status")
 
         self.assertEqual(response.status_code, 200)
+        # 53.86: the route is named now, so the wire key set and order
+        # are the model's -- lock the shape, not just one redaction.
+        self.assertEqual(
+            list(response.json().keys()),
+            ["tournament", "configured_path", "exists", "updated_at",
+             "file_mtime", "count", "by_kind"],
+        )
         self.assertEqual(response.json()["configured_path"], "redacted")
         for fragment in (
             "C:/private",
@@ -209,6 +216,13 @@ class WorldCupFactRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         body = response.json()
+        # 53.86: the route is named now, so the wire key set and order
+        # are the model's -- lock the shape, not just the redactions.
+        self.assertEqual(
+            list(body.keys()),
+            ["facts", "configured_sources", "real_data_readiness",
+             "scheduled_import", "matchday_refresh", "runs"],
+        )
         self.assertEqual(body["facts"]["configured_path"], "redacted")
         self.assertEqual(
             body["configured_sources"]["data_file"]["path"],

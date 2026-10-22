@@ -3537,3 +3537,184 @@ export interface TranslateEventResponse {
   message: string;
   [k: string]: unknown;
 }
+/**
+ * The ``api_football`` block (audit 53.86): eight settings reads,
+ * all unconditional; the three fetch toggles are bools and
+ * ``max_detail_calls`` an int in settings.
+ */
+export interface WorldCupApiFootballSourceConfig {
+  configured: boolean;
+  base_url: string;
+  league_id: string;
+  season: string;
+  fetch_events: boolean;
+  fetch_lineups: boolean;
+  fetch_statistics: boolean;
+  max_detail_calls: number;
+}
+/**
+ * The ``configured_sources`` block (audit 53.86): seven keys in
+ * producer order; the route overlays only the two file paths.
+ */
+export interface WorldCupConfiguredSources {
+  data_file: WorldCupFileSourceConfig;
+  bundle_file: WorldCupFileSourceConfig;
+  bundle_url: WorldCupUrlSourceConfig;
+  feeds: WorldCupFeedSourceConfig[];
+  api_football: WorldCupApiFootballSourceConfig;
+  football_data: WorldCupFootballDataSourceConfig;
+  sportmonks: WorldCupSportmonksSourceConfig;
+}
+/**
+ * One ``_file_config`` entry of ``configured_sources`` (audit
+ * 53.86): all three keys written unconditionally.
+ */
+export interface WorldCupFileSourceConfig {
+  configured: boolean;
+  path: string;
+  exists: boolean;
+}
+/**
+ * One ``_url_config`` entry (audit 53.86): both keys
+ * unconditional.
+ */
+export interface WorldCupUrlSourceConfig {
+  configured: boolean;
+  source_url: string;
+}
+/**
+ * One feeds element: the ``kind`` literal spread over
+ * ``_url_config`` (audit 53.86) -- key order kind / configured /
+ * source_url.
+ */
+export interface WorldCupFeedSourceConfig {
+  kind: string;
+  configured: boolean;
+  source_url: string;
+}
+/**
+ * The ``football_data`` block (audit 53.86): three unconditional
+ * keys.
+ */
+export interface WorldCupFootballDataSourceConfig {
+  configured: boolean;
+  base_url: string;
+  competition: string;
+}
+/**
+ * The ``sportmonks`` block (audit 53.86): its feeds reuse the
+ * same element shape as the top-level feeds list.
+ */
+export interface WorldCupSportmonksSourceConfig {
+  configured: boolean;
+  feeds: WorldCupFeedSourceConfig[];
+}
+/**
+ * The ``runs`` block (audit 53.86): three fixed job names, each
+ * the full ``_row_to_dict`` row (all eight keys always written) or
+ * ``None`` when the job has never run -- so ``LoopRunView`` is
+ * reused and its three detail-only defaults can never materialise
+ * here: unlike the loop/status route's two-shape split, this route
+ * serves whole rows without the exclude-unset projection.
+ */
+export interface WorldCupDataSourceRuns {
+  world_cup_source_bundle_import: LoopRunView | null;
+  world_cup_matchday_refresh: LoopRunView | null;
+  world_cup_api_football_validate: LoopRunView | null;
+}
+/**
+ * Response for GET /sports/world-cup/data/sources/status (audit
+ * 53.86). ``world_cup_data_source_status`` writes the six keys
+ * unconditionally in this order and the route overlays only the
+ * redacted paths (``facts.configured_path`` and the two
+ * ``configured_sources`` file paths -- same keys, same types), so
+ * no defaults and no ``response_model_exclude_unset`` flag.
+ * ``facts`` reuses ``WorldCupStatusResponse``: same producer
+ * function, same seven keys.
+ */
+export interface WorldCupDataSourceStatusResponse {
+  facts: WorldCupStatusResponse;
+  configured_sources: WorldCupConfiguredSources;
+  real_data_readiness: WorldCupRealDataReadiness;
+  scheduled_import: WorldCupScheduledImportStatus;
+  matchday_refresh: WorldCupMatchdayRefreshStatus;
+  runs: WorldCupDataSourceRuns;
+  [k: string]: unknown;
+}
+/**
+ * Response for GET /sports/world-cup/status (audit 53.86). The
+ * producer ``sports_fact_status`` writes all seven keys
+ * unconditionally in this order, and the route overlays only
+ * ``configured_path`` (same key, same type -- "redacted"), so the
+ * envelope needs no defaults and no ``response_model_exclude_unset``
+ * flag. ``file_mtime`` is required but nullable: the producer writes
+ * the key on both paths (isoformat when the file exists, ``None``
+ * when it does not). The sibling consumer of the same producer dict
+ * is the ``facts`` block of ``WorldCupDataSourceStatusResponse``,
+ * which reuses this model rather than declaring a second copy
+ * (53.64 precedent).
+ */
+export interface WorldCupStatusResponse {
+  tournament: string;
+  configured_path: string;
+  exists: boolean;
+  updated_at: string;
+  file_mtime: string | null;
+  count: number;
+  by_kind: {
+    [k: string]: number;
+  };
+  [k: string]: unknown;
+}
+/**
+ * The ``real_data_readiness`` block (audit 53.86): fourteen keys
+ * written unconditionally by ``_real_data_readiness`` in this order;
+ * ``issues`` is the code list and ``issue_details`` its per-code
+ * detail.
+ */
+export interface WorldCupRealDataReadiness {
+  ok: boolean;
+  qualification_source_configured: boolean;
+  qualification_source_state: string;
+  qualification_fact_count: number;
+  untrusted_qualification_fact_count: number;
+  match_result_count: number;
+  recommended_qualification_import_mode: string;
+  recommended_qualification_import_label: string;
+  scheduled_import_enabled: boolean;
+  last_import_failed: boolean;
+  recommended_provider_last_validation_status: string;
+  recommended_provider_last_validation_error: string;
+  issues: string[];
+  issue_details: WorldCupReadinessIssueDetail[];
+}
+/**
+ * One ``_readiness_issue_detail`` element (audit 53.86): four
+ * string keys, all unconditional.
+ */
+export interface WorldCupReadinessIssueDetail {
+  code: string;
+  severity: string;
+  message: string;
+  action: string;
+}
+/**
+ * The ``scheduled_import`` block (audit 53.86): five settings
+ * reads.
+ */
+export interface WorldCupScheduledImportStatus {
+  enabled: boolean;
+  mode: string;
+  replace: boolean;
+  hour_utc: number;
+  minute_utc: number;
+}
+/**
+ * The ``matchday_refresh`` block (audit 53.86): three settings
+ * reads.
+ */
+export interface WorldCupMatchdayRefreshStatus {
+  enabled: boolean;
+  interval_minutes: number;
+  window_hours: number;
+}

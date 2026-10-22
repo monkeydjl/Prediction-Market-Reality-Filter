@@ -295,6 +295,7 @@ _WC_MATCH_SOURCE = "backend/app/services/world_cup_match_source.py"
 _WC_API_FOOTBALL = "backend/app/services/world_cup_api_football_source.py"
 _WC_DATA_SOURCE_STATUS = "backend/app/services/world_cup_data_source_status_service.py"
 _WC_RESOLUTION = "backend/app/services/sports_resolution_service.py"
+_DISCOVERY_STATUS = "backend/app/services/discovery_status.py"
 _LIMITLESS = "backend/app/services/limitless_event_source.py"
 _GBM_ENGINE = "backend/app/kernel/engines/gbm_engine.py"
 _CHALLENGE_ADAPTER = "backend/app/services/conclusion_challenge_world_cup_adapter.py"
@@ -4351,7 +4352,7 @@ SETS: tuple[MutationSet, ...] = (
                     "代表针（路由对象**身份**判据）。"
                     "退回后路由仍 200、`tsc` 绿、"
                     "其余守卫全绿——只有按 `is` "
-                    "钉住的那条会红。● 针是装饰器"
+                    "钉住的那条会红。§53.88 换锚（判据不变、地址换锚）：init-db 已具名，其哨兵条目随片删除，旧针（init-db 条目行）随之消失——针换到仍在清单的 today 条目，删一条 ⇒ observed 多一条的判据原样承重。● 针是装饰器"
                     "内单行（本文件命中 **1 次**），"
                     "与 J111 的窗口（calibration-patterns 装饰器）"
                     "不重叠。"
@@ -5764,7 +5765,7 @@ SETS: tuple[MutationSet, ...] = (
             Mutation(
                 label="J177 裸路由清单丢一条：精确集合判据（53.80）与现状脱钩",
                 path=_T_GENERATE_TYPES_REPO,
-                old=b'    "POST /api/world-cup/predictions/init-db",\r\n',
+                old=b'    "GET /api/world-cup/predictions/today",\r\n',
                 new=b"",
                 guard_file=_T_GENERATE_TYPES,
                 guards=(
@@ -6094,6 +6095,86 @@ SETS: tuple[MutationSet, ...] = (
                     "observed 多出该路由 ⇒ 集合相等断言红。前端退役的 ResolveResult "
                     "曾声明 resolved/candidates 两个生产者从不发的键（真键 "
                     "resolved_count/pending_count）——具名让这类失实副本现形。"
+                    "● 针单行、无换行、命中 **1 次**（已实测）。"
+                ),
+            ),
+            Mutation(
+                label="J196 STATUS 初始字面量 results 键改名：钉源键序判据脱钩",
+                path=_DISCOVERY_STATUS,
+                old=b'    "results": 0,\r\n    "errors": [],           # [{event, error}]\r\n',
+                new=b'    "results_x": 0,\r\n    "errors": [],           # [{event, error}]\r\n',
+                guard_file=_T_GENERATE_TYPES,
+                guards=(
+                    "test_discovery_producers_pinned_from_source",
+                ),
+                note=(
+                    "§53.88（discover/status + init-db）：生产者是模块级 STATUS dict——"
+                    "12 键初始化后只原地更新、从不增删 ⇒ 信封无条件。初始字面量键改名后"
+                    "钉源断言红（必填 results 字段缺键同时 500）。"
+                    "● 针跨两行、带 CRLF、命中 **1 次**（已实测；reset 块的 errors 行"
+                    "无尾注释、字节不同，两行锚恰好消歧）。"
+                ),
+            ),
+            Mutation(
+                label="J197 DiscoveryStatusResponse.errors 撤名：模型键序判据脱钩",
+                path=_EVENT_MODEL,
+                old=b'    errors: list[DiscoveryErrorEntry]\r\n    message: str\r\n',
+                new=b'    errors_x: list[DiscoveryErrorEntry]\r\n    message: str\r\n',
+                guard_file=_T_GENERATE_TYPES,
+                guards=(
+                    "test_discovery_models_match_producer_key_sets",
+                ),
+                note=(
+                    "§53.88：信封 12 键按 STATUS 字面量序声明（started_at/finished_at "
+                    "必存可 null、elapsed_ms 刻意 int | float——_elapsed 起跑前给 int 0、"
+                    "起跑后 round 浮点，裸 float 会把 0 改写成 0.0）。撤名后键序断言红。"
+                    "● 针跨两行、带 CRLF、命中 **1 次**（已实测；单行 message 全文件多义）。"
+                ),
+            ),
+            Mutation(
+                label="J198 discoverStatus 调用点退回零主张泛型：前端契约旁路",
+                path="frontend/src/lib/api.ts",
+                old=b'api<DiscoveryStatusResponse>("/events/discover/status"',
+                new=b'api<Record<string, unknown>>("/events/discover/status"',
+                guard_file=_T_GENERATE_TYPES,
+                guards=(
+                    "test_frontend_reads_the_named_discovery_envelope",
+                ),
+                note=(
+                    "§53.88：api.ts 的 discoverStatus 原是 Record<string, unknown> "
+                    "零主张 cast（res.json() as T 全绿也松，§Z12）。改读具名信封后"
+                    "旁路变异红。"
+                    "● 针单行、无换行、命中 **1 次**（已实测）。"
+                ),
+            ),
+            Mutation(
+                label="J199 page.tsx 复活手写 DiscoveryStatus 接口：副本漂移判据脱钩",
+                path="frontend/src/app/page.tsx",
+                old=b'type DiscoveryStatus = DiscoveryStatusResponse;',
+                new=b'interface DiscoveryStatus { phase?: string; }',
+                guard_file=_T_GENERATE_TYPES,
+                guards=(
+                    "test_frontend_reads_the_named_discovery_envelope",
+                ),
+                note=(
+                    "§53.88：page.tsx 的手写七键子集这次逐字段忠实，但副本会静默漂移"
+                    "（生产者加键即失明）⇒ 退役成生成类型纯别名（53.53 J3 同判据、"
+                    "不同宿主）。复活 inline interface 后双断言红。"
+                    "● 针单行、无换行、命中 **1 次**（已实测）。"
+                ),
+            ),
+            Mutation(
+                label="J200 init-db 回绑裸 FlexibleResponse：哨兵集合判据脱钩",
+                path=_WORLD_CUP_PREDICTIONS,
+                old=b'@router.post("/init-db", response_model=PredictionDbInitResponse)',
+                new=b'@router.post("/init-db", response_model=FlexibleResponse)',
+                guard_file=_T_GENERATE_TYPES,
+                guards=(
+                    "test_every_flexible_response_route_binds_the_canonical_class",
+                ),
+                note=(
+                    "§53.88：discover/status + init-db 具名后哨兵裸清单 5→3；滑回"
+                    "裸类 ⇒ observed 多出该路由 ⇒ 集合相等断言红。"
                     "● 针单行、无换行、命中 **1 次**（已实测）。"
                 ),
             ),

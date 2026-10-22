@@ -36,6 +36,7 @@ from pathlib import Path
 _BACKEND_DIR = Path(__file__).resolve().parent.parent
 _REPO_ROOT = _BACKEND_DIR.parent
 _OUTPUT_PATH = _REPO_ROOT / "frontend" / "src" / "lib" / "generated-types.ts"
+_FRONTEND_DIR = _REPO_ROOT / "frontend"
 _API_TS_PATH = _REPO_ROOT / "frontend" / "src" / "lib" / "api.ts"
 _TYPES_TS_PATH = _REPO_ROOT / "frontend" / "src" / "lib" / "types.ts"
 _EVENTS_ROUTE_PATH = _REPO_ROOT / "backend" / "app" / "api" / "routes" / "events.py"
@@ -3282,11 +3283,9 @@ class FlexibleResponseIdentityTests(unittest.TestCase):
     # Keys are "METHODS path" as seen on app.routes (the /api prefix is the
     # mount, HEAD/OPTIONS are stripped).
     BARE_FLEXIBLE_RESPONSE_ROUTES = frozenset({
-        "GET /api/events/discover/status",
         "GET /api/world-cup/predictions/matches/{match_id}",
         "GET /api/world-cup/predictions/today",
         "POST /api/events/analyze",
-        "POST /api/world-cup/predictions/init-db",
     })
 
     def test_every_flexible_response_route_binds_the_canonical_class(self):
@@ -4528,6 +4527,272 @@ class WorldCupFactsResolveContractTests(unittest.TestCase):
             "unresolved_events: number; matches: WorldCupResolveMatch[]; "
             + _TAIL,
             "the generated resolve envelope drifted (audit 53.87)",
+        )
+
+
+class DiscoveryStatusContractTests(unittest.TestCase):
+    """The discovery progress snapshot and the prediction-db init,
+    named in audit 53.88.
+
+    ``GET /events/discover/status`` serves a copy of the module-level
+    ``STATUS`` dict -- twelve keys that exist from initialization and are
+    only ever updated in place, so the envelope is unconditional.
+    ``POST /world-cup/predictions/init-db`` has one success literal and
+    turns every failure into a 500. The frontend consumer is pinned too:
+    api.ts reads the named envelope (the zero-claim
+    ``Record<string, unknown>`` generic is gone) and page.tsx's
+    hand-written seven-key subset -- a faithful slice, for once -- is
+    retired to an alias of the generated response.
+    """
+
+    _ROUTE_MODELS = {
+        "/api/events/discover/status": "DiscoveryStatusResponse",
+        "/api/world-cup/predictions/init-db": "PredictionDbInitResponse",
+    }
+
+    _MODEL_KEYS = {
+        "DiscoverySourceStatus": (["status", "candidates", "error"], []),
+        "DiscoveryErrorEntry": (["event", "error"], []),
+        "DiscoveryStatusResponse": (
+            ["phase", "started_at", "finished_at", "limit", "sources",
+             "candidates_total", "analyzed", "total_to_analyze",
+             "results", "errors", "message", "elapsed_ms"], []),
+        "PredictionDbInitResponse": (["status", "message"], []),
+    }
+
+    def _named_route(self, path):
+        from app.main import app
+
+        matches = [
+            route for route in app.routes
+            if getattr(route, "path", "") == path
+        ]
+        self.assertEqual(
+            len(matches), 1,
+            f"route {path} is missing or duplicated in the app walk",
+        )
+        return matches[0]
+
+    def test_discovery_and_init_routes_bind_their_models(self):
+        import app.models.event as event_models
+
+        self.assertEqual(
+            len(self._ROUTE_MODELS), 2,
+            "1 discovery read + 1 init write = 2; a drift here means a "
+            "route was added or removed and the census must be re-run "
+            "(audit 53.88)",
+        )
+        wrong = []
+        for path, model_name in self._ROUTE_MODELS.items():
+            route = self._named_route(path)
+            model = getattr(event_models, model_name)
+            if route.response_model is not model:
+                wrong.append(
+                    f"{path} -> "
+                    f"{getattr(route.response_model, '__name__', '?')} "
+                    f"(want {model_name})"
+                )
+        self.assertEqual(
+            wrong, [],
+            "each route must bind its named envelope (audit 53.88): "
+            + "; ".join(wrong),
+        )
+
+    def test_discovery_init_routes_do_not_carry_exclude_unset(self):
+        flagged = []
+        for path in self._ROUTE_MODELS:
+            route = self._named_route(path)
+            if getattr(route, "response_model_exclude_unset", False):
+                flagged.append(path)
+        self.assertEqual(
+            flagged, [],
+            "both producers write every key unconditionally (the nullable "
+            "epoch stamps are written as explicit nulls, not omitted), so "
+            "the flag would be a no-op today and a blind spot the day a "
+            "key becomes conditional (§Z4, audit 53.88): "
+            + "; ".join(flagged),
+        )
+
+    def test_discovery_models_match_producer_key_sets(self):
+        import app.models.event as event_models
+
+        for name, (keys, optional) in self._MODEL_KEYS.items():
+            model = getattr(event_models, name)
+            fields = model.model_fields
+            with self.subTest(model=name):
+                self.assertEqual(
+                    list(fields), keys,
+                    f"{name} is no longer the producer's keys in producer "
+                    "order (audit 53.88)",
+                )
+            for key, field in fields.items():
+                with self.subTest(model=name, key=key):
+                    self.assertTrue(
+                        field.is_required(),
+                        f"{name}.{key} gained a default; the producers "
+                        "write every key unconditionally, so a default "
+                        "would hide a producer regression instead of "
+                        "failing at the boundary (audit 53.88)",
+                    )
+
+    def test_discovery_producers_pinned_from_source(self):
+        import ast
+
+        src = (
+            _BACKEND_DIR / "app" / "services" / "discovery_status.py"
+        ).read_bytes().decode("utf-8")
+        tree = ast.parse(src)
+
+        # The module-level STATUS literal declares the twelve-key shape.
+        status_keys = []
+        for node in tree.body:
+            # STATUS is declared with an annotation, so this is an
+            # AnnAssign, not an Assign -- checking only Assign would
+            # pin nothing (the empty-list assertion below catches it).
+            targets = ()
+            if isinstance(node, ast.Assign):
+                targets = node.targets
+            elif isinstance(node, ast.AnnAssign) and node.value is not None:
+                targets = [node.target]
+            if (len(targets) == 1
+                    and isinstance(targets[0], ast.Name)
+                    and targets[0].id == "STATUS"
+                    and isinstance(node.value, ast.Dict)):
+                status_keys = [
+                    key.value for key in node.value.keys
+                    if isinstance(key, ast.Constant)
+                ]
+        self.assertEqual(
+            status_keys,
+            ["phase", "started_at", "finished_at", "limit", "sources",
+             "candidates_total", "analyzed", "total_to_analyze",
+             "results", "errors", "message", "elapsed_ms"],
+            "the STATUS literal's key set/order drifted; that order is "
+            "what DiscoveryStatusResponse's field order mirrors (audit "
+            "53.88)",
+        )
+
+        # snapshot() must keep all keys (STATUS.copy()) and deep-copy the
+        # two mutable nested containers -- dropping either deep copy
+        # reintroduces the iterate-while-mutating race its docstring
+        # describes.
+        snap_assign = False
+        deep_copies = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == "snapshot":
+                for inner in ast.walk(node):
+                    if (isinstance(inner, ast.Assign)
+                            and len(inner.targets) == 1
+                            and isinstance(inner.targets[0], ast.Name)
+                            and inner.targets[0].id == "snap"
+                            and isinstance(inner.value, ast.Call)
+                            and isinstance(inner.value.func, ast.Attribute)
+                            and inner.value.func.attr == "copy"):
+                        snap_assign = True
+                    if (isinstance(inner, ast.Assign)
+                            and len(inner.targets) == 1
+                            and isinstance(inner.targets[0], ast.Subscript)
+                            and isinstance(inner.targets[0].value, ast.Name)
+                            and inner.targets[0].value.id == "snap"):
+                        deep_copies.append(
+                            inner.targets[0].slice.value
+                            if isinstance(inner.targets[0].slice, ast.Constant)
+                            else "?"
+                        )
+        self.assertEqual(
+            (snap_assign, deep_copies),
+            (True, ["sources", "errors"]),
+            "snapshot() no longer copies STATUS plus the two mutable "
+            "nested containers; the serialize-while-scanning race is back "
+            "(audit 53.88)",
+        )
+
+        # init-db handler: one success literal, two keys.
+        src = (
+            _BACKEND_DIR / "app" / "api" / "routes"
+            / "world_cup_predictions.py"
+        ).read_bytes().decode("utf-8")
+        tree = ast.parse(src)
+        fn = next(
+            node for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == "initialize_prediction_db"
+        )
+        key_sets = [
+            [key.value for key in node.value.keys
+             if isinstance(key, ast.Constant)]
+            for node in ast.walk(fn)
+            if isinstance(node, ast.Return) and isinstance(node.value, ast.Dict)
+        ]
+        self.assertEqual(
+            (len(key_sets), key_sets[0]),
+            (1, ["status", "message"]),
+            "the init-db success literal drifted (audit 53.88)",
+        )
+
+    def test_frontend_reads_the_named_discovery_envelope(self):
+        api_src = (
+            _FRONTEND_DIR / "src" / "lib" / "api.ts"
+        ).read_bytes().decode("utf-8")
+        self.assertIn(
+            'api<DiscoveryStatusResponse>("/events/discover/status"',
+            api_src,
+            "api.ts's discoverStatus call site must read the named "
+            "envelope -- the Record<string, unknown> generic was a "
+            "zero-claim cast (audit 53.87 lesson, J8/J9 lineage)",
+        )
+        self.assertNotIn(
+            'Record<string, unknown>>("/events/discover/status"',
+            api_src,
+            "the zero-claim generic is back on the discovery call site",
+        )
+        page_src = (
+            _FRONTEND_DIR / "src" / "app" / "page.tsx"
+        ).read_bytes().decode("utf-8")
+        self.assertIn(
+            "type DiscoveryStatus = DiscoveryStatusResponse;",
+            page_src,
+            "page.tsx's DiscoveryStatus must stay an alias of the "
+            "generated response (audit 53.88)",
+        )
+        self.assertNotIn(
+            "interface DiscoveryStatus {",
+            page_src,
+            "a hand-written DiscoveryStatus interface is back in "
+            "page.tsx -- it was a faithful subset this time, but a copy "
+            "silently drifts the day the producer gains a key (audit "
+            "53.88)",
+        )
+
+    def test_generated_types_carry_the_discovery_envelope(self):
+        text = _OUTPUT_PATH.read_bytes().decode("utf-8")
+        bodies = _interface_bodies(text)
+
+        def normalized(name):
+            return " ".join(
+                line.strip() for line in bodies[name] if line.strip()
+            )
+
+        _TAIL = "[k: string]: unknown;"
+        self.assertEqual(
+            normalized("DiscoverySourceStatus"),
+            "status: string; candidates: number; error: string | null;",
+            "the generated discovery source element drifted (audit 53.88)",
+        )
+        self.assertEqual(
+            normalized("DiscoveryStatusResponse"),
+            "phase: string; started_at: number | null; finished_at: "
+            "number | null; limit: number; sources: { [k: string]: "
+            "DiscoverySourceStatus; }; candidates_total: number; "
+            "analyzed: number; total_to_analyze: number; results: "
+            "number; errors: DiscoveryErrorEntry[]; message: string; "
+            "elapsed_ms: number; " + _TAIL,
+            "the generated discovery envelope drifted (audit 53.88)",
+        )
+        self.assertEqual(
+            normalized("PredictionDbInitResponse"),
+            "status: string; message: string; " + _TAIL,
+            "the generated init-db envelope drifted (audit 53.88)",
         )
 
 

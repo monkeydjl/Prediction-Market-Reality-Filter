@@ -16,6 +16,7 @@ import type {
   EdgeTrajectorySummary as GeneratedEdgeTrajectorySummary,
   PendingLinkItem as GeneratedPendingLinkItem,
   PendingLinksResponse as GeneratedPendingLinksResponse,
+  DiscoveryStatusResponse,
   EventMarketLink,
   RecentPredictionItem as GeneratedRecentPredictionItem,
   RecentPredictionsResponse as GeneratedRecentPredictionsResponse,
@@ -894,7 +895,7 @@ export const eventsApi = {
     api<LlmDiagnostics>("/llm/diagnostics"),
 
   discoverStatus: () =>
-    api<Record<string, unknown>>("/events/discover/status", undefined, { cacheGet: false }),
+    api<DiscoveryStatusResponse>("/events/discover/status", undefined, { cacheGet: false }),
 
   // M6 simulated trades (paper trading)
   tradeStats: () =>

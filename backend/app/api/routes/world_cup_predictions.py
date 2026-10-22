@@ -22,6 +22,7 @@ from app.models.event import (
     EngineComparisonResponse,
     FlexibleResponse,
     MatchAnalysisHistoryResponse,
+    PredictionDbInitResponse,
     MatchAnalyzeResponse,
     MatchListResponse,
     PredictionHistoryResponse,
@@ -164,7 +165,7 @@ def _serialize_history_entry(
     return payload
 
 
-@router.post("/init-db", response_model=FlexibleResponse)
+@router.post("/init-db", response_model=PredictionDbInitResponse)
 async def initialize_prediction_db(_auth: None = Depends(require_write_key)) -> dict[str, Any]:
     """Initialize the prediction database schema."""
     try:

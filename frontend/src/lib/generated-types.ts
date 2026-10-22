@@ -1263,6 +1263,56 @@ export interface DeleteEventResponse {
   [k: string]: unknown;
 }
 /**
+ * One ``errors`` element (audit 53.88): event truncated to 80
+ * chars, error to 200, both unconditional.
+ */
+export interface DiscoveryErrorEntry {
+  event: string;
+  error: string;
+}
+/**
+ * One ``sources`` element of the discovery snapshot (audit 53.88):
+ * three keys, written unconditionally by ``source_start`` /
+ * ``source_done``; ``error`` is required but nullable --
+ * ``source_done`` writes ``None`` on success.
+ */
+export interface DiscoverySourceStatus {
+  status: string;
+  candidates: number;
+  error: string | null;
+}
+/**
+ * Response for GET /events/discover/status (audit 53.88). The
+ * producer is the module-level ``STATUS`` dict: all twelve keys
+ * exist from initialization and every mutator updates in place, so
+ * the snapshot never adds or drops a key. ``started_at`` /
+ * ``finished_at`` are required but nullable (epoch floats, ``None``
+ * until the scan starts / finishes); ``elapsed_ms`` is
+ * ``int | float`` on purpose -- ``_elapsed`` returns the int literal
+ * ``0`` before a scan starts and a rounded float after, and
+ * declaring bare ``float`` would rewrite the int ``0`` to ``0.0`` on
+ * the wire (``ReviewQueueSeverityBucket`` precedent). The
+ * frontend's hand-written page.tsx copy was a faithful seven-key
+ * subset and is retired to an alias.
+ */
+export interface DiscoveryStatusResponse {
+  phase: string;
+  started_at: number | null;
+  finished_at: number | null;
+  limit: number;
+  sources: {
+    [k: string]: DiscoverySourceStatus;
+  };
+  candidates_total: number;
+  analyzed: number;
+  total_to_analyze: number;
+  results: number;
+  errors: DiscoveryErrorEntry[];
+  message: string;
+  elapsed_ms: number;
+  [k: string]: unknown;
+}
+/**
  * One point of an edge time series: ``trend_analysis_service.edge_series``.
  *
  * Named ``EdgeSeriesPoint`` rather than ``EdgePoint`` on purpose: the frontend
@@ -3088,6 +3138,16 @@ export interface PendingLinkItem {
  */
 export interface PendingLinksResponse {
   pending: PendingLinkItem[];
+  [k: string]: unknown;
+}
+/**
+ * Response for POST /world-cup/predictions/init-db (audit 53.88):
+ * the handler's only success return is the two-key literal; every
+ * failure is an HTTPException 500, so no key is conditional.
+ */
+export interface PredictionDbInitResponse {
+  status: string;
+  message: string;
   [k: string]: unknown;
 }
 /**

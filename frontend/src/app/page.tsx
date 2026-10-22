@@ -9,6 +9,7 @@ import { SystemStatus } from "@/components/dashboard/system-status";
 import { SectionErrorBoundary } from "@/components/section-error-boundary";
 import { eventsApi, type EventListFilters } from "@/lib/api";
 import { adaptEntry, adaptMover, type EventView } from "@/lib/adapt";
+import type { DiscoveryStatusResponse } from "@/lib/generated-types";
 import {
   clearDashboardCache,
   getDashboardCache,
@@ -21,20 +22,14 @@ const PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
 const DISCOVER_LIMIT_OPTIONS = [2, 5, 10, 20, 50, 100];
 const TABLE_FILTER_EVENT = "pmrf:event-table-filters-change";
 
-/** Shape of the /events/discover status polling response. Replaces the
- *  previous `Record<string, unknown>` which made every field access return
- *  `unknown` and triggered TS2322 (unknown not assignable to ReactNode) in
- *  JSX. Keeping it as an explicit interface means the JSX render paths get
- *  proper type narrowing without per-site casts. */
-interface DiscoveryStatus {
-  phase?: string;
-  message?: string;
-  sources?: Record<string, { status: string; candidates: number; error: string | null }>;
-  analyzed?: number;
-  total_to_analyze?: number;
-  elapsed_ms?: number;
-  errors?: Array<{ event: string; error: string }>;
-}
+/** Shape of the /events/discover status polling response. The hand-written
+ *  seven-key subset was a faithful slice of the producer (all of its field
+ *  types checked out), but audit 53.88 named the envelope, so this is now
+ *  a pure alias of the generated response -- the previous `Record<string,
+ *  unknown>` here made every field access return `unknown` and triggered
+ *  TS2322 (unknown not assignable to ReactNode) in JSX; the alias keeps
+ *  the JSX narrowing while the generated type carries all twelve keys. */
+type DiscoveryStatus = DiscoveryStatusResponse;
 
 function isDiscoveryRunning(status: DiscoveryStatus | null | undefined) {
   return status?.phase === "collecting" || status?.phase === "analyzing" || status?.phase === "saving";
@@ -179,7 +174,7 @@ export default function DashboardPage() {
       if (!mountedRef.current) return;
       try {
         const data = await eventsApi.discoverStatus();
-        const status = data as DiscoveryStatus;
+        const status = data;
         applyDiscoveryStatus(status);
         if (!isDiscoveryRunning(status)) clearDiscoveryStatusPoller();
       } catch {
@@ -206,7 +201,7 @@ export default function DashboardPage() {
       try {
         const data = await eventsApi.discoverStatus();
         if (cancelled || !mountedRef.current) return;
-        const status = data as DiscoveryStatus;
+        const status = data;
         if (!isDiscoveryRunning(status)) return;
         applyDiscoveryStatus(status);
         startDiscoveryStatusPolling();

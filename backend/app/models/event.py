@@ -2807,6 +2807,62 @@ class WorldCupResolveResponse(FlexibleResponse):
     unresolved_events: int
     matches: list[WorldCupResolveMatch]
 
+class DiscoverySourceStatus(BaseModel):
+    """One ``sources`` element of the discovery snapshot (audit 53.88):
+    three keys, written unconditionally by ``source_start`` /
+    ``source_done``; ``error`` is required but nullable --
+    ``source_done`` writes ``None`` on success."""
+
+    status: str
+    candidates: int
+    error: str | None
+
+
+class DiscoveryErrorEntry(BaseModel):
+    """One ``errors`` element (audit 53.88): event truncated to 80
+    chars, error to 200, both unconditional."""
+
+    event: str
+    error: str
+
+
+class DiscoveryStatusResponse(FlexibleResponse):
+    """Response for GET /events/discover/status (audit 53.88). The
+    producer is the module-level ``STATUS`` dict: all twelve keys
+    exist from initialization and every mutator updates in place, so
+    the snapshot never adds or drops a key. ``started_at`` /
+    ``finished_at`` are required but nullable (epoch floats, ``None``
+    until the scan starts / finishes); ``elapsed_ms`` is
+    ``int | float`` on purpose -- ``_elapsed`` returns the int literal
+    ``0`` before a scan starts and a rounded float after, and
+    declaring bare ``float`` would rewrite the int ``0`` to ``0.0`` on
+    the wire (``ReviewQueueSeverityBucket`` precedent). The
+    frontend's hand-written page.tsx copy was a faithful seven-key
+    subset and is retired to an alias."""
+
+    phase: str
+    started_at: float | None
+    finished_at: float | None
+    limit: int
+    sources: dict[str, DiscoverySourceStatus]
+    candidates_total: int
+    analyzed: int
+    total_to_analyze: int
+    results: int
+    errors: list[DiscoveryErrorEntry]
+    message: str
+    elapsed_ms: int | float
+
+
+class PredictionDbInitResponse(FlexibleResponse):
+    """Response for POST /world-cup/predictions/init-db (audit 53.88):
+    the handler's only success return is the two-key literal; every
+    failure is an HTTPException 500, so no key is conditional."""
+
+    status: str
+    message: str
+
+
 
 
 

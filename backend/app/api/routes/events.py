@@ -134,6 +134,7 @@ from app.models.event import (
     DecisionReport,
     DecisionTimelineResponse,
     DeleteEventResponse,
+    DiscoveryStatusResponse,
     EventAnalysisRequest,
     EventCalibrationResponse,
     EventDiscoveryResponse,
@@ -1929,7 +1930,7 @@ async def manual_close_trade(
 # ── Discovery progress ─────────────────────────────────────────────
 
 
-@router.get("/discover/status", response_model=FlexibleResponse)
+@router.get("/discover/status", response_model=DiscoveryStatusResponse)
 async def get_discovery_status() -> dict[str, Any]:
     """Real-time progress of the current (or most recent) discovery run."""
     from app.services.discovery_status import snapshot

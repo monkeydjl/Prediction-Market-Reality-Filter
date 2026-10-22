@@ -15291,3 +15291,44 @@ up to date；全量 pytest 读数见下（junit 判据）；J184–J186 四阶�
 
 **下一片队列（不变）：** ④ test+validate 4 条 → ⑥ status 2 条 →
 ⑦+⑧ facts/resolve。
+
+**53.85 补记（同日）：test+validate 4 条具名——两形状探针与共享的
+validate 信封。** 队列 ④ 落地。普查钉死：两个 test 探针**各自两形状**
+（失败 `{ok, error}`；成功 api-football 追加
+`subscription/requests_today/requests_limit`、sportmonks 追加
+`feed_tested/item_count/rate_limit`——两者形状不同 ⇒ 各自具名，不能
+共享），条件追加键 ⇒ 默认值+旗（§Z3）；`error` 两路都写（成功写
+None）⇒ 必填 `str | None`（「必存但可 null」，§Z2）。两个 validate
+生产者**同形状**（`steps`/`ok` 恒写；`coverage`/`summary` 仅成功；
+`error` 仅失败）⇒ 共享 `IngestPipelineValidateResponse`，字段序镜像成
+功路径（steps, ok, coverage, summary, error；失败路径 unset 掉
+coverage/summary 后线上仍读 steps, ok, error——纯键序裁决）。6 个新模
+型：`IngestApiFootballSubscription`（3 键，`end` 可 null）/
+`IngestApiFootballTestResponse` / `IngestSportmonksTestResponse`
+（`rate_limit` 为 provider 透传 dict、可缺省可 null）/
+`IngestPipelineStep`（`name`/`ok` 恒写，`detail`/`fixture_*`/`error`
+按步条件）/ `IngestPipelineCoverage`（6 键闭合）/ `IngestPipelineValidateResponse`。
+
+**旗子守卫升级为三组**：bundle 12（旗）/ 条件旗 4（test+validate）/ 其
+余 23（无旗，§Z4）——`_CONDITIONAL_FLAG_MODELS` 具名集合，集合相等判
+据。哨兵裸清单 13→9。不忠实桩第 6/7 例：Blocking 测试两个
+`{"ok": True}` 桩被 `error` 必填判据抓出（此前裸绑定零校验通过），修成
+忠实成功形状。
+
+**变异 +3**（清单 272→**275**，list 自打印）：J187（api-football/test
+拔旗——条件旗判据）、J188（`IngestPipelineValidateResponse.coverage`
+撤名——模型键序）、J189（连接测试成功 return 的 `requests_today` 改名
+——钉源键序；钉源守卫新增「含 subscription 键的 return = 成功形状」
+的带前提选择判据）。J187 是 53.84 的「set 收尾锚吞前一条收尾」教训的
+修正执行：锚显式保留 J186 收尾行，一次插入成功、`ast.parse` 先行验证。
+
+**验证链读数**：ruff 全过（中途抓出 events.py 一个未使用的
+Subscription import——删）；mypy 331 文件零问题；`generate_types
+--check` up to date；全量 pytest 读数见下（junit 判据）；J187–J189 四
+阶段全 `[OK]`；守护测试 `test_mutation_verify.py` 64 passed / 326
+subtests；针审计 **275/275** 恰命中 1 次；tsc 零错；vitest 94 文件 /
+447 测试全过。
+
+**下一片队列（不变）：** ⑥ status 2 条 → ⑦+⑧ facts/resolve（元素形
+状探针；resolve 具名时 `ResolveResult` 的 `resolved`/`candidates` 失实
+键一并退役，面板可首次显示 `resolved_count`）。

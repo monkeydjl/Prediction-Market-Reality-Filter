@@ -1097,5 +1097,165 @@ class WorldCupPredictionRoutesTests(unittest.TestCase):
         self.assertIn("historical_non_real_quality_normalized", payload["data_quality_notes"])
 
 
+class WorldCupPredictionWireShapeTests(unittest.TestCase):
+    """Wire shapes of GET /matches/{match_id} and GET /today (audit 53.89).
+
+    Both routes now bind named envelopes whose ``prediction`` key is written
+    only when a prediction row exists, so the routes carry the
+    ``response_model_exclude_unset`` flag. Driving the real response-model
+    validation through TestClient means a key the envelope forbids fails
+    loudly here, not only in the generated types -- and the flag's effect
+    (no-prediction shapes grow no ``"prediction": null``) is pinned as
+    behaviour, not as a decorator attribute.
+    """
+
+    _PREDICTION_KEYS = [
+        "predicted_score", "outcome_probabilities", "confidence",
+        "prediction_method", "engine_used", "ai_reasoning", "key_factors",
+        "last_updated", "has_betting_odds", "data_quality",
+        "data_quality_notes", "data_quality_score", "raw_confidence",
+        "confidence_calibration", "high_confidence_selection",
+        "explanation_contributions",
+    ]
+
+    def _fixture(self):
+        return SimpleNamespace(
+            match_id="m1", fixture_id="fx1", home_team="Alpha",
+            away_team="Beta", kickoff_utc=naive(), venue="Stadium",
+            stage="group", group="C", status="scheduled",
+            home_score=None, away_score=None,
+        )
+
+    def _prediction(self):
+        return MatchPrediction(
+            match_id="m1",
+            predicted_home_score=1.5,
+            predicted_away_score=1.2,
+            home_win_prob=0.4,
+            draw_prob=0.3,
+            away_win_prob=0.3,
+            confidence=0.61,
+            prediction_method="hybrid",
+            ai_reasoning="rule + ai blend",
+            key_factors=["elo gap"],
+            last_updated=naive(),
+            factors={},
+        )
+
+    def _client(self, fixture_q, pred_q):
+        from app.models.world_cup_prediction import MatchFixture
+
+        client = _prediction_client()
+        session = MagicMock()
+        session.query.side_effect = (
+            lambda model: fixture_q if model is MatchFixture else pred_q
+        )
+        return client, session
+
+    def _get(self, session, path):
+        with patch(
+            "app.api.routes.world_cup_predictions.get_prediction_session",
+            return_value=session,
+        ), patch("app.api.routes.world_cup_predictions.close_prediction_session"):
+            return _prediction_client().get(path)
+
+    def test_match_detail_with_prediction_serves_both_blocks_in_wire_order(self):
+        fixture_q, pred_q = MagicMock(), MagicMock()
+        fixture_q.filter_by.return_value.first.return_value = self._fixture()
+        pred_q.filter_by.return_value.first.return_value = self._prediction()
+        _, session = self._client(fixture_q, pred_q)
+
+        resp = self._get(session, "/world-cup/predictions/matches/m1")
+
+        self.assertEqual(resp.status_code, 200, resp.text)
+        body = resp.json()
+        self.assertEqual(list(body), ["status", "match", "prediction"])
+        self.assertEqual(
+            list(body["match"]),
+            ["match_id", "fixture_id", "home_team", "away_team",
+             "kickoff_utc", "venue", "stage", "group", "status"],
+            "the detail match block is the nine-key MatchDetailRecord "
+            "order -- home_score/away_score are deliberately absent "
+            "here, which is why MatchDetailRecord does not share "
+            "MatchFixtureRecord (53.83 criterion (3), audit 53.89)",
+        )
+        self.assertEqual(
+            list(body["prediction"]),
+            self._PREDICTION_KEYS,
+            "the prediction block is the sixteen-key "
+            "MatchPredictionPayload order (audit 53.89)",
+        )
+
+    def test_match_detail_without_prediction_grows_no_null_key(self):
+        fixture_q, pred_q = MagicMock(), MagicMock()
+        fixture_q.filter_by.return_value.first.return_value = self._fixture()
+        pred_q.filter_by.return_value.first.return_value = None
+        _, session = self._client(fixture_q, pred_q)
+
+        resp = self._get(session, "/world-cup/predictions/matches/m1")
+
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self.assertEqual(
+            list(resp.json()), ["status", "match"],
+            "the no-prediction shape must not grow a \"prediction\": null "
+            "-- the flag is load-bearing for MatchDetailResponse "
+            "(audit 53.89)",
+        )
+
+    def test_today_envelope_and_element_serve_wire_order(self):
+        fixture_q, pred_q = MagicMock(), MagicMock()
+        fixture_q.filter.return_value.order_by.return_value.all.return_value = [
+            self._fixture()
+        ]
+        pred_q.filter_by.return_value.first.return_value = self._prediction()
+        _, session = self._client(fixture_q, pred_q)
+
+        resp = self._get(session, "/world-cup/predictions/today")
+
+        self.assertEqual(resp.status_code, 200, resp.text)
+        body = resp.json()
+        self.assertEqual(
+            list(body), ["status", "date", "count", "matches"],
+            "the today envelope is the four-key TodayMatchesResponse "
+            "order (audit 53.89)",
+        )
+        self.assertEqual(body["count"], 1)
+        element = body["matches"][0]
+        self.assertEqual(list(element), ["match", "prediction"])
+        self.assertEqual(
+            list(element["match"]),
+            ["match_id", "fixture_id", "home_team", "away_team",
+             "kickoff_utc", "venue", "stage", "group", "status",
+             "home_score", "away_score"],
+            "the today match block is the eleven-key MatchFixtureRecord "
+            "order -- the /matches element shape, reused not copied "
+            "(audit 53.89)",
+        )
+        self.assertEqual(
+            list(element["prediction"]), self._PREDICTION_KEYS,
+            "today's prediction block is the same sixteen-key "
+            "MatchPredictionPayload the other three routes serve "
+            "(audit 53.89)",
+        )
+
+    def test_today_element_without_prediction_grows_no_null_key(self):
+        fixture_q, pred_q = MagicMock(), MagicMock()
+        fixture_q.filter.return_value.order_by.return_value.all.return_value = [
+            self._fixture()
+        ]
+        pred_q.filter_by.return_value.first.return_value = None
+        _, session = self._client(fixture_q, pred_q)
+
+        resp = self._get(session, "/world-cup/predictions/today")
+
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self.assertEqual(
+            list(resp.json()["matches"][0]), ["match"],
+            "the no-prediction element must not grow a \"prediction\": "
+            "null -- the flag is load-bearing for MatchListEntry here "
+            "exactly as on /matches (audit 53.89)",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -20,15 +20,16 @@ from app.models.event import (
     CalibrationPatternsResponse,
     EngineCalibrationResponse,
     EngineComparisonResponse,
-    FlexibleResponse,
     MatchAnalysisHistoryResponse,
     PredictionDbInitResponse,
     MatchAnalyzeResponse,
+    MatchDetailResponse,
     MatchListResponse,
     PredictionHistoryResponse,
     PredictionOptimizeResponse,
     PredictionTriggerResponse,
     SyncFixturesResponse,
+    TodayMatchesResponse,
 )
 from app.models.world_cup_prediction import MatchFixture, MatchPrediction, PredictionHistory, AIAnalysisHistory
 from app.services.world_cup_match_service import sync_world_cup_fixtures
@@ -289,7 +290,14 @@ async def list_matches(
         close_prediction_session(session)
 
 
-@router.get("/matches/{match_id}", response_model=FlexibleResponse)
+@router.get(
+    "/matches/{match_id}",
+    response_model=MatchDetailResponse,
+    # `MatchDetailResponse.prediction` is written only when a prediction row
+    # exists, so without the flag the no-prediction shape would serialise an
+    # explicit `"prediction": null` the producer never wrote (audit 53.89).
+    response_model_exclude_unset=True,
+)
 async def get_match(match_id: str) -> dict[str, Any]:
     """Get single match details with prediction."""
     session = get_prediction_session()
@@ -809,7 +817,15 @@ async def batch_switch_engine_stream(
     )
 
 
-@router.get("/today", response_model=FlexibleResponse)
+@router.get(
+    "/today",
+    response_model=TodayMatchesResponse,
+    # The same two reasons as `/matches` (audit 53.89): the elements are
+    # `MatchListEntry`, whose `prediction` is written only when a prediction
+    # row exists, and the payload reuses `_serialize_prediction`, whose factor
+    # blobs have five-key and seven-key shapes.
+    response_model_exclude_unset=True,
+)
 async def get_today_matches() -> dict[str, Any]:
     """Get today's matches with predictions."""
     session = get_prediction_session()

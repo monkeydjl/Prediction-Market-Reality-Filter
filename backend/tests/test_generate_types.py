@@ -3283,8 +3283,15 @@ class FlexibleResponseIdentityTests(unittest.TestCase):
     # Keys are "METHODS path" as seen on app.routes (the /api prefix is the
     # mount, HEAD/OPTIONS are stripped).
     BARE_FLEXIBLE_RESPONSE_ROUTES = frozenset({
-        "GET /api/world-cup/predictions/matches/{match_id}",
-        "GET /api/world-cup/predictions/today",
+        # The one deliberate bare route, decided in audit 53.89. Its body is
+        # the LLM-authored EventRecord blob returned by
+        # `analyze_event_question` -- an evolving open record the prompt
+        # template shapes but does not guarantee -- plus two keys
+        # (`news_filter` / `evidence_items`) written only on the
+        # no-news_context path. Naming it would mean an extra="allow"
+        # envelope with zero required fields: a named nothing (§Z16
+        # exclusionary-contract precedent). Keep it here; the set-equality
+        # below still catches any NEW route that binds the bare class.
         "POST /api/events/analyze",
     })
 
@@ -4793,6 +4800,289 @@ class DiscoveryStatusContractTests(unittest.TestCase):
             normalized("PredictionDbInitResponse"),
             "status: string; message: string; " + _TAIL,
             "the generated init-db envelope drifted (audit 53.88)",
+        )
+
+
+class WorldCupMatchDetailTodayContractTests(unittest.TestCase):
+    """The last two world-cup-predictions GET routes, named in audit 53.89.
+
+    ``GET /matches/{match_id}`` serves a nine-key match block -- the detail
+    route never copies ``home_score`` / ``away_score``, so per 53.83
+    criterion (3) it gets its own ``MatchDetailRecord`` instead of sharing
+    ``MatchFixtureRecord``. ``GET /today``'s element is the ``/matches``
+    element (same eleven-key block, same ``_serialize_prediction``), so its
+    envelope reuses ``MatchListEntry``. Both routes write ``prediction``
+    only when a prediction row exists, so both carry the
+    ``response_model_exclude_unset`` flag (§Z4). The prediction block itself
+    stays ``MatchPredictionPayload`` (53.76), whose docstring already
+    promised one serializer feeding four routes.
+    """
+
+    _ROUTES = [
+        ("/api/world-cup/predictions/matches/{match_id}",
+         "MatchDetailResponse"),
+        ("/api/world-cup/predictions/today", "TodayMatchesResponse"),
+    ]
+
+    def _named_route(self, path):
+        from app.main import app
+
+        matches = [
+            route for route in app.routes
+            if getattr(route, "path", "") == path
+        ]
+        self.assertEqual(
+            len(matches), 1,
+            f"route {path} is missing or duplicated in the app walk",
+        )
+        return matches[0]
+
+    def test_both_routes_bind_named_envelopes_with_the_flag(self):
+        import app.models.event as event_models
+
+        self.assertEqual(
+            len(self._ROUTES), 2,
+            "2 reads = the last two bare world-cup-predictions routes; a "
+            "drift here means the census must be re-run (audit 53.89)",
+        )
+        for path, model_name in self._ROUTES:
+            with self.subTest(path=path):
+                route = self._named_route(path)
+                model = getattr(event_models, model_name)
+                self.assertIs(
+                    route.response_model, model,
+                    f"{path} must bind {model_name} (audit 53.89)",
+                )
+                self.assertIs(
+                    route.response_model_exclude_unset, True,
+                    f"{path} must keep the flag: `prediction` is written "
+                    "only when a prediction row exists, so without it the "
+                    "no-prediction shape serialises an explicit null the "
+                    "producer never wrote (§Z4, audit 53.89)",
+                )
+
+    def test_match_detail_record_is_nine_keys_and_all_required(self):
+        import app.models.event as event_models
+
+        fields = event_models.MatchDetailRecord.model_fields
+        self.assertEqual(
+            list(fields),
+            ["match_id", "fixture_id", "home_team", "away_team",
+             "kickoff_utc", "venue", "stage", "group", "status"],
+            "MatchDetailRecord is no longer the detail producer's nine "
+            "keys in wire order (audit 53.89)",
+        )
+        self.assertEqual(
+            len(event_models.MatchFixtureRecord.model_fields), 11,
+            "MatchFixtureRecord must stay the eleven-key list element; "
+            "widening MatchDetailRecord to match would blur the two "
+            "shapes this slice exists to separate (53.83 criterion (3), "
+            "audit 53.89)",
+        )
+        for key, field in fields.items():
+            with self.subTest(key=key):
+                self.assertTrue(
+                    field.is_required(),
+                    f"MatchDetailRecord.{key} gained a default; the detail "
+                    "producer writes all nine keys unconditionally, so a "
+                    "default would hide a producer regression instead of "
+                    "failing at the boundary (audit 53.89)",
+                )
+
+    def test_detail_prediction_is_optional_and_today_reuses_match_list_entry(self):
+        from typing import get_args, get_origin
+        import app.models.event as event_models
+
+        pred = event_models.MatchDetailResponse.model_fields["prediction"]
+        self.assertFalse(
+            pred.is_required(),
+            "MatchDetailResponse.prediction must keep its = None default: "
+            "it is the one conditional envelope key (audit 53.89)",
+        )
+        self.assertIs(
+            get_args(pred.annotation)[0],
+            event_models.MatchPredictionPayload,
+            "the detail prediction block must stay the shared "
+            "MatchPredictionPayload -- one serializer feeds four routes "
+            "(53.76 docstring); a second copy would let them drift "
+            "(audit 53.89)",
+        )
+        today = event_models.TodayMatchesResponse.model_fields
+        self.assertEqual(
+            list(today), ["status", "date", "count", "matches"],
+            "TodayMatchesResponse is no longer the today producer's four "
+            "keys in wire order (audit 53.89)",
+        )
+        self.assertIs(
+            get_origin(today["matches"].annotation), list,
+            "TodayMatchesResponse.matches must stay a list (audit 53.89)",
+        )
+        (element,) = get_args(today["matches"].annotation)
+        self.assertIs(
+            element, event_models.MatchListEntry,
+            "the today element must reuse MatchListEntry: today writes "
+            "the same eleven-key block and the same prediction payload "
+            "as /matches -- sharing is the contract, a copy is drift "
+            "(audit 53.89)",
+        )
+        for key in ("status", "date", "count"):
+            with self.subTest(key=key):
+                self.assertTrue(
+                    today[key].is_required(),
+                    f"TodayMatchesResponse.{key} gained a default; the "
+                    "producer writes the whole envelope unconditionally "
+                    "(audit 53.89)",
+                )
+
+    def test_detail_and_today_producers_pinned_from_source(self):
+        import ast
+
+        src = (
+            _BACKEND_DIR / "app" / "api" / "routes"
+            / "world_cup_predictions.py"
+        ).read_bytes().decode("utf-8")
+        tree = ast.parse(src)
+
+        def route_fn(name):
+            return next(
+                node for node in tree.body
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name == name
+            )
+
+        def dict_keys(node):
+            return [
+                key.value for key in node.keys
+                if isinstance(key, ast.Constant)
+            ]
+
+        # get_match: the result literal opens with status/match, the match
+        # block is the nine-key MatchDetailRecord order, and exactly one
+        # conditional envelope key is assigned. `result` is declared with an
+        # annotation (`result: dict[str, Any] = {...}`), so this is an
+        # AnnAssign -- checking only Assign would pin nothing (the empty
+        # literal assertion catches it; same trap as 53.88's STATUS).
+        detail = route_fn("get_match")
+        result_keys = None
+        for node in ast.walk(detail):
+            targets = ()
+            if isinstance(node, ast.Assign):
+                targets = node.targets
+            elif isinstance(node, ast.AnnAssign) and node.value is not None:
+                targets = [node.target]
+            if (len(targets) == 1
+                    and isinstance(targets[0], ast.Name)
+                    and targets[0].id == "result"
+                    and isinstance(node.value, ast.Dict)):
+                result_keys = dict_keys(node.value)
+        self.assertEqual(
+            result_keys, ["status", "match"],
+            "get_match's result literal drifted (audit 53.89)",
+        )
+        detail_match_keys = [
+            dict_keys(node) for node in ast.walk(detail)
+            if isinstance(node, ast.Dict) and node.keys
+            and isinstance(node.keys[0], ast.Constant)
+            and node.keys[0].value == "match_id"
+        ]
+        self.assertEqual(
+            detail_match_keys,
+            [["match_id", "fixture_id", "home_team", "away_team",
+              "kickoff_utc", "venue", "stage", "group", "status"]],
+            "get_match's match block is no longer the nine-key "
+            "MatchDetailRecord order (audit 53.89)",
+        )
+        detail_conditional = [
+            node.targets[0].slice.value
+            for node in ast.walk(detail)
+            if isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Subscript)
+            and isinstance(node.targets[0].value, ast.Name)
+            and node.targets[0].value.id == "result"
+        ]
+        self.assertEqual(
+            detail_conditional, ["prediction"],
+            "get_match writes exactly one conditional envelope key; the "
+            "MatchDetailResponse contract follows it (audit 53.89)",
+        )
+
+        # get_today_matches: one dict-literal return, four keys; the
+        # element literal is the eleven-key MatchFixtureRecord order; the
+        # element carries exactly one conditional key.
+        today = route_fn("get_today_matches")
+        return_keys = [
+            dict_keys(node.value) for node in ast.walk(today)
+            if isinstance(node, ast.Return) and isinstance(node.value, ast.Dict)
+        ]
+        self.assertEqual(
+            return_keys, [["status", "date", "count", "matches"]],
+            "get_today_matches's return literal drifted; that order is "
+            "what TodayMatchesResponse's field order mirrors (audit "
+            "53.89)",
+        )
+        today_match_keys = [
+            dict_keys(node) for node in ast.walk(today)
+            if isinstance(node, ast.Dict) and node.keys
+            and isinstance(node.keys[0], ast.Constant)
+            and node.keys[0].value == "match_id"
+        ]
+        self.assertEqual(
+            today_match_keys,
+            [["match_id", "fixture_id", "home_team", "away_team",
+              "kickoff_utc", "venue", "stage", "group", "status",
+              "home_score", "away_score"]],
+            "get_today_matches's match block is no longer the eleven-key "
+            "MatchFixtureRecord order (audit 53.89)",
+        )
+        today_conditional = [
+            node.targets[0].slice.value
+            for node in ast.walk(today)
+            if isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Subscript)
+            and isinstance(node.targets[0].slice, ast.Constant)
+        ]
+        self.assertEqual(
+            today_conditional, ["prediction"],
+            "get_today_matches writes exactly one conditional element "
+            "key; MatchListEntry's optional prediction is that contract "
+            "(audit 53.89)",
+        )
+
+    def test_generated_types_carry_the_detail_and_today_envelopes(self):
+        text = _OUTPUT_PATH.read_bytes().decode("utf-8")
+        bodies = _interface_bodies(text)
+
+        def normalized(name):
+            return " ".join(
+                line.strip() for line in bodies[name] if line.strip()
+            )
+
+        _TAIL = "[k: string]: unknown;"
+        # MatchDetailRecord is registered as a root, so it renders CLOSED --
+        # no open tail. Losing the registration would reopen it silently.
+        self.assertEqual(
+            normalized("MatchDetailRecord"),
+            "match_id: string; fixture_id: string; home_team: string; "
+            "away_team: string; kickoff_utc: string | null; venue: "
+            "string | null; stage: string; group: string | null; "
+            "status: string | null;",
+            "the generated detail match block drifted -- if an open tail "
+            "appeared, the root registration in _frontend_export was "
+            "dropped (audit 53.89)",
+        )
+        self.assertEqual(
+            normalized("MatchDetailResponse"),
+            "status: string; match: MatchDetailRecord; prediction?: "
+            "MatchPredictionPayload | null; " + _TAIL,
+            "the generated detail envelope drifted (audit 53.89)",
+        )
+        self.assertEqual(
+            normalized("TodayMatchesResponse"),
+            "status: string; date: string; count: number; matches: "
+            "MatchListEntry[]; " + _TAIL,
+            "the generated today envelope drifted (audit 53.89)",
         )
 
 

@@ -5124,8 +5124,8 @@ SETS: tuple[MutationSet, ...] = (
             Mutation(
                 label="J144 MatchListEntry.prediction 丢掉默认值：条件键变必填",
                 path=_EVENT_MODEL,
-                old=b"    prediction: MatchPredictionPayload | None = None\r\n",
-                new=b"    prediction: MatchPredictionPayload | None\r\n",
+                old=b"    match: MatchFixtureRecord\r\n    prediction: MatchPredictionPayload | None = None\r\n",
+                new=b"    match: MatchFixtureRecord\r\n    prediction: MatchPredictionPayload | None\r\n",
                 guard_file=_T_GENERATE_TYPES,
                 guards=(
                     "test_the_matches_envelope_holds_both_element_shapes_byte_for_byte",
@@ -5135,14 +5135,14 @@ SETS: tuple[MutationSet, ...] = (
                     "⇒ 字段必须带默认值，无预测形状才能在旗子下不物化。丢掉默认值"
                     "后 `MatchListEntry.model_validate({\"match\": …})` 直接 "
                     "ValidationError —— 第二个形状的逐字节断言当场红。"
-                    "● 针单行、带 CRLF、命中 **1 次**（已实测）。"
+                    "● 针跨两行、带 CRLF、命中 **1 次**（53.89 换锚：MatchDetailResponse 合法新增了同一行 prediction 默认声明，单行命中 2 次 ⇒ 加 match: MatchFixtureRecord 前缀行消歧；换锚史随锚走）。"
                 ),
             ),
             Mutation(
                 label="J145 MatchFixtureRecord.fixture_id 改回 int：退役副本的失实类型复活",
                 path=_EVENT_MODEL,
-                old=b"    fixture_id: str\r\n",
-                new=b"    fixture_id: int\r\n",
+                old=b'    * ``kickoff_utc`` is written behind ``if m.kickoff_utc else None``, so the\r\n      producer can emit ``null`` there regardless of the ``nullable=False``\r\n      column.\r\n    """\r\n\r\n    match_id: str\r\n    fixture_id: str\r\n',
+                new=b'    * ``kickoff_utc`` is written behind ``if m.kickoff_utc else None``, so the\r\n      producer can emit ``null`` there regardless of the ``nullable=False``\r\n      column.\r\n    """\r\n\r\n    match_id: str\r\n    fixture_id: int\r\n',
                 guard_file=_T_GENERATE_TYPES,
                 guards=("test_the_fixture_record_is_faithful_to_the_row",),
                 note=(
@@ -5150,7 +5150,7 @@ SETS: tuple[MutationSet, ...] = (
                     "手写 `MatchFixture` 把 `fixture_id` 声明成 `number`，而列是 "
                     "`String(32)`。改回 `int` 后 pydantic 会把线上字符串重序列化成"
                     "整数（**改线上字节**），且 `tsc` 看不见（TS 里同为 `number`）。"
-                    "● 针单行、带 CRLF、命中 **1 次**（已实测）。"
+                    "● 针跨七行、带 CRLF、命中 **1 次**（53.89 换锚：MatchDetailRecord 的九键字段与 MatchFixtureRecord 前 9 字段逐字节相同，单行 fixture_id: str 命中 2 次 ⇒ 经 docstring 末 bullet（if m.kickoff_utc 措辞为本类独有）锚定到本类字段）。"
                 ),
             ),
             Mutation(
@@ -5765,7 +5765,7 @@ SETS: tuple[MutationSet, ...] = (
             Mutation(
                 label="J177 裸路由清单丢一条：精确集合判据（53.80）与现状脱钩",
                 path=_T_GENERATE_TYPES_REPO,
-                old=b'    "GET /api/world-cup/predictions/today",\r\n',
+                old=b'    "POST /api/events/analyze",\r\n',
                 new=b"",
                 guard_file=_T_GENERATE_TYPES,
                 guards=(
@@ -5780,8 +5780,8 @@ SETS: tuple[MutationSet, ...] = (
                     "一条 ⇒ unexpected 红。J104（本地副本类）仍由同守卫的 "
                     "`wrong` 身份断言兜住，与本判据互补（§4.2：N 判据 ⇒ N "
                     "变异）。"
-                    "● 针单行、带 CRLF、命中 **1 次**（已实测；init-db 是清单"
-                    "最后一行、全文件唯一）。删除型编辑，删除数 1。"
+                    "● 针单行、带 CRLF、命中 **1 次**。删除型编辑，删除数 1。换锚史：53.88 init-db→today（init-db 条目被合法删除）；53.89 today→analyze（today 具名后条目被合法删除，analyze 是文档化保留的最后一行）。旧注：已实测；init-db 是清单"
+                    "最后一行、全文件唯一——该注所述锚已被 53.89 取代）。"
                 ),
             ),
             Mutation(
@@ -6176,6 +6176,91 @@ SETS: tuple[MutationSet, ...] = (
                     "§53.88：discover/status + init-db 具名后哨兵裸清单 5→3；滑回"
                     "裸类 ⇒ observed 多出该路由 ⇒ 集合相等断言红。"
                     "● 针单行、无换行、命中 **1 次**（已实测）。"
+                ),
+            ),
+            Mutation(
+                label="J201 get_match 回绑裸 FlexibleResponse：哨兵集合判据脱钩",
+                path=_WORLD_CUP_PREDICTIONS,
+                old=b'    response_model=MatchDetailResponse,',
+                new=b'    response_model=__import__("app.models.event", fromlist=["x"]).FlexibleResponse,',
+                guard_file=_T_GENERATE_TYPES,
+                guards=(
+                    "test_both_routes_bind_named_envelopes_with_the_flag",
+                ),
+                note=(
+                    "§53.89（match detail + today）：两条读具名后哨兵裸清单 3→1"
+                    "（仅剩文档化保留的 POST /api/events/analyze——LLM 演进 blob，"
+                    "§Z16 排除性契约先例）；滑回裸类 ⇒ observed 多出该路由 ⇒ "
+                    "集合相等断言红 + 绑定断言红（new 用 __import__ 别名写法：本片已把 FlexibleResponse 从本模块 import 撤除，裸名字面量会 NameError 假红——§4.3 导入错误 ≈ 空判据）。"
+                    "● 针单行、无换行、命中 **1 次**（import 行是裸名、字节不同）。"
+                ),
+            ),
+            Mutation(
+                label="J202 get_today_matches 回绑裸 FlexibleResponse：哨兵集合判据脱钩",
+                path=_WORLD_CUP_PREDICTIONS,
+                old=b'    response_model=TodayMatchesResponse,',
+                new=b'    response_model=__import__("app.models.event", fromlist=["x"]).FlexibleResponse,',
+                guard_file=_T_GENERATE_TYPES,
+                guards=(
+                    "test_both_routes_bind_named_envelopes_with_the_flag",
+                ),
+                note=(
+                    "§53.89：today 元素复用 MatchListEntry（与 /matches 同一 "
+                    "11 键块 + 同一 _serialize_prediction，共享即契约）；信封 "
+                    "TodayMatchesResponse 四键无条件写。回绑裸类 ⇒ 集合相等 + "
+                    "集合相等 + 绑定断言红（new 用 __import__ 别名写法：本片已把 FlexibleResponse 从本模块 import 撤除，裸名字面量会 NameError 假红——§4.3 导入错误 ≈ 空判据）。"
+                    "● 针单行、无换行、命中 **1 次**（import 行是裸名、字节不同）。"
+                ),
+            ),
+            Mutation(
+                label="J203 get_match 的 match 块 status 键改名：九键钉源判据脱钩",
+                path=_WORLD_CUP_PREDICTIONS,
+                old=b'"status": match.status\r\n            }\r\n        }',
+                new=b'"match_status": match.status\r\n            }\r\n        }',
+                guard_file=_T_GENERATE_TYPES,
+                guards=(
+                    "test_detail_and_today_producers_pinned_from_source",
+                ),
+                note=(
+                    "§53.89：get_match 的 match 块 9 键（无 home_score/away_score）"
+                    "⇒ 独立 MatchDetailRecord，禁止共享 MatchFixtureRecord（53.83 "
+                    "判据③同名不同形）。键改名后钉源键序断言红（必填 status 字段"
+                    "缺键同时 422）。"
+                    "● 针跨三行、带 CRLF、命中 **1 次**（today 同键带逗号、list "
+                    "路由用 m.status，字节均不同；无逗号+双右括号恰消歧）。"
+                ),
+            ),
+            Mutation(
+                label="J204 today 信封 date 键改名：四键钉源判据脱钩",
+                path=_WORLD_CUP_PREDICTIONS,
+                old=b'    "date": now.date().isoformat(),\r\n',
+                new=b'    "match_date": now.date().isoformat(),\r\n',
+                guard_file=_T_GENERATE_TYPES,
+                guards=(
+                    "test_detail_and_today_producers_pinned_from_source",
+                ),
+                note=(
+                    "§53.89：get_today_matches 单一 dict 字面量 return，四键序即"
+                    "TodayMatchesResponse 字段序（status/date/count/matches）。"
+                    "键改名后钉源键序断言红（必填 date 字段缺键同时 422）。"
+                    "● 针单行、带 CRLF、命中 **1 次**（已实测）。"
+                ),
+            ),
+            Mutation(
+                label="J205 MatchDetailResponse.prediction 撤默认值：条件键判据脱钩",
+                path=_EVENT_MODEL,
+                old=b'    match: MatchDetailRecord\r\n    prediction: MatchPredictionPayload | None = None\r\n',
+                new=b'    match: MatchDetailRecord\r\n    prediction: MatchPredictionPayload | None\r\n',
+                guard_file=_T_GENERATE_TYPES,
+                guards=(
+                    "test_detail_prediction_is_optional_and_today_reuses_match_list_entry",
+                ),
+                note=(
+                    "§53.89：prediction 只在有预测行时写 ⇒ 必带默认值 + 旗（§Z4）；"
+                    "撤默认值后 is_required 判据红、无预测行的线上形状在响应校验层"
+                    "500（wire 测试同红，判据在两处独立）。"
+                    "● 针跨两行、带 CRLF、命中 **1 次**（MatchListEntry 同型 prediction "
+                    "行前缀是 match: MatchFixtureRecord、字节不同）。"
                 ),
             ),
         ),

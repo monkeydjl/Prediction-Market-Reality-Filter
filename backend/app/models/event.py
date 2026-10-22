@@ -2971,6 +2971,68 @@ class MatchListResponse(FlexibleResponse):
     matches: list[MatchListEntry]
 
 
+class MatchDetailRecord(BaseModel):
+    """The ``match`` block of ``GET /matches/{match_id}`` (audit 53.89).
+
+    Nine keys, *not* the eleven of ``MatchFixtureRecord``: the detail route
+    never copies ``home_score`` / ``away_score``. Per audit 53.83 criterion
+    (3) -- same field names, two different key sets -- the two match blocks
+    must not share a model, so this is an independent declaration rather than
+    a subclass or a widened copy.
+
+    Everything else mirrors ``MatchFixtureRecord``'s faithfulness: all nine
+    keys are written unconditionally (no defaults -- a missing key is a
+    producer regression, not a shape), ``kickoff_utc`` is written behind a
+    truthiness test, and ``venue`` / ``group`` / ``status`` mirror nullable
+    columns and are copied raw.
+    """
+
+    match_id: str
+    fixture_id: str
+    home_team: str
+    away_team: str
+    kickoff_utc: str | None
+    venue: str | None
+    stage: str
+    group: str | None
+    status: str | None
+
+
+class MatchDetailResponse(FlexibleResponse):
+    """Response for ``GET /matches/{match_id}`` (audit 53.89).
+
+    ``status`` / ``match`` are written on every success path (the only other
+    exit is the 404 ``HTTPException``); ``prediction`` is written only when a
+    prediction row exists, so it carries a ``= None`` default and the route
+    must set ``response_model_exclude_unset=True`` -- without the flag the
+    no-prediction shape would serialise an explicit ``"prediction": null``
+    the producer never wrote. The prediction block reuses
+    ``MatchPredictionPayload``: the same ``_serialize_prediction`` builds it,
+    so sharing is the contract, not a shortcut.
+    """
+
+    status: str
+    match: MatchDetailRecord
+    prediction: MatchPredictionPayload | None = None
+
+
+class TodayMatchesResponse(FlexibleResponse):
+    """Response for ``GET /today`` (audit 53.89).
+
+    The element shape is exactly ``MatchListEntry``: ``get_today_matches``
+    writes the same eleven-key match block as ``list_matches`` and feeds the
+    same ``_serialize_prediction``, so the element reuses the published model
+    instead of declaring a copy. The conditionality lives one level down
+    (``MatchListEntry.prediction``), so the route sets the same flag as
+    ``/matches`` does.
+    """
+
+    status: str
+    date: str
+    count: int
+    matches: list[MatchListEntry]
+
+
 class PredictionHistoryEntry(BaseModel):
     """One element of ``PredictionHistoryResponse.history`` (audit 53.77).
 

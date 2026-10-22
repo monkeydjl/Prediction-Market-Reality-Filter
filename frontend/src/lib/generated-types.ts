@@ -2797,24 +2797,21 @@ export interface MatchAnalyzeResponse {
   [k: string]: unknown;
 }
 /**
- * The ``match`` block of one ``/matches`` element (audit 53.76).
+ * The ``match`` block of ``GET /matches/{match_id}`` (audit 53.89).
  *
- * ``list_matches`` writes all eleven keys unconditionally, so none of them
- * carries a default: a missing key here is a producer regression, not a shape.
- * The client's hand-written copy was wrong about six of them, which is what
- * this model fixes:
+ * Nine keys, *not* the eleven of ``MatchFixtureRecord``: the detail route
+ * never copies ``home_score`` / ``away_score``. Per audit 53.83 criterion
+ * (3) -- same field names, two different key sets -- the two match blocks
+ * must not share a model, so this is an independent declaration rather than
+ * a subclass or a widened copy.
  *
- * * ``fixture_id`` is ``String(32)`` on the model, not an integer;
- * * ``venue`` / ``status`` mirror nullable columns and are copied raw, so they
- *   can be ``null`` even though every row currently has a value;
- * * ``group`` / ``home_score`` / ``away_score`` are nullable too, and because
- *   the keys are always written they are *required but nullable* rather than
- *   optional;
- * * ``kickoff_utc`` is written behind ``if m.kickoff_utc else None``, so the
- *   producer can emit ``null`` there regardless of the ``nullable=False``
- *   column.
+ * Everything else mirrors ``MatchFixtureRecord``'s faithfulness: all nine
+ * keys are written unconditionally (no defaults -- a missing key is a
+ * producer regression, not a shape), ``kickoff_utc`` is written behind a
+ * truthiness test, and ``venue`` / ``group`` / ``status`` mirror nullable
+ * columns and are copied raw.
  */
-export interface MatchFixtureRecord {
+export interface MatchDetailRecord {
   match_id: string;
   fixture_id: string;
   home_team: string;
@@ -2824,21 +2821,24 @@ export interface MatchFixtureRecord {
   stage: string;
   group: string | null;
   status: string | null;
-  home_score: number | null;
-  away_score: number | null;
 }
 /**
- * One element of ``MatchListResponse.matches`` (audit 53.76).
+ * Response for ``GET /matches/{match_id}`` (audit 53.89).
  *
- * ``list_matches`` writes ``match`` on every iteration and ``prediction`` only
- * when a prediction row exists, so ``prediction`` is the one conditional key.
- * That is why the route must set ``response_model_exclude_unset=True``: without
- * it, the no-prediction shape would grow an explicit ``"prediction": null``
- * that the producer never wrote.
+ * ``status`` / ``match`` are written on every success path (the only other
+ * exit is the 404 ``HTTPException``); ``prediction`` is written only when a
+ * prediction row exists, so it carries a ``= None`` default and the route
+ * must set ``response_model_exclude_unset=True`` -- without the flag the
+ * no-prediction shape would serialise an explicit ``"prediction": null``
+ * the producer never wrote. The prediction block reuses
+ * ``MatchPredictionPayload``: the same ``_serialize_prediction`` builds it,
+ * so sharing is the contract, not a shortcut.
  */
-export interface MatchListEntry {
-  match: MatchFixtureRecord;
+export interface MatchDetailResponse {
+  status: string;
+  match: MatchDetailRecord;
   prediction?: MatchPredictionPayload | null;
+  [k: string]: unknown;
 }
 /**
  * The ``prediction`` block of one ``/matches`` element (audit 53.76).
@@ -3046,6 +3046,50 @@ export interface ExplanationEngineWeights {
   learned_elo_weight?: number | null;
   blend?: number | null;
   [k: string]: unknown;
+}
+/**
+ * The ``match`` block of one ``/matches`` element (audit 53.76).
+ *
+ * ``list_matches`` writes all eleven keys unconditionally, so none of them
+ * carries a default: a missing key here is a producer regression, not a shape.
+ * The client's hand-written copy was wrong about six of them, which is what
+ * this model fixes:
+ *
+ * * ``fixture_id`` is ``String(32)`` on the model, not an integer;
+ * * ``venue`` / ``status`` mirror nullable columns and are copied raw, so they
+ *   can be ``null`` even though every row currently has a value;
+ * * ``group`` / ``home_score`` / ``away_score`` are nullable too, and because
+ *   the keys are always written they are *required but nullable* rather than
+ *   optional;
+ * * ``kickoff_utc`` is written behind ``if m.kickoff_utc else None``, so the
+ *   producer can emit ``null`` there regardless of the ``nullable=False``
+ *   column.
+ */
+export interface MatchFixtureRecord {
+  match_id: string;
+  fixture_id: string;
+  home_team: string;
+  away_team: string;
+  kickoff_utc: string | null;
+  venue: string | null;
+  stage: string;
+  group: string | null;
+  status: string | null;
+  home_score: number | null;
+  away_score: number | null;
+}
+/**
+ * One element of ``MatchListResponse.matches`` (audit 53.76).
+ *
+ * ``list_matches`` writes ``match`` on every iteration and ``prediction`` only
+ * when a prediction row exists, so ``prediction`` is the one conditional key.
+ * That is why the route must set ``response_model_exclude_unset=True``: without
+ * it, the no-prediction shape would grow an explicit ``"prediction": null``
+ * that the producer never wrote.
+ */
+export interface MatchListEntry {
+  match: MatchFixtureRecord;
+  prediction?: MatchPredictionPayload | null;
 }
 /**
  * Response for ``GET /matches`` (audit 53.76).
@@ -3532,6 +3576,23 @@ export interface SyncFixturesResponse {
   skipped: number;
   remaining_matches: number;
   season: string;
+  [k: string]: unknown;
+}
+/**
+ * Response for ``GET /today`` (audit 53.89).
+ *
+ * The element shape is exactly ``MatchListEntry``: ``get_today_matches``
+ * writes the same eleven-key match block as ``list_matches`` and feeds the
+ * same ``_serialize_prediction``, so the element reuses the published model
+ * instead of declaring a copy. The conditionality lives one level down
+ * (``MatchListEntry.prediction``), so the route sets the same flag as
+ * ``/matches`` does.
+ */
+export interface TodayMatchesResponse {
+  status: string;
+  date: string;
+  count: number;
+  matches: MatchListEntry[];
   [k: string]: unknown;
 }
 /**

@@ -4226,13 +4226,14 @@ SETS: tuple[MutationSet, ...] = (
                 ),
             ),
             Mutation(
-                label="J104 world_cup_predictions 重新定义本地 FlexibleResponse 副本：身份判定的普查与守卫全盲",
-                path=_WORLD_CUP_PREDICTIONS,
-                old=b'router = APIRouter(prefix="/world-cup/predictions", tags=["world-cup-predictions"])\r\n',
+                label="J104 events.py（analyze 路由模块）重新定义本地 FlexibleResponse 副本：身份判定的普查与守卫全盲",
+                path=_DIGEST_ROUTES,
+                old=b'router = APIRouter()\r\n',
                 new=(
-                    b'router = APIRouter(prefix="/world-cup/predictions", tags=["world-cup-predictions"])\r\n'
+                    b'router = APIRouter()\r\n'
                     b"\r\n"
                     b"\r\n"
+                    b'from pydantic import BaseModel  # noqa: E402 -- mutation\r\n'
                     b"class FlexibleResponse(BaseModel):  # noqa: F811 -- mutation\r\n"
                     b'    model_config = {"extra": "allow"}\r\n'
                 ),
@@ -4246,10 +4247,20 @@ SETS: tuple[MutationSet, ...] = (
                     "响应字节不变、`tsc` 绿、其余守卫全绿，**只有按身份（`is`）"
                     "判定的守卫与普查会瞎**（当时把 63 数成 45）。本地类是"
                     "`extra=\"allow\"` 空模型 ⇒ 线上行为完全相同，这正是它躲了"
-                    "这么久的原因。🔴 变异体用普通 dict 作 `model_config`（不必"
-                    "重新引入 `ConfigDict`，保持单区替换、字节合法）；锚是 router "
-                    "定义行（本文件唯一），`new` 在其后插两空行 + 类定义 ⇒ 类定义"
-                    "位于 import 之后、路由装饰器之前 ⇒ 18 条路由绑到本地类。"
+                    "这么久的原因。🔴 换锚史：53.89 具名化后 world_cup_predictions "
+                    "撤除 FlexibleResponse 引用 ⇒ 本地副本成死代码、守卫不红"
+                    "（2026-10-23 整集重放实证 stayed GREEN）⇒ 原锚前提消失、判据"
+                    "本体仍活 ⇒ 换锚到仍绑定裸类的唯一模块 events.py（analyze 是"
+                    "哨兵 BARE_FLEXIBLE_RESPONSE_ROUTES 唯一文档化保留条；§4.3 "
+                    "地址漂移换锚、判据不变）。新锚 `router = APIRouter()` 行"
+                    "（events.py:296）本文件唯一（已字节复核），位于 analyze 装饰器"
+                    "（332）之前 ⇒ 变异后 analyze 绑本地类 ⇒ `wrong` 身份断言必红。"
+                    "变异体自带 `from pydantic import BaseModel`（events.py 原本"
+                    "不导入 ⇒ 缺它会 NameError 假红，§4.3 导入错误≈空判据）；"
+                    "events.py 既有针全是装饰器行，与 router 行锚字节不相交"
+                    "（已 grep 复核）。旧锚：world_cup_predictions 的 router 定义行"
+                    "（`new` 在其后插两空行 + 类定义 ⇒ 18 条路由绑到本地类）——"
+                    "该注所述状态已被 53.89 取代。"
                 ),
             ),
             Mutation(

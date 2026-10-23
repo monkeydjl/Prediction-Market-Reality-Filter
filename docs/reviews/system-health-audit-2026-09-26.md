@@ -15376,3 +15376,12 @@ subtests；针审计 **275/275** 恰命中 1 次；tsc 零错；vitest 94 文件
 - 修锚过程三坑（脚本化字节手术的新坑位）：① 12 空格块尾锚被子串匹配进 16 空格行（`            ),` 是 `                ),` 的后缀）⇒ 锚必须带前置换行；② 七行针含 `"""` 在双引号字节字面量内提前闭合 ⇒ 换单引号字面量（内容无单引号）；③ heredoc 内中文+转义易搅 ⇒ 一律 Write 落盘脚本执行。
 - 门：ruff ✓ / mypy ✓（331 文件）/ `generate_types --check` ✓ / 全量 junit **9229 tests，failures=0 errors=0**，skipped 11（本机 safe-delete 吞 summary 行，passed/subtest 分解以 junit 为准）；tsc ✓ / vitest 127 文件 755 tests ✓；harness 自守护 64/342 绿；四门终态在换锚收尾后复验 ✓。生成物 +86/−25（3 新 interface + MatchDetailRecord 闭合化重排）。
 - 前提与余项：today 元素复用的前提是「与 list_matches 同一 11 键块 + 同一 `_serialize_prediction`」——已由钉源断言逐字钉住，前提失守即红。哨兵裸清单恒 1 条（analyze），**本 audit 的「返回 dict 的端点三件套」普查就此收官**；余下消费侧散项（status 族两条字面量调用点绑定）维持 53.86 记录不变。
+
+### 53.90 —— 消费侧收口：两条 status 调用点绑定具名信封（2026-10-23）
+
+- 目标：53.86 记录的最后一项消费侧散项——`ingestApi.status` / `ingestApi.sourceStatus` 原本 cast 到松袋 `IngestResult`，而松袋从未携带这两条生产者的键（fact status 最好只显示裸 count、source status 摘要**完全空白**）。绑定后前端读 `WorldCupStatusResponse` / `WorldCupDataSourceStatusResponse`（J8/J9/J198 零主张血统的最后一环）。
+- 前端（2 文件）：ingest-api.ts 两条调用点绑定具名信封 + IngestResult docstring 更正（「绑定留消费侧片」的旧说法失效）；ingest-console.tsx 两个 state 改具名类型 + 新增 `summarizeFactStatus` / `summarizeSourceStatus`（按具名形状取数：档案存在性 + count + by_kind 明细；readiness.ok + issues 数 + last_import_failed + 推荐导入模式）——`ResultBlock` 加可选 `line` 覆盖 prop，松袋摘要路径原样保留。此前松袋下 source status 的摘要行是**静默空白**：正是「消费侧散项」失明形态的活例。
+- 守卫：`WorldCupStatusContractTests` 新增 `test_frontend_binds_the_named_status_envelopes`（六向钉：两条 `ingestFetch<具名>` 必在 + 两条松袋泛型禁现 + console 两个 `useState<具名>` 必在）——绑定判据钉在 ingest-api.ts 与 ingest-console.tsx 两处字节上。
+- 变异 +2（291→293，套内 212–213）：J206 / J207（各自退回松袋 cast → 绑定断言红；J207 的针取跨行调用的第一行 `ingestFetch<` 泛型前缀——`Promise<` 泛型与 import 裸名字节不同恰消歧）。四阶段 [OK] ×2；harness 自守护 64/344。
+- 门：ruff ✓ / mypy ✓（331 文件）/ `generate_types --check` ✓ / 全量 **6744 passed + 11 skipped + 2477 subtests**，junit 9232 tests failures=0 errors=0；tsc ✓ / vitest 127 文件 755 tests ✓。无生产代码改动、无模型改动、无生成物改动——纯消费侧片。
+- 前提与余项：绑定结论的前提是「两条生产者自 53.86 起形状稳定」——钉源守卫仍在位，漂移即红。**53.86 起累积的消费侧散项就此清零**；`IngestResult` 松袋仅剩 test/validate/preview 族调用点（其形状异质性是 53.83 判据④族的既有裁决，非散项）。

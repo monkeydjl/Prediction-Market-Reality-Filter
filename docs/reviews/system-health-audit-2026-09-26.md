@@ -15385,3 +15385,13 @@ subtests；针审计 **275/275** 恰命中 1 次；tsc 零错；vitest 94 文件
 - 变异 +2（291→293，套内 212–213）：J206 / J207（各自退回松袋 cast → 绑定断言红；J207 的针取跨行调用的第一行 `ingestFetch<` 泛型前缀——`Promise<` 泛型与 import 裸名字节不同恰消歧）。四阶段 [OK] ×2；harness 自守护 64/344。
 - 门：ruff ✓ / mypy ✓（331 文件）/ `generate_types --check` ✓ / 全量 **6744 passed + 11 skipped + 2477 subtests**，junit 9232 tests failures=0 errors=0；tsc ✓ / vitest 127 文件 755 tests ✓。无生产代码改动、无模型改动、无生成物改动——纯消费侧片。
 - 前提与余项：绑定结论的前提是「两条生产者自 53.86 起形状稳定」——钉源守卫仍在位，漂移即红。**53.86 起累积的消费侧散项就此清零**；`IngestResult` 松袋仅剩 test/validate/preview 族调用点（其形状异质性是 53.83 判据④族的既有裁决，非散项）。
+
+### 53.91 —— ingest 动作调用点逐族绑定 + IngestResult 松袋退役（2026-10-23）
+
+- 目标：53.83 判据④族「preview 逐族具名留后续」的消费侧收官——ingest 客户端最后三个松散动作（preview / test / validate）从 `IngestResult` 松袋绑定到逐族具名模型，松袋退役。import 族不动：53.83 已证全部 import 模型继承 `IngestImportResponse` 五键基类，单一基类重载对每条 import 路由都忠实。
+- 普查（路由→模型映射全表）：preview 逐路径异质（data → IngestDataPreviewResponse `{converted_fact_count, facts}`；data/bundle、api-football、sportmonks 三条 → 共享 IngestBundlePreviewResponse 运行元数据信封；其余 payload 路径各一个 IngestXxxSourcePreviewResponse）；test 逐 provider（api-football → IngestApiFootballTestResponse / sportmonks → IngestSportmonksTestResponse）；validate 唯一共享（IngestPipelineValidateResponse）。34 个生成名逐一核对在案。
+- 前端（2 文件）：runConfigured/runPayload 重写为字面量重载族（12+12 条单行重载 + 尾部 catch-all——运行时变量的调用点落 catch-all 拿全 union，显示代码经开放尾巴照旧读键）；新增 `ConfiguredPath`/`PayloadPath` 字面量 union 镜像两个注册表（注册表 path 字段改字面量类型——**字面量 union 当场逮住一处注册表/重载不匹配**，这是逐族绑定的即时收益）；新增 `ConfiguredActionResult`/`PayloadActionResult` union；`IngestResult` 连同其 docstring 整体删除。console：state 改 union 类型、summarize 参数放宽为五族 union（全部 extra=allow ⇒ 松散显示键照旧经 typeof 窄化读取）、`runSourceAction` 的 path 参数收紧为 `ConfiguredPath`。
+- 守卫（新类 `IngestActionBindingTests`，4 用例 / 108 subtests）：两条重载族**逐行字节钉**（表驱动 19 条精确重载行 + 4 条 path-union 重载行）+ 松袋退役负向断言（`export type IngestResult` 禁现）+ 两个 union 导出正向断言。**字节钉是唯一拦截点**：两个现存生成名互换仍是合法 TS，tsc 全盲（J208/J209 的变异形状正是利用这一点验证守卫承重）。
+- 变异 +3（293→296，套内 214–216）：J208（data/source preview 重载换绑 IngestImportResponse → 逐行断言红）/ J209（validate 重载换绑 → 同上）/ J210（复活 `export type IngestResult = unknown;` → 负向断言红，J199 血统）。四阶段 [OK] ×3；harness 自守护 64/347。
+- 门：ruff ✓ / mypy ✓（331 文件）/ `generate_types --check` ✓ / 全量 **6747 passed + 11 skipped + 2504 subtests**，junit 9262 tests failures=0 errors=0；tsc ✓ / vitest 127 文件 755 tests ✓。无生产代码/模型/生成物改动——纯消费侧片。
+- 前提与余项：重载表的前提是「注册表路径 ↔ 后端路由」一致——已由字面量 union 与路由映射普查双向钉住，加新源/新动作时 tsc 与守卫会同时缺行报警。**ingest 客户端的零主张 cast 至此全部清零**；松散形状仅剩 catch-all union（运行时变量调用的既有设计，非散项）。

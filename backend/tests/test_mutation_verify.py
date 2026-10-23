@@ -39,7 +39,7 @@ def _every_mutation():
 
 
 class InventoryTests(unittest.TestCase):
-    def test_the_twelve_sets_are_present(self):
+    def test_the_thirteen_sets_are_present(self):
         """Pins the inventory, so a whole set cannot be dropped silently.
 
         Deliberately exact and ordered: adding a set means editing this test,
@@ -51,7 +51,10 @@ class InventoryTests(unittest.TestCase):
         listed -- ``market-snapshot-order`` was added without the rename -- so
         that rename (audit section 53.47) corrected the count as well. Renamed
         once more for ``market-snapshot-contract`` (audit section 53.49) and
-        again for ``frontend-type-closure`` (audit section 53.50).
+        again for ``frontend-type-closure`` (audit section 53.50), and once
+        more for ``odds-quota`` (audit section 53.94), where the pre-launch
+        audit found the Odds API's quota-exhausted short circuit had no
+        assertion behind it.
         """
         self.assertEqual(
             [s.key for s in mutation_verify.SETS],
@@ -68,6 +71,7 @@ class InventoryTests(unittest.TestCase):
                 "market-audit-timestamps",
                 "market-snapshot-contract",
                 "frontend-type-closure",
+                "odds-quota",
             ],
         )
 
@@ -148,7 +152,10 @@ class InventoryTests(unittest.TestCase):
 
         Mirrors ``-k``'s substring semantics, because the selector matches a test
         whose id *contains* the name -- so the check asks whether any ``def
-        test_...`` line in the file contains it. A guard need only resolve in
+        test_...`` line in the file contains it. ``async def`` counts too: the
+        selector matches async tests exactly the same way, and the first
+        async guard (``odds-quota``, audit 53.94) was reported as "not defined"
+        by a scan that only looked for ``def test``. A guard need only resolve in
         *some* named file: ``_run_guards`` applies the same selector to every file
         and a name absent from one of them simply matches nothing there, which is
         documented as intended.
@@ -164,7 +171,7 @@ class InventoryTests(unittest.TestCase):
                     defined.extend(
                         line.strip()
                         for line in path.read_text(encoding="utf-8").splitlines()
-                        if line.lstrip().startswith("def test")
+                        if line.lstrip().startswith(("def test", "async def test"))
                     )
             for guard in mutation.guards:
                 if guard.startswith("test_") and not any(

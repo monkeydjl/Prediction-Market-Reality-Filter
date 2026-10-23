@@ -272,6 +272,8 @@ _QUEUE_ROUTES = "backend/app/api/routes/review_queue.py"
 _QUEUE_CLI = "backend/scripts/review_queue_cli.py"
 _PROD_TEMPLATE = "backend/.env.production.example"
 _PROBE = "backend/scripts/report_probability_scale_outliers.py"
+_ODDS_API_SERVICE = "backend/app/services/odds_api_service.py"
+_ODDS_TESTS = "tests/test_odds_api_multi_league.py"
 
 _PRED_STORE = "backend/app/memory/prediction_store.py"
 _TRADES_STORE = "backend/app/memory/simulated_trade_store.py"
@@ -6350,6 +6352,68 @@ SETS: tuple[MutationSet, ...] = (
                     "守卫有 NotIn 负向断言——复活行使断言红（与 J199 inline interface "
                     "复活同判据、不同宿主）。新增行是合法 TS ⇒ 同样只有字节钉能拦。"
                     "● 针单行、无换行、命中 **1 次**（已实测）。新增型编辑，删除数 0。"
+                ),
+            ),
+        ),
+    ),
+    MutationSet(
+        key="odds-quota",
+        title="The Odds API 配额耗尽守卫：remaining<=0 时不得发请求（O1/O2）",
+        rationale=(
+            "免费层 500 请求/月，而 ODDS_FETCH_INTERVAL_MIN 默认 10 分钟、一次 "
+            "fetch_all_sports_odds 是「1 次 /sports 发现 + 每个 sport key 一次 odds」"
+            "（该路径无响应缓存）——默认参数在生产启用该源会在一两天内耗尽免费额度。"
+            "代码里最后一道闸是 remaining<=0 短路，而它有两处、两个消费者："
+            "fetch_match_odds 守 World Cup 路径、fetch_all_sports_odds 守 kernel 定时"
+            "任务。2026-10-23 上线前审计发现两处都没有断言：既有用例只把 "
+            "_quota_remaining 重置为 None 以免干扰、scheduler 测试整体 patch 掉后者，"
+            "没有任何用例证明「耗尽后不发请求」承重（§4.2 空头；一处成员两处消费，"
+            "只补一处仍是空头）。单独成套而不塞进既有十二套：本条判据与类型闭合/"
+            "标度探针不同族，并套会让「哪个套测什么」变糊（对照 multi-guard-file 的"
+            "加套先例）。"
+        ),
+        mutations=(
+            Mutation(
+                label="O1 删掉配额耗尽短路：remaining=0 仍照常发付费请求",
+                path=_ODDS_API_SERVICE,
+                old=(
+                    b"    # Skip if quota is known to be exhausted\r\n"
+                    b"    if _quota_remaining is not None and _quota_remaining <= 0:\r\n"
+                    b'        logger.debug("Odds API quota exhausted, skipping fetch")\r\n'
+                    b"        return None\r\n"
+                ),
+                new=b"",
+                guard_file=_ODDS_TESTS,
+                guards=(
+                    "test_exhausted_quota_short_circuits_before_building_a_client",
+                ),
+                note=(
+                    "§53.94 上线前审计：删掉整个短路块（含注释行），函数继续走到 "
+                    "httpx 客户端构造 ⇒ 新用例用 assert_not_called 断言「一个客户端都"
+                    "没建」（比只断言返回 None 强：请求失败也返回 None）。"
+                    "● 针四行、CRLF（odds_api_service.py 纯 CRLF），命中 **1 次**"
+                    "（已字节复核）；删除型编辑，删除数 4。"
+                ),
+            ),
+            Mutation(
+                label="O2 删掉批量抓取的配额耗尽短路：remaining=0 仍发 discovery 调用",
+                path=_ODDS_API_SERVICE,
+                old=(
+                    b"    if _quota_remaining is not None and _quota_remaining <= 0:\r\n"
+                    b'        logger.debug("Odds API quota exhausted, skipping fetch_all_sports_odds")\r\n'
+                    b"        return {}\r\n"
+                ),
+                new=b"",
+                guard_file=_ODDS_TESTS,
+                guards=(
+                    "test_all_sports_odds_stops_when_quota_is_exhausted",
+                ),
+                note=(
+                    "§53.94：与 O1 同判据、不同消费者（kernel 定时任务 vs World Cup "
+                    "路径），§4.2「一成员 N 处消费只补 1 处」正是空头成因之一 —— "
+                    "scheduler 测试整体 patch 掉本函数，这条分支此前从未被任何测试执行。"
+                    "● 针三行（此函数不含注释行）、CRLF，命中 **1 次**（裸 if 行全文件 "
+                    "3 次，针靠 logger 文案消歧）；删除型编辑，删除数 3。"
                 ),
             ),
         ),

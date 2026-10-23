@@ -235,3 +235,51 @@ def test_feature_builder_odds_default_none_when_absent():
     # When market_raw has no odds, behavior is unchanged (None).
     assert fs.market.odds_home is None
     assert fs.market.odds_away is None
+
+
+# ---------------------------------------------------------------------------
+# 6. Quota-exhausted short circuit (audit 53.94)
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_exhausted_quota_short_circuits_before_building_a_client():
+    """remaining<=0 must skip the fetch before any HTTP client exists.
+
+    The Odds API free tier is 500 requests/month while the scheduler's
+    default interval is 10 minutes and one run costs 1 discovery call plus
+    one odds call per sport key. The in-memory counter is the last gate
+    before a paid request, so the assertion is stronger than "returned
+    None" (a failed request also returns None): no client may be built.
+    """
+    from app.services import odds_api_service
+
+    with patch.object(odds_api_service, "ODDS_API_KEY", "fake-key"), \
+         patch.object(odds_api_service, "settings") as mock_settings, \
+         patch.object(odds_api_service, "_quota_remaining", 0), \
+         patch("app.services.odds_api_service.httpx.AsyncClient") as mock_client_cls:
+        mock_settings.ODDS_API_ENABLED = True
+        result = await odds_api_service.fetch_match_odds(
+            "Los Angeles Lakers", "Boston Celtics", competition="nba"
+        )
+        mock_client_cls.assert_not_called()
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_all_sports_odds_stops_when_quota_is_exhausted():
+    """The bulk fetch must not spend even a discovery call at remaining<=0.
+
+    Second of the two quota guards: ``fetch_match_odds`` gates the World Cup
+    path, this one gates the kernel job. Scheduler tests patch the whole
+    function out, so before audit 53.94 this branch was never executed by
+    any test.
+    """
+    from app.services import odds_api_service
+
+    with patch.object(odds_api_service, "ODDS_API_KEY", "fake-key"), \
+         patch.object(odds_api_service, "settings") as mock_settings, \
+         patch.object(odds_api_service, "_quota_remaining", 0), \
+         patch("app.services.odds_api_service.httpx.AsyncClient") as mock_client_cls:
+        mock_settings.ODDS_API_ENABLED = True
+        result = await odds_api_service.fetch_all_sports_odds()
+        mock_client_cls.assert_not_called()
+    assert result == {}

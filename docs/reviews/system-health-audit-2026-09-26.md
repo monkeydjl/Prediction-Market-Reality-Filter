@@ -15418,3 +15418,16 @@ subtests；针审计 **275/275** 恰命中 1 次；tsc 零错；vitest 94 文件
 - 未动：`event_store.json` 记录（baseline 0.2 / estimated 30.17 / 「押 YES」建议）与 `event_market_links`（verified=1）**保持原样——历史记录不改写**；0.2 的语义（0.2% vs $0.20）不可恢复，重算依据不成立（用户未选 B）。备份保留在 `.workbuddy/v2_loop.backup-before-void-trade42.db`（gitignored）。
 - 余项：无。该项从「仍待拍板」清单移除；剩余待决项为 baseline_probability 契约（已由 `Field(ge=0, le=100)` 约束，语义歧义非契约可解）与本地 key 轮换（用户动作）。
 
+---
+
+### 53.94 —— 上线前三项：backup production preflight 实证 + Odds API 配额空头补齐 + Transfermarkt 抓取姿态（2026-10-23）
+
+- **⑤ backup production preflight（从「未实测」到实证）**。机制：`_resolve_encryption_key` 在 production 拒绝明文，`main()` 先跑 `validate_production_config`。实测三组：① production 无凭据 → `Configuration refused startup: RuntimeError`、exit 1（脱敏只报类型名，设计如此）；② production 八条规则全满足但无口令 → exit 1，异常精确落 `_resolve_encryption_key`，**输出目录为空**（拒绝先于任何目录/归档创建）；③ 正向对照 `--encryption-key` → exit 0、6 038 869 B 归档，条目加密位 True、无口令读内容 `RuntimeError`、带口令读出 JSON 首字节 ⇒ AES 生效。测试产物已清理。
+- 🔴 **顺带发现的第三道门**：`PMRF_ENV=production` 默认要求 `.env.production` overlay 存在，缺失即拒（报错给出正规绕行 `PMRF_ENV_FILE_REQUIRED=false`，声明由进程环境直接配置——容器场景即 `PMRF_ENV_FILE_REQUIRED=false`，届时**全部**配置来自环境）。本次实测即用的这条绕行。
+- **③ Odds API 配额（代码级审计 + 空头补齐）**。配额模型：`ODDS_FETCH_INTERVAL_MIN` 默认 **10 分钟**；`fetch_all_sports_odds` 每次 = 1 次 `/sports` 发现 + 每个 sport key 一次 `/sports/{key}/odds`，该路径**无响应缓存**（`odds_cache_service` 只服务 World Cup 管线）。免费层 500 请求/月 ⇒ 若按默认间隔启用该源，一次运行 N 个 sport key 即 N+1 次计费，按 6 次/小时计，500 次在**一两天内**耗尽；现有防护只到「remaining≤0 短路 + <50 告警」，没有间隔预算。建议生产（待拍板）：`ODDS_FETCH_INTERVAL_MIN=1440`（1 次/天）+ 观察 `x-requests-remaining`；`.env.production.example` 目前**不含任何 ODDS 键**（BACKUP 键在、ODDS 缺）。
+- **③ 的空头（§4.2）**：`remaining≤0` 短路有**两处、两个消费者**——`fetch_match_odds`（World Cup 路径）与 `fetch_all_sports_odds`（kernel 定时任务）。审计发现两处都无断言：既有用例只把 `_quota_remaining` 重置为 None 以免干扰，scheduler 测试则整体 patch 掉后者 ⇒ 该分支从未被任何测试执行。**一处成员两处消费、只补一处仍是空头**，故补两条用例（断言 `AsyncClient` 一次都没被构造，强于「返回 None/{}」——请求失败也返回这些值）+ 两条变异 O1/O2。四阶段 [OK] ×2；红因逐条实证（`Expected 'AsyncClient' to not have been called. Called 1 times.`），还原 sha256 一致。
+- **新套 `odds-quota`（13 套 / 298 条）**：判据与类型闭合/标度探针不同族，并套会让「哪个套测什么」变糊，故单独成套（对照 `multi-guard-file` 加套先例）；集合钉随改名 `test_the_thirteen_sets_are_present` 并在 docstring 记缘由。**顺手修了自守护盲区**：guard 名解析此前只认 `def test_`，`async def test_` 会被报「未定义」（`pytest -k` 两者都匹配）——已改为接受两种前缀，docstring 记下这是首个 async guard 暴露的。
+- **④ Transfermarkt 抓取姿态**。已有：7 天 DB 缓存（`get_cached_market_value`）、30s 超时、异常 → 返回 None（优雅降级、失败不写缓存）。缺：无请求间延迟、无重试；UA 伪装 Chrome 120 —— **ToS 风险点**（伪装 UA 通常违反站点条款，且与「限速礼貌抓取」相悖）。建议（待拍板）：ToS 由业务方确认；若保留该源，加 1–2s 间隔 + 换可识别 UA（后者可能触发封禁，需实测）。
+- 门：ruff ✓ / mypy ✓（331 文件）/ `generate_types --check` ✓ / 全量 **6749 passed + 11 skipped + 2507 subtests**，junit 9267 tests failures=0 errors=0（766s）；harness 自守护 64 passed + 350 subtests（junit 414/0/0）。
+- 前提与余项：ODDS 建议值以「免费层 500/月」为前提；若升级付费层可放宽间隔。Transfermarkt 的 ToS 结论必须由业务方给出，代码只能提供技术姿态。**生产 `.env` 的两处配置（ODDS 键、BACKUP_ENCRYPTION_KEY）仍未写**，属于上线动作而非代码。
+

@@ -15407,3 +15407,14 @@ subtests；针审计 **275/275** 恰命中 1 次；tsc 零错；vitest 94 文件
 - 门：ruff ✓ / mypy ✓（331 文件）/ `generate_types --check` ✓ / 全量 **6747 passed + 11 skipped + 2504 subtests**，junit 9262 tests failures=0 errors=0（733s）。无生产代码/模型/生成物改动——纯 harness 维护片，清单仍 **296** 条（换锚不增减）。
 - 前提与余项：本针的前提是「events.py 仍是唯一绑定裸 `FlexibleResponse` 的模块」，由哨兵集合相等（恒 1 条：analyze）钉住；若 analyze 将来具名化，哨兵变空集 ⇒ 本针须再次换锚，届时若判据本体随裸类一起消失则按「判据消失」退役并写明原因。
 
+---
+
+### 53.93 —— KXBRUVSEAT-35 存量处置收口：补齐作废闭环（交易层 void）（2026-10-23）
+
+- 背景：HANDOFF ⑦ 待拍板项①（作废/重算/保留），用户选**作废**。只读核查推翻了「尚未作废」的前提：predictions 已于 2026-09-27T15:13 置 `voided`（无 Brier、不进校准），但 simulated_trades 中 `sim-17003d7c978e`（#42）**仍 `open`** —— 全库 49 条 open 交易中**唯一**一条其预测已 voided，非系统性积压。
+- 归因（机制层）：现版 `void_prediction` 会连带 `_maybe_void_trade → void_trade`（幂等、`exit_reason='voided'`、不进胜率/PnL/edge 统计），该路径已有双侧测试（`test_void_prediction_also_voids_the_open_simulated_trade` / `test_void_trade_moves_the_open_trade_out_of_the_open_list`）⇒ 2026-09-27 那次 void 走的不是该路径（fix 前执行或直改 SQL），属**一次性数据残留，无需改代码**。
+- 处置（用户拍板 A = 完成作废闭环）：先备份 `v2_loop.db`（17 772 544 字节，sha256 一致）→ 调契约层 `void_trade('0779bde4dcd63e08')`。后态：`status=voided`、`exit_reason=voided`、`exit_time=2026-10-23T14:30:27Z`，`pnl_pct`/`actual_outcome`/`is_win` 均 NULL（未结算、不进统计）；**二次调用返回 None**（幂等实证）。
+- 复核：计数 open 49→48 / closed 31（不变）/ voided 0→1；closed 统计三元组（条数、pnl 和、win 数）前后逐字相同 **（31, 52.39, 13）**；「open 交易 × voided 预测」不一致 **1→0**；列表口径 open 不含 / voided 含 / closed 不含（尺寸 48/1/31）。
+- 未动：`event_store.json` 记录（baseline 0.2 / estimated 30.17 / 「押 YES」建议）与 `event_market_links`（verified=1）**保持原样——历史记录不改写**；0.2 的语义（0.2% vs $0.20）不可恢复，重算依据不成立（用户未选 B）。备份保留在 `.workbuddy/v2_loop.backup-before-void-trade42.db`（gitignored）。
+- 余项：无。该项从「仍待拍板」清单移除；剩余待决项为 baseline_probability 契约（已由 `Field(ge=0, le=100)` 约束，语义歧义非契约可解）与本地 key 轮换（用户动作）。
+

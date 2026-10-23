@@ -19,7 +19,9 @@
 import { getApiBase } from "@/lib/env";
 import type {
   IngestImportResponse,
+  WorldCupDataSourceStatusResponse,
   WorldCupResolveResponse,
+  WorldCupStatusResponse,
 } from "@/lib/generated-types";
 import {
   ApiError,
@@ -197,16 +199,14 @@ export const PAYLOAD_SOURCES: PayloadSource[] = [
 
 /**
  * Loose display bag for the ingest actions whose client call sites stay
- * loose (backend naming is complete through audit 53.86 -- test / validate
- * and the two status reads are named in generated-types; binding the
- * literal call sites is the consumption-side slice's job) and for
- * previews whose shape varies per path family (audit 53.83: the import
- * family split into per-producer models, and the preview family is just
- * as heterogeneous -- `data/preview` returns `{converted_fact_count,
- * facts}` while the bundle previews return the run-metadata envelope --
- * so a single "preview" overload would mislabel the non-bundle paths;
- * they are typed per family when their consumption-side slices bind
- * them).
+ * loose (backend naming is complete through audit 53.86 -- the two status
+ * reads bound their named envelopes in audit 53.90) and for previews whose
+ * shape varies per path family (audit 53.83: the import family split into
+ * per-producer models, and the preview family is just as heterogeneous --
+ * `data/preview` returns `{converted_fact_count, facts}` while the bundle
+ * previews return the run-metadata envelope -- so a single "preview"
+ * overload would mislabel the non-bundle paths; they are typed per family
+ * when their consumption-side slices bind them).
  */
 export type IngestResult = Partial<
   Pick<
@@ -365,10 +365,16 @@ async function runPayload(
 }
 
 export const ingestApi = {
-  status: (): Promise<IngestResult> => ingestFetch<IngestResult>(`${PREFIX}/status`),
+  // Audit 53.90: both status reads bind the envelopes 53.86 named -- the
+  // loose IngestResult bag never carried their keys (fact status showed a
+  // bare count at best; source status rendered nothing at all).
+  status: (): Promise<WorldCupStatusResponse> =>
+    ingestFetch<WorldCupStatusResponse>(`${PREFIX}/status`),
 
-  sourceStatus: (): Promise<IngestResult> =>
-    ingestFetch<IngestResult>(`${PREFIX}/data/sources/status`),
+  sourceStatus: (): Promise<WorldCupDataSourceStatusResponse> =>
+    ingestFetch<WorldCupDataSourceStatusResponse>(
+      `${PREFIX}/data/sources/status`,
+    ),
 
   facts: (filters: { kind?: string; team?: string } = {}): Promise<FactsResponse> => {
     const params = new URLSearchParams();

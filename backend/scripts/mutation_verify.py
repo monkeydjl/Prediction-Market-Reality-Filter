@@ -6263,6 +6263,38 @@ SETS: tuple[MutationSet, ...] = (
                     "行前缀是 match: MatchFixtureRecord、字节不同）。"
                 ),
             ),
+            Mutation(
+                label="J206 ingestApi.status 退回松袋 cast：消费侧绑定判据脱钩",
+                path="frontend/src/lib/world-cup/ingest-api.ts",
+                old=b'ingestFetch<WorldCupStatusResponse>(`${PREFIX}/status`)',
+                new=b'ingestFetch<IngestResult>(`${PREFIX}/status`)',
+                guard_file=_T_GENERATE_TYPES,
+                guards=(
+                    "test_frontend_binds_the_named_status_envelopes",
+                ),
+                note=(
+                    "§53.90（消费侧片）：两条 status 调用点绑定 53.86 具名信封——"
+                    "松袋 IngestResult 从未携带生产者键（fact status 最好只显示 count、"
+                    "source status 完全空白）。退回松袋后绑定断言红（J8/J9/J198 血统）。"
+                    "● 针单行、无换行、命中 **1 次**（`${PREFIX}/status` 全文件唯一）。"
+                ),
+            ),
+            Mutation(
+                label="J207 ingestApi.sourceStatus 退回松袋 cast：消费侧绑定判据脱钩",
+                path="frontend/src/lib/world-cup/ingest-api.ts",
+                old=b'ingestFetch<WorldCupDataSourceStatusResponse>(',
+                new=b'ingestFetch<IngestResult>(',
+                guard_file=_T_GENERATE_TYPES,
+                guards=(
+                    "test_frontend_binds_the_named_status_envelopes",
+                ),
+                note=(
+                    "§53.90：sourceStatus 调用跨两行（fetch 泛型在第一行行尾），"
+                    "针取第一行 ingestFetch< 泛型前缀——Promise< 泛型与 import 裸名"
+                    "字节不同 ⇒ 恰消歧。退回松袋后绑定断言红。"
+                    "● 针单行、无换行、命中 **1 次**（已实测）。"
+                ),
+            ),
         ),
     ),
 )

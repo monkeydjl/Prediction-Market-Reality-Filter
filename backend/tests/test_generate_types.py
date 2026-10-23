@@ -4295,6 +4295,60 @@ class WorldCupStatusContractTests(unittest.TestCase):
             "53.86)",
         )
 
+    def test_frontend_binds_the_named_status_envelopes(self):
+        """The two ingest-console status reads must read the named
+        envelopes (audit 53.90).
+
+        Until 53.90 both call sites cast to the loose ``IngestResult``
+        display bag, whose keys these producers never send -- the fact
+        status showed a bare count at best and the source status
+        rendered nothing at all. Same zero-claim lineage as J8/J9/J198:
+        the binding is pinned byte-level on the frontend source, and
+        falling back to the loose bag is the J206/J207 mutation.
+        """
+        src = (
+            _FRONTEND_DIR / "src" / "lib" / "world-cup" / "ingest-api.ts"
+        ).read_bytes().decode("utf-8")
+        self.assertIn(
+            'ingestFetch<WorldCupStatusResponse>(`${PREFIX}/status`)',
+            src,
+            "ingestApi.status must read the named WorldCupStatusResponse "
+            "envelope (audit 53.90)",
+        )
+        self.assertIn(
+            "ingestFetch<WorldCupDataSourceStatusResponse>(",
+            src,
+            "ingestApi.sourceStatus must read the named "
+            "WorldCupDataSourceStatusResponse envelope (audit 53.90)",
+        )
+        self.assertNotIn(
+            'ingestFetch<IngestResult>(`${PREFIX}/status`)',
+            src,
+            "the loose display bag is back on the fact-status call site",
+        )
+        self.assertNotIn(
+            'ingestFetch<IngestResult>(`${PREFIX}/data/sources/status`)',
+            src,
+            "the loose display bag is back on the source-status call site",
+        )
+        # The console consumes the named shapes, not the loose bag.
+        console = (
+            _FRONTEND_DIR / "src" / "components" / "sports" / "world-cup"
+            / "ingest-console.tsx"
+        ).read_bytes().decode("utf-8")
+        self.assertIn(
+            "useState<WorldCupStatusResponse | null>(null)",
+            console,
+            "the fact-status state must be typed by the named envelope "
+            "(audit 53.90)",
+        )
+        self.assertIn(
+            "useState<WorldCupDataSourceStatusResponse | null>(null)",
+            console,
+            "the source-status state must be typed by the named envelope "
+            "(audit 53.90)",
+        )
+
 
 class WorldCupFactsResolveContractTests(unittest.TestCase):
     """The facts list and the deterministic resolver, named in audit

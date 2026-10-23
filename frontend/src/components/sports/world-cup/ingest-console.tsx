@@ -1,6 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import type {
+  WorldCupDataSourceStatusResponse,
+  WorldCupStatusResponse,
+} from "@/lib/generated-types";
 import {
   CONFIGURED_SOURCES,
   PAYLOAD_SOURCES,
@@ -63,11 +67,44 @@ function summarize(result: IngestResult | ResolveResult): string {
   return result.message ? (head ? `${head} · ${result.message}` : String(result.message)) : head;
 }
 
-function ResultBlock({ testId, result }: { testId: string; result: IngestResult | ResolveResult }) {
-  const line = summarize(result);
+// 53.90: the two status reads are named envelopes (audit 53.86), so their
+// summary lines key off the named shapes -- the loose display bag never had
+// these keys, which is why source status rendered nothing at all before.
+function summarizeFactStatus(r: WorldCupStatusResponse): string {
+  if (!r.exists) return "事实档案不存在";
+  const kinds = Object.entries(r.by_kind)
+    .map(([kind, n]) => `${kind} ${n}`)
+    .join(" / ");
+  return kinds ? `事实档案 共 ${r.count} 条 · ${kinds}` : `事实档案 共 ${r.count} 条`;
+}
+
+function summarizeSourceStatus(r: WorldCupDataSourceStatusResponse): string {
+  const readiness = r.real_data_readiness;
+  const parts: string[] = [
+    readiness.ok ? "实时数据就绪" : `就绪检查 ${readiness.issues.length} 项待处理`,
+  ];
+  if (readiness.last_import_failed) parts.push("上次导入失败");
+  if (readiness.recommended_qualification_import_label) {
+    parts.push(readiness.recommended_qualification_import_label);
+  }
+  return parts.join(" · ");
+}
+
+function ResultBlock({
+  testId,
+  result,
+  line,
+}: {
+  testId: string;
+  result: IngestResult | ResolveResult | WorldCupStatusResponse | WorldCupDataSourceStatusResponse;
+  /** Overrides summarize() for the named status envelopes, whose keys the
+   * loose display bag never carried (audit 53.90). */
+  line?: string;
+}) {
+  const summary = line ?? summarize(result as IngestResult | ResolveResult);
   return (
     <div data-testid={testId} className="mt-3 space-y-2 text-sm">
-      {line && <p className="text-foreground">{line}</p>}
+      {summary && <p className="text-foreground">{summary}</p>}
       <details className="text-xs">
         <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
           查看原始响应
@@ -92,8 +129,8 @@ export function IngestConsole() {
   const [error, setError] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<PendingConfirm | null>(null);
 
-  const [factStatus, setFactStatus] = useState<IngestResult | null>(null);
-  const [sourceStatus, setSourceStatus] = useState<IngestResult | null>(null);
+  const [factStatus, setFactStatus] = useState<WorldCupStatusResponse | null>(null);
+  const [sourceStatus, setSourceStatus] = useState<WorldCupDataSourceStatusResponse | null>(null);
   const [sourceResult, setSourceResult] = useState<IngestResult | null>(null);
   const [payloadResult, setPayloadResult] = useState<IngestResult | null>(null);
   const [resolveResult, setResolveResult] = useState<ResolveResult | null>(null);
@@ -274,8 +311,20 @@ export function IngestConsole() {
             {pending === "source-status" ? "读取中…" : "读取数据源状态"}
           </button>
         </div>
-        {factStatus && <ResultBlock testId="fact-status-result" result={factStatus} />}
-        {sourceStatus && <ResultBlock testId="source-status-result" result={sourceStatus} />}
+        {factStatus && (
+          <ResultBlock
+            testId="fact-status-result"
+            result={factStatus}
+            line={summarizeFactStatus(factStatus)}
+          />
+        )}
+        {sourceStatus && (
+          <ResultBlock
+            testId="source-status-result"
+            result={sourceStatus}
+            line={summarizeSourceStatus(sourceStatus)}
+          />
+        )}
       </div>
 
       <div className="rounded-lg border border-border bg-card p-4">

@@ -15395,3 +15395,15 @@ subtests；针审计 **275/275** 恰命中 1 次；tsc 零错；vitest 94 文件
 - 变异 +3（293→296，套内 214–216）：J208（data/source preview 重载换绑 IngestImportResponse → 逐行断言红）/ J209（validate 重载换绑 → 同上）/ J210（复活 `export type IngestResult = unknown;` → 负向断言红，J199 血统）。四阶段 [OK] ×3；harness 自守护 64/347。
 - 门：ruff ✓ / mypy ✓（331 文件）/ `generate_types --check` ✓ / 全量 **6747 passed + 11 skipped + 2504 subtests**，junit 9262 tests failures=0 errors=0；tsc ✓ / vitest 127 文件 755 tests ✓。无生产代码/模型/生成物改动——纯消费侧片。
 - 前提与余项：重载表的前提是「注册表路径 ↔ 后端路由」一致——已由字面量 union 与路由映射普查双向钉住，加新源/新动作时 tsc 与守卫会同时缺行报警。**ingest 客户端的零主张 cast 至此全部清零**；松散形状仅剩 catch-all union（运行时变量调用的既有设计，非散项）。
+---
+
+### 53.92 —— 变异清单整集四阶段重放：295/296 通过，J104 按地址漂移换锚（2026-10-23）
+
+- 目标：命名战役收官后的 §4.3 规定动作——12 套 × 296 条变异**整集四阶段重放**（前全绿 / 变后必红 / 还原必绿 / sha256 一致），验证所有针在演化后的代码上仍承重。
+- 结果：296 条全部跑完，**295 [OK] / 1 [BAD] / 0 [FAIL]**（后台运行约 2 小时；重放期间不触碰仓库文件，收尾 `git status` 干净）。唯一异常 J104（套内 index 110）：`stayed GREEN in 1/1 file(s)`——变后守卫仍绿，是承重失效，不是 harness 故障。
+- J104 诊断（先问「还有谁在断言这件事」）：原锚前提是「world_cup_predictions 的 18 条路由绑裸 `FlexibleResponse`」，本地同名副本会 shadow 之 ⇒ 身份守卫的 `wrong` 断言红。53.89 具名化后该模块**已撤除 `FlexibleResponse` 引用**（grep 0 命中）⇒ 注入的本地副本成死代码、无路由绑定 ⇒ 守卫**合法地**不红。判据本体（同名副本致身份守卫盲）仍活，只是存活地址只剩 events.py（analyze 是哨兵 `BARE_FLEXIBLE_RESPONSE_ROUTES` 唯一文档化保留条）⇒ 按 §4.2 判为**地址漂移**：换锚，不换判据。
+- 换锚实施：`path=_DIGEST_ROUTES`（events.py），锚 `router = APIRouter()`（:296；字节复核命中恰 1 次，位于 analyze 装饰器 :332 之前）⇒ 变异后 analyze 绑本地类。变异体**自带** `from pydantic import BaseModel`——events.py 原本不导入 BaseModel，缺它必 NameError（§4.3：导入错误≈空判据）。与 events.py 既有针（J98/J101 等装饰器行）字节不相交；同组无重复 path+old；针恰 1 次由自守护钉住。
+- 验证：四阶段 **[OK]**（green before / red after 1/1 / green after restore / bytes restored）。**红因实证**（手动 backup→apply→run→revert，还原 sha256 一致）：`AssertionError: Lists differ: ['/api/events/analyze -> app.api.routes.events.FlexibleResponse'] != []` —— 正是 `wrong` 身份断言，非导入错误。harness 自守护 64 passed + 347 subtests，junit 411 tests failures=0 errors=0。
+- 门：ruff ✓ / mypy ✓（331 文件）/ `generate_types --check` ✓ / 全量 **6747 passed + 11 skipped + 2504 subtests**，junit 9262 tests failures=0 errors=0（733s）。无生产代码/模型/生成物改动——纯 harness 维护片，清单仍 **296** 条（换锚不增减）。
+- 前提与余项：本针的前提是「events.py 仍是唯一绑定裸 `FlexibleResponse` 的模块」，由哨兵集合相等（恒 1 条：analyze）钉住；若 analyze 将来具名化，哨兵变空集 ⇒ 本针须再次换锚，届时若判据本体随裸类一起消失则按「判据消失」退役并写明原因。
+

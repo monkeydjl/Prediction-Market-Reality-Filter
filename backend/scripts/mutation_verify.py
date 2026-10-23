@@ -6295,6 +6295,52 @@ SETS: tuple[MutationSet, ...] = (
                     "● 针单行、无换行、命中 **1 次**（已实测）。"
                 ),
             ),
+            Mutation(
+                label="J208 data/source preview 重载换绑 ImportResponse：逐族绑定判据脱钩",
+                path="frontend/src/lib/world-cup/ingest-api.ts",
+                old=b'function runConfigured(path: "data/source", action: "preview", replace?: boolean): Promise<IngestDataSourceFilePreviewResponse>;',
+                new=b'function runConfigured(path: "data/source", action: "preview", replace?: boolean): Promise<IngestImportResponse>;',
+                guard_file=_T_GENERATE_TYPES,
+                guards=(
+                    "test_configured_source_overloads_bind_the_named_models",
+                ),
+                note=(
+                    "§53.91（ingest 动作逐族绑定）：preview 逐路径形状（53.83 普查），"
+                    "tsc 对「两个现存生成名互换」全盲 ⇒ 后端字节守卫是唯一拦截点。"
+                    "换绑后该行断言红（仍是合法 TS——这正是需要字节钉的原因）。"
+                    "● 针单行、无换行、命中 **1 次**（path+action 字面量对全文件唯一）。"
+                ),
+            ),
+            Mutation(
+                label="J209 validate 重载换绑 ImportResponse：共享形状判据脱钩",
+                path="frontend/src/lib/world-cup/ingest-api.ts",
+                old=b'function runConfigured(path: ConfiguredPath, action: "validate", replace?: boolean): Promise<IngestPipelineValidateResponse>;',
+                new=b'function runConfigured(path: ConfiguredPath, action: "validate", replace?: boolean): Promise<IngestImportResponse>;',
+                guard_file=_T_GENERATE_TYPES,
+                guards=(
+                    "test_configured_source_overloads_bind_the_named_models",
+                ),
+                note=(
+                    "§53.91：validate 是唯一共享形状（两个 provider 同一 IngestPipelineValidateResponse，53.85）。换绑后断言红。"
+                    "● 针单行、无换行、命中 **1 次**（已实测）。"
+                ),
+            ),
+            Mutation(
+                label="J210 复活 IngestResult 松袋：退役判据脱钩",
+                path="frontend/src/lib/world-cup/ingest-api.ts",
+                old=b'export type PayloadActionResult =',
+                new=b'export type IngestResult = unknown;\r\nexport type PayloadActionResult =',
+                guard_file=_T_GENERATE_TYPES,
+                guards=(
+                    "test_the_loose_display_bag_stays_retired",
+                ),
+                note=(
+                    "§53.91：IngestResult 松袋已退役（其显示键全部存在于具名模型），"
+                    "守卫有 NotIn 负向断言——复活行使断言红（与 J199 inline interface "
+                    "复活同判据、不同宿主）。新增行是合法 TS ⇒ 同样只有字节钉能拦。"
+                    "● 针单行、无换行、命中 **1 次**（已实测）。新增型编辑，删除数 0。"
+                ),
+            ),
         ),
     ),
 )

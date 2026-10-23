@@ -18,7 +18,25 @@
 
 import { getApiBase } from "@/lib/env";
 import type {
+  IngestApiFootballTestResponse,
+  IngestBundleFeedsPreviewResponse,
+  IngestBundleFilePreviewResponse,
+  IngestBundlePreviewResponse,
+  IngestBundleUrlPreviewResponse,
+  IngestDataPreviewResponse,
+  IngestDataSourceFilePreviewResponse,
+  IngestFootballDataPreviewResponse,
   IngestImportResponse,
+  IngestLineupsSourcePreviewResponse,
+  IngestMatchEventsSourcePreviewResponse,
+  IngestMatchSourcePreviewResponse,
+  IngestOfficialCsvSourcePreviewResponse,
+  IngestPipelineValidateResponse,
+  IngestPlayerAwardsSourcePreviewResponse,
+  IngestPlayerStatusSourcePreviewResponse,
+  IngestSportmonksTestResponse,
+  IngestStandingsSourcePreviewResponse,
+  IngestStatisticsSourcePreviewResponse,
   WorldCupDataSourceStatusResponse,
   WorldCupResolveResponse,
   WorldCupStatusResponse,
@@ -42,11 +60,38 @@ const IMPORT_TIMEOUT_MS = 300_000;
 
 export type SourceAction = "preview" | "import" | "test" | "validate";
 
+/**
+ * Literal path unions mirroring the two registries below -- they are what
+ * makes the per-family overload dispatch below type-safe (a registry path
+ * with no matching overload is a compile error, not a silent loose cast).
+ */
+export type ConfiguredPath =
+  | "data/source"
+  | "data/bundle/source"
+  | "data/bundle/url"
+  | "data/bundle/feeds"
+  | "data/bundle/api-football"
+  | "data/bundle/football-data"
+  | "data/bundle/sportmonks";
+
+export type PayloadPath =
+  | "data"
+  | "data/bundle"
+  | "official-csv"
+  | "matches"
+  | "match-events"
+  | "lineups"
+  | "standings"
+  | "player-awards"
+  | "player-status"
+  | "statistics"
+  | "facts";
+
 export interface ConfiguredSource {
   key: string;
   label: string;
   /** Path segment under `/sports/world-cup`, without the action suffix. */
-  path: string;
+  path: ConfiguredPath;
   description: string;
   actions: SourceAction[];
   /** Operational caveat shown next to the row. */
@@ -56,7 +101,7 @@ export interface ConfiguredSource {
 export interface PayloadSource {
   key: string;
   label: string;
-  path: string;
+  path: PayloadPath;
   description: string;
   /** `facts` is import-only — the backend has no `facts/preview` route. */
   supportsPreview: boolean;
@@ -198,31 +243,45 @@ export const PAYLOAD_SOURCES: PayloadSource[] = [
 ];
 
 /**
- * Loose display bag for the ingest actions whose client call sites stay
- * loose (backend naming is complete through audit 53.86 -- the two status
- * reads bound their named envelopes in audit 53.90) and for previews whose
- * shape varies per path family (audit 53.83: the import family split into
- * per-producer models, and the preview family is just as heterogeneous --
- * `data/preview` returns `{converted_fact_count, facts}` while the bundle
- * previews return the run-metadata envelope -- so a single "preview"
- * overload would mislabel the non-bundle paths; they are typed per family
- * when their consumption-side slices bind them).
+ * The ingest actions' result types, bound per family in audit 53.91.
+ *
+ * The 53.83 census proved the preview family is heterogeneous per path
+ * (`data/preview` returns `{converted_fact_count, facts}` while every
+ * bundle preview returns the run-metadata envelope), and the test family
+ * is per provider (Api-Football vs Sportmonks) while validate is one
+ * shared shape. Imports are the one path-independent family: every import
+ * model extends the five-key ``IngestImportResponse`` base (53.83), so a
+ * single base-typed overload stays truthful for every import route while
+ * each subclass widens it on the wire.
+ *
+ * The retired ``IngestResult`` display bag was the loose stand-in for
+ * these families; its display keys all exist on the named models, so the
+ * console's ``summarize`` reads the same keys off the unions below.
  */
-export type IngestResult = Partial<
-  Pick<
-    IngestImportResponse,
-    "imported" | "error_count" | "errors" | "total" | "replace"
-  >
-> & {
-  status?: string;
-  message?: string;
-  ok?: boolean;
-  count?: number;
-  /** preview-family keys: named per path family in a later slice. */
-  converted_fact_count?: number;
-  facts?: unknown[];
-  [key: string]: unknown;
-};
+export type ConfiguredActionResult =
+  | IngestDataSourceFilePreviewResponse
+  | IngestBundleFilePreviewResponse
+  | IngestBundleUrlPreviewResponse
+  | IngestBundleFeedsPreviewResponse
+  | IngestBundlePreviewResponse
+  | IngestFootballDataPreviewResponse
+  | IngestApiFootballTestResponse
+  | IngestSportmonksTestResponse
+  | IngestPipelineValidateResponse
+  | IngestImportResponse;
+
+export type PayloadActionResult =
+  | IngestDataPreviewResponse
+  | IngestBundlePreviewResponse
+  | IngestOfficialCsvSourcePreviewResponse
+  | IngestMatchSourcePreviewResponse
+  | IngestMatchEventsSourcePreviewResponse
+  | IngestLineupsSourcePreviewResponse
+  | IngestStandingsSourcePreviewResponse
+  | IngestPlayerAwardsSourcePreviewResponse
+  | IngestPlayerStatusSourcePreviewResponse
+  | IngestStatisticsSourcePreviewResponse
+  | IngestImportResponse;
 
 export interface WorldCupFact {
   kind?: string;
@@ -307,57 +366,64 @@ export function parseIngestPayload(text: string): unknown {
 }
 
 /**
- * Run a no-body action against a configured source. The "import" overload
- * types the result as the five-key base contract: the 53.83 census split
- * the import family into per-producer subclasses that all extend
- * ``IngestImportResponse``, and the caller reads only the shared base keys,
- * so the base type stays truthful for every import route while each
- * subclass widens it on the wire. The other actions stay loose until their
- * consumption-side slices bind them (see IngestResult).
+ * Run a no-body action against a configured source (audit 53.91).
+ *
+ * Every preview is typed per path (the 53.83 census proved the preview
+ * family heterogeneous), test per provider, validate as one shared shape,
+ * and import as the one truthful base contract. The trailing catch-all
+ * overload keeps runtime-variable call sites compiling -- they get the
+ * whole union, which the console's display code reads through the open
+ * tails exactly as it did through the retired loose bag.
  */
-function runConfigured(
-  path: string,
-  action: "import",
-  replace?: boolean,
-): Promise<IngestImportResponse>;
-function runConfigured(
-  path: string,
-  action: Exclude<SourceAction, "import">,
-  replace?: boolean,
-): Promise<IngestResult>;
+function runConfigured(path: "data/source", action: "preview", replace?: boolean): Promise<IngestDataSourceFilePreviewResponse>;
+function runConfigured(path: "data/bundle/source", action: "preview", replace?: boolean): Promise<IngestBundleFilePreviewResponse>;
+function runConfigured(path: "data/bundle/url", action: "preview", replace?: boolean): Promise<IngestBundleUrlPreviewResponse>;
+function runConfigured(path: "data/bundle/feeds", action: "preview", replace?: boolean): Promise<IngestBundleFeedsPreviewResponse>;
+function runConfigured(path: "data/bundle/api-football", action: "preview", replace?: boolean): Promise<IngestBundlePreviewResponse>;
+function runConfigured(path: "data/bundle/football-data", action: "preview", replace?: boolean): Promise<IngestFootballDataPreviewResponse>;
+function runConfigured(path: "data/bundle/sportmonks", action: "preview", replace?: boolean): Promise<IngestBundlePreviewResponse>;
+function runConfigured(path: "data/bundle/api-football", action: "test", replace?: boolean): Promise<IngestApiFootballTestResponse>;
+function runConfigured(path: "data/bundle/sportmonks", action: "test", replace?: boolean): Promise<IngestSportmonksTestResponse>;
+function runConfigured(path: ConfiguredPath, action: "validate", replace?: boolean): Promise<IngestPipelineValidateResponse>;
+function runConfigured(path: ConfiguredPath, action: "import", replace?: boolean): Promise<IngestImportResponse>;
+function runConfigured(path: ConfiguredPath, action: SourceAction, replace?: boolean): Promise<ConfiguredActionResult>;
 async function runConfigured(
-  path: string,
+  path: ConfiguredPath,
   action: SourceAction,
   replace = false,
-): Promise<IngestResult> {
+): Promise<ConfiguredActionResult> {
   const query = action === "import" ? `?replace=${replace}` : "";
-  return ingestFetch<IngestResult>(`${PREFIX}/${path}/${action}${query}`, {
+  return ingestFetch<ConfiguredActionResult>(`${PREFIX}/${path}/${action}${query}`, {
     method: "POST",
     timeoutMs: action === "test" ? DEFAULT_TIMEOUT_MS : IMPORT_TIMEOUT_MS,
   });
 }
 
-/** Preview or import an operator-supplied payload (overloads mirror runConfigured). */
-function runPayload(
-  path: string,
-  action: "import",
-  payload: unknown,
-  replace?: boolean,
-): Promise<IngestImportResponse>;
-function runPayload(
-  path: string,
-  action: "preview",
-  payload: unknown,
-  replace?: boolean,
-): Promise<IngestResult>;
+/**
+ * Preview or import an operator-supplied payload (audit 53.91): previews
+ * typed per path, imports as the shared base contract; the trailing
+ * catch-all serves runtime-variable call sites with the whole union.
+ */
+function runPayload(path: "data", action: "preview", payload: unknown, replace?: boolean): Promise<IngestDataPreviewResponse>;
+function runPayload(path: "data/bundle", action: "preview", payload: unknown, replace?: boolean): Promise<IngestBundlePreviewResponse>;
+function runPayload(path: "official-csv", action: "preview", payload: unknown, replace?: boolean): Promise<IngestOfficialCsvSourcePreviewResponse>;
+function runPayload(path: "matches", action: "preview", payload: unknown, replace?: boolean): Promise<IngestMatchSourcePreviewResponse>;
+function runPayload(path: "match-events", action: "preview", payload: unknown, replace?: boolean): Promise<IngestMatchEventsSourcePreviewResponse>;
+function runPayload(path: "lineups", action: "preview", payload: unknown, replace?: boolean): Promise<IngestLineupsSourcePreviewResponse>;
+function runPayload(path: "standings", action: "preview", payload: unknown, replace?: boolean): Promise<IngestStandingsSourcePreviewResponse>;
+function runPayload(path: "player-awards", action: "preview", payload: unknown, replace?: boolean): Promise<IngestPlayerAwardsSourcePreviewResponse>;
+function runPayload(path: "player-status", action: "preview", payload: unknown, replace?: boolean): Promise<IngestPlayerStatusSourcePreviewResponse>;
+function runPayload(path: "statistics", action: "preview", payload: unknown, replace?: boolean): Promise<IngestStatisticsSourcePreviewResponse>;
+function runPayload(path: PayloadPath, action: "import", payload: unknown, replace?: boolean): Promise<IngestImportResponse>;
+function runPayload(path: PayloadPath, action: "preview" | "import", payload: unknown, replace?: boolean): Promise<PayloadActionResult>;
 async function runPayload(
-  path: string,
+  path: PayloadPath,
   action: "preview" | "import",
   payload: unknown,
   replace = false,
-): Promise<IngestResult> {
+): Promise<PayloadActionResult> {
   const query = action === "import" ? `?replace=${replace}` : "";
-  return ingestFetch<IngestResult>(`${PREFIX}/${path}/${action}${query}`, {
+  return ingestFetch<PayloadActionResult>(`${PREFIX}/${path}/${action}${query}`, {
     method: "POST",
     body: payload,
     timeoutMs: IMPORT_TIMEOUT_MS,

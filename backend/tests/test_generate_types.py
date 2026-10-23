@@ -4350,6 +4350,115 @@ class WorldCupStatusContractTests(unittest.TestCase):
         )
 
 
+class IngestActionBindingTests(unittest.TestCase):
+    """The ingest action call sites, bound per family in audit 53.91.
+
+    The 53.83 census proved preview heterogeneous per path and test per
+    provider, with validate shared and import bound to the truthful
+    ``IngestImportResponse`` base; the retired ``IngestResult`` bag was the
+    loose stand-in whose display keys the named models all carry. Each
+    overload line is pinned byte-exactly: a model swap between two
+    *existing* generated names still compiles (tsc is blind to it), so the
+    backend byte guard is the only interception point -- J208-J210.
+    """
+
+    _CONFIGURED = (
+        ('"data/source"', '"preview"', "IngestDataSourceFilePreviewResponse"),
+        ('"data/bundle/source"', '"preview"', "IngestBundleFilePreviewResponse"),
+        ('"data/bundle/url"', '"preview"', "IngestBundleUrlPreviewResponse"),
+        ('"data/bundle/feeds"', '"preview"', "IngestBundleFeedsPreviewResponse"),
+        ('"data/bundle/api-football"', '"preview"', "IngestBundlePreviewResponse"),
+        ('"data/bundle/football-data"', '"preview"', "IngestFootballDataPreviewResponse"),
+        ('"data/bundle/sportmonks"', '"preview"', "IngestBundlePreviewResponse"),
+        ('"data/bundle/api-football"', '"test"', "IngestApiFootballTestResponse"),
+        ('"data/bundle/sportmonks"', '"test"', "IngestSportmonksTestResponse"),
+    )
+
+    _PAYLOAD = (
+        ('"data"', '"preview"', "IngestDataPreviewResponse"),
+        ('"data/bundle"', '"preview"', "IngestBundlePreviewResponse"),
+        ('"official-csv"', '"preview"', "IngestOfficialCsvSourcePreviewResponse"),
+        ('"matches"', '"preview"', "IngestMatchSourcePreviewResponse"),
+        ('"match-events"', '"preview"', "IngestMatchEventsSourcePreviewResponse"),
+        ('"lineups"', '"preview"', "IngestLineupsSourcePreviewResponse"),
+        ('"standings"', '"preview"', "IngestStandingsSourcePreviewResponse"),
+        ('"player-awards"', '"preview"', "IngestPlayerAwardsSourcePreviewResponse"),
+        ('"player-status"', '"preview"', "IngestPlayerStatusSourcePreviewResponse"),
+        ('"statistics"', '"preview"', "IngestStatisticsSourcePreviewResponse"),
+    )
+
+    def test_configured_source_overloads_bind_the_named_models(self):
+        src = self._client_source()
+        for path, action, model in self._CONFIGURED:
+            with self.subTest(path=path, action=action):
+                self.assertIn(
+                    f"function runConfigured(path: {path}, action: {action}, "
+                    f"replace?: boolean): Promise<{model}>;",
+                    src,
+                    "the configured-source overload drifted from the "
+                    "route->model map (audit 53.91)",
+                )
+        for action, model in (
+            ('"validate"', "IngestPipelineValidateResponse"),
+            ('"import"', "IngestImportResponse"),
+            ("SourceAction", "ConfiguredActionResult"),
+        ):
+            with self.subTest(action=action):
+                self.assertIn(
+                    f"function runConfigured(path: ConfiguredPath, action: {action}, "
+                    f"replace?: boolean): Promise<{model}>;",
+                    src,
+                    "the path-union overload drifted (audit 53.91)",
+                )
+
+    def test_payload_source_overloads_bind_the_named_models(self):
+        src = self._client_source()
+        for path, action, model in self._PAYLOAD:
+            with self.subTest(path=path, action=action):
+                self.assertIn(
+                    f"function runPayload(path: {path}, action: {action}, "
+                    f'payload: unknown, replace?: boolean): Promise<{model}>;',
+                    src,
+                    "the payload overload drifted from the route->model "
+                    "map (audit 53.91)",
+                )
+        for action, model in (
+            ('"import"', "IngestImportResponse"),
+            ('"preview" | "import"', "PayloadActionResult"),
+        ):
+            with self.subTest(action=action):
+                self.assertIn(
+                    f"function runPayload(path: PayloadPath, action: {action}, "
+                    f'payload: unknown, replace?: boolean): Promise<{model}>;',
+                    src,
+                    "the path-union overload drifted (audit 53.91)",
+                )
+
+    def test_the_loose_display_bag_stays_retired(self):
+        src = self._client_source()
+        self.assertNotIn(
+            "export type IngestResult",
+            src,
+            "the retired IngestResult display bag is back -- its keys are "
+            "the named models' now (audit 53.91)",
+        )
+        self.assertIn(
+            "export type ConfiguredActionResult",
+            src,
+            "the configured-action union must stay exported (audit 53.91)",
+        )
+        self.assertIn(
+            "export type PayloadActionResult",
+            src,
+            "the payload-action union must stay exported (audit 53.91)",
+        )
+
+    def _client_source(self):
+        return (
+            _FRONTEND_DIR / "src" / "lib" / "world-cup" / "ingest-api.ts"
+        ).read_bytes().decode("utf-8")
+
+
 class WorldCupFactsResolveContractTests(unittest.TestCase):
     """The facts list and the deterministic resolver, named in audit
     53.87.

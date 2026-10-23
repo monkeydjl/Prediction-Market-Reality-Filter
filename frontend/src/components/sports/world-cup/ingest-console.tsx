@@ -10,8 +10,10 @@ import {
   PAYLOAD_SOURCES,
   ingestApi,
   parseIngestPayload,
+  type ConfiguredActionResult,
+  type ConfiguredPath,
   type FactsResponse,
-  type IngestResult,
+  type PayloadActionResult,
   type ResolveResult,
   type SourceAction,
 } from "@/lib/world-cup/ingest-api";
@@ -42,7 +44,18 @@ type PendingConfirm = {
   execute: () => void;
 };
 
-function summarize(result: IngestResult | ResolveResult): string {
+// 53.91: the ingest actions' results are the per-family named unions now
+// (the loose IngestResult bag is retired) -- every member is an
+// extra="allow" envelope, so the loose display keys read back as `unknown`
+// and each typeof guard narrows exactly as before.
+type ConsoleResult =
+  | ConfiguredActionResult
+  | PayloadActionResult
+  | ResolveResult
+  | WorldCupStatusResponse
+  | WorldCupDataSourceStatusResponse;
+
+function summarize(result: ConsoleResult): string {
   const parts: string[] = [];
   if (typeof result.converted_fact_count === "number") {
     parts.push(`可转换 ${result.converted_fact_count} 条事实`);
@@ -62,9 +75,10 @@ function summarize(result: IngestResult | ResolveResult): string {
     parts.push(`待定 ${result.pending_count}`);
   }
   if (typeof result.ok === "boolean") parts.push(result.ok ? "校验通过" : "校验未通过");
-  if (parts.length === 0 && result.status) parts.push(String(result.status));
+  if (parts.length === 0 && typeof result.status === "string") parts.push(result.status);
   const head = parts.join(" / ");
-  return result.message ? (head ? `${head} · ${result.message}` : String(result.message)) : head;
+  const message = typeof result.message === "string" ? result.message : "";
+  return message ? (head ? `${head} · ${message}` : message) : head;
 }
 
 // 53.90: the two status reads are named envelopes (audit 53.86), so their
@@ -96,12 +110,12 @@ function ResultBlock({
   line,
 }: {
   testId: string;
-  result: IngestResult | ResolveResult | WorldCupStatusResponse | WorldCupDataSourceStatusResponse;
+  result: ConsoleResult;
   /** Overrides summarize() for the named status envelopes, whose keys the
-   * loose display bag never carried (audit 53.90). */
+   * retired loose bag never carried (audit 53.90). */
   line?: string;
 }) {
-  const summary = line ?? summarize(result as IngestResult | ResolveResult);
+  const summary = summarize(result);
   return (
     <div data-testid={testId} className="mt-3 space-y-2 text-sm">
       {summary && <p className="text-foreground">{summary}</p>}
@@ -131,8 +145,8 @@ export function IngestConsole() {
 
   const [factStatus, setFactStatus] = useState<WorldCupStatusResponse | null>(null);
   const [sourceStatus, setSourceStatus] = useState<WorldCupDataSourceStatusResponse | null>(null);
-  const [sourceResult, setSourceResult] = useState<IngestResult | null>(null);
-  const [payloadResult, setPayloadResult] = useState<IngestResult | null>(null);
+  const [sourceResult, setSourceResult] = useState<ConfiguredActionResult | null>(null);
+  const [payloadResult, setPayloadResult] = useState<PayloadActionResult | null>(null);
   const [resolveResult, setResolveResult] = useState<ResolveResult | null>(null);
 
   const [replace, setReplace] = useState(false);
@@ -186,13 +200,13 @@ export function IngestConsole() {
     PAYLOAD_SOURCES.find((s) => s.key === payloadKey) ?? PAYLOAD_SOURCES[0];
 
   const runSourceAction = useCallback(
-    (path: string, label: string, action: SourceAction) => {
+    (path: ConfiguredPath, label: string, action: SourceAction) => {
       const key = `${path}:${action}`;
       const execute = () =>
         void run(
           key,
-          // Literal-narrowed so the import overload returns the generated
-          // IngestImportResponse (audit 53.82); previews stay loose.
+          // 53.91: runtime-variable action/path resolve to the catch-all
+          // overload -- the whole family union, display-read via open tails.
           () =>
             action === "import"
               ? ingestApi.runConfigured(path, "import", replace)
@@ -230,8 +244,8 @@ export function IngestConsole() {
       const execute = () =>
         void run(
           key,
-          // Literal-narrowed so the import overload returns the generated
-          // IngestImportResponse (audit 53.82); previews stay loose.
+          // 53.91: runtime-variable path/action resolve to the catch-all
+          // overload -- the whole family union, display-read via open tails.
           () =>
             action === "import"
               ? ingestApi.runPayload(payloadSource.path, "import", payload, replace)

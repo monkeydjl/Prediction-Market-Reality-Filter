@@ -12,10 +12,20 @@ references that no longer resolve, per table, and it counts the references a
 single event is about to strand. Both read from one declared list of tables, so
 the status reading and the delete warning can never disagree about what counts
 as a reference.
+
+Two readings, not one, because "how many rows point at a deleted event" and
+"how much work is still blocked by a deleted event" are different questions
+with different shelf lives. The first is history and can only grow -- a closed
+trade whose event was purged is a fact, not a defect. The second is the one an
+operator can act on, and it is bounded by the rows that still have a next step.
+Reporting only the first made the dashboard badge permanently non-zero after
+the first purge, which is the failure ``EXEMPT_TABLES`` exists to avoid -- a
+reading nobody can act on. ``actionable_dangling_counts`` is the second.
 """
 from __future__ import annotations
 
 import logging
+import sqlite3
 from typing import Any
 
 from app.utils import sqlite_db
@@ -69,6 +79,34 @@ EXEMPT_TABLES: dict[str, str] = {
 }
 
 
+# Which rows of each watched table still have a next step that a missing event
+# would block. ``None`` means "never": the table records things that already
+# happened, so nothing downstream waits on the event.
+#
+# Not cosmetic. Measured on the live database after one purge (audit 53.95):
+# ``dangling_counts`` read 1 forever because a *voided* trade still named the
+# deleted event, while nothing was actually wrong -- the trade had been voided
+# precisely because its event was gone. A reading that cannot return to zero
+# stops being a signal, which is the same reasoning that put
+# ``domain_reliability_ledger`` in EXEMPT_TABLES above.
+#
+# Each predicate names a column the table's own schema declares; a test scans
+# the CREATE TABLE bodies and fails when a predicate drifts from the schema
+# (renamed column or table) instead of silently counting nothing.
+LIVE_PREDICATES: dict[str, str | None] = {
+    # awaiting resolution -- resolve_pending walks these by event
+    "predictions": "status = 'open'",
+    # awaiting the human link review; a verified link is a settled binding
+    "event_market_links": "verified = 0",
+    # awaiting settlement; closed and voided are both terminal
+    "simulated_trades": "status = 'open'",
+    # awaiting a reviewer; 'resolved' is the only other state (CHECK constraint)
+    "review_queue_items": "status = 'pending'",
+    # append-only snapshots of decisions already taken
+    "decision_timeline": None,
+}
+
+
 def _existing_tables(conn: Any, wanted: tuple[str, ...]) -> set[str]:
     """Which of ``wanted`` exist in this database.
 
@@ -116,6 +154,52 @@ def dangling_counts(event_ids: set[str]) -> dict[str, int]:
                 )
     except Exception:
         logger.warning("dangling reference census failed", exc_info=True)
+        return dict.fromkeys(REFERENCING_TABLES, 0)
+    return counts
+
+
+def actionable_dangling_counts(event_ids: set[str]) -> dict[str, int]:
+    """Per-table count of distinct stranded ``event_id`` values that still
+    block a next step.
+
+    Same shape and degradation as ``dangling_counts`` -- one connection, zeros
+    when the database is unreadable, distinct ids rather than rows -- but each
+    table is filtered by ``LIVE_PREDICATES``. Tables declared ``None`` stay at
+    zero: their rows are history and no action waits on them.
+
+    If a predicate names a column the table does not have, that table falls back
+    to the unfiltered count with one info line. The row cannot be classified,
+    and over-reporting a stranded reference is the safe direction (the operator
+    sees a number and looks), whereas zero would hide a live one. Logged at info
+    rather than warning because ``/api/health`` is polled by container
+    healthchecks -- a schema mismatch would otherwise write a warning per poll.
+    """
+    counts = dict.fromkeys(REFERENCING_TABLES, 0)
+    path = sqlite_db.loop_db_path()
+    try:
+        with reading(path) as conn:
+            for table in _existing_tables(conn, REFERENCING_TABLES):
+                predicate = LIVE_PREDICATES.get(table)
+                if predicate is None:
+                    continue
+                base = (
+                    f"SELECT DISTINCT event_id FROM {table} "  # noqa: S608 - literal tuple
+                    "WHERE event_id IS NOT NULL AND event_id != ''"
+                )
+                try:
+                    rows = conn.execute(f"{base} AND ({predicate})").fetchall()
+                except sqlite3.OperationalError:
+                    logger.info(
+                        "live predicate for %s does not match its schema; "
+                        "counting every row",
+                        table,
+                    )
+                    rows = conn.execute(base).fetchall()
+                counts[table] = sum(
+                    1 for row in rows if str(row["event_id"]) not in event_ids
+                )
+    except Exception:
+        logger.warning("actionable reference census failed", exc_info=True)
         return dict.fromkeys(REFERENCING_TABLES, 0)
     return counts
 

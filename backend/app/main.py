@@ -2,6 +2,7 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +30,35 @@ from app.utils import sqlite_db
 
 setup_logging()
 logger = logging.getLogger(__name__)
+
+# When this process started. `/api/health` uses it to tell a failed run that
+# describes *this* instance from one that describes a previous generation
+# (audit 53.99). A one-shot startup job or a request-triggered job leaves a
+# `failed` row that nothing will ever supersede, so counting it kept health at
+# 503 for months after one bad day: the live ledger's `event_discover_startup`
+# failed on 2026-09-10 and `world_cup_api_football_validate` on 2026-07-07, and
+# both are still the latest run for their job name. Wall-clock age was the
+# obvious alternative and is wrong in the other direction -- an old failure
+# from the current boot must keep degrading, however long the process runs.
+_PROCESS_STARTED_AT = datetime.now(timezone.utc)
+
+
+def _run_is_from_this_process(started_at: Any) -> bool:
+    """Whether a ledger run row was written after this process started.
+
+    Unparseable or missing timestamps answer False: an unreadable stamp is not
+    evidence that the run happened now, and the cost of being wrong here is a
+    permanently degraded healthcheck.
+    """
+    if not isinstance(started_at, str) or not started_at:
+        return False
+    try:
+        parsed = datetime.fromisoformat(started_at)
+    except ValueError:
+        return False
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed >= _PROCESS_STARTED_AT
 
 
 # Ledger job names for the two core startup components that report through
@@ -531,6 +561,13 @@ async def api_health(
     materialise as nulls on the dominant path -- a wire-byte change. The
     503 degraded status is set on the ``Response`` parameter below and is
     unaffected by the response model.
+
+    ``degraded`` counts only failures that describe this instance (audit
+    53.99): a job the scheduler still holds, or a run written after this
+    process started. Failures nothing will retry -- a one-shot startup job of
+    an earlier boot, a request-triggered job -- are reported separately in
+    ``stale_failed_runs`` so the distinction is visible instead of being a
+    silent filter, and their rows still appear in ``loop.runs``.
     """
     from app.core.scheduler import scheduler, scheduler_start_skipped_due_to_lock
     from app.services.loop_status_service import loop_status
@@ -540,11 +577,26 @@ async def api_health(
         scheduler_running=scheduler.running,
         include_run_details=is_write_key_valid(x_api_key),
     )
-    failed_runs = [
-        job
-        for job, run in status.get("runs", {}).items()
-        if run and run.get("status") == "failed"
-    ]
+    failed_runs = []
+    stale_failed_runs = []
+    # Which job names the scheduler still holds. Interval and cron jobs will run
+    # again, so a failed latest run describes the pipeline as it is now. A
+    # one-shot startup job is dropped from the jobstore once it fires, and a
+    # request-triggered job (world_cup_api_football_validate) was never there,
+    # so both need the second test below: did the run happen on this boot?
+    try:
+        scheduled_jobs = {str(job.id) for job in scheduler.get_jobs()}
+    except Exception:
+        # A mocked or absent scheduler must not turn a healthcheck into a 500.
+        logger.debug("scheduler job list unavailable", exc_info=True)
+        scheduled_jobs = set()
+    for job, run in status.get("runs", {}).items():
+        if not run or run.get("status") != "failed":
+            continue
+        if job in scheduled_jobs or _run_is_from_this_process(run.get("started_at")):
+            failed_runs.append(job)
+        else:
+            stale_failed_runs.append(job)
     degraded = bool(failed_runs) or (
         settings.SCHEDULER_ENABLED
         and not scheduler.running
@@ -563,6 +615,7 @@ async def api_health(
         "scheduler_enabled": settings.SCHEDULER_ENABLED,
         "scheduler_lock_skipped": scheduler_start_skipped_due_to_lock(),
         "failed_runs": failed_runs,
+        "stale_failed_runs": stale_failed_runs,
         "loop": status,
     }
 

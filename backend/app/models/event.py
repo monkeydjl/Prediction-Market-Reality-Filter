@@ -1209,11 +1209,16 @@ class ReviewQueueSummary(BaseModel):
 
 class LoopStatusCounts(BaseModel):
     """The ``counts`` block of ``LoopStatusResponse`` (audit 53.62). All
-    thirteen keys are written unconditionally; the hand-written copy omitted
+    fifteen keys are written unconditionally; the hand-written copy omitted
     ``pending_reviews`` / ``breached_reviews`` (the whole review-queue depth
     was the block's reason to exist) and claimed ``predictions`` / the
     dangling map optional. ``predictions`` is a status-grouped count whose
     key set varies with the data -- the map itself is always present.
+
+    The ``actionable_`` pair (audit 53.95) is the subset an operator can act
+    on: references whose row still has a next step blocked by the missing
+    event. The plain ``dangling_`` pair stays as the historical total, which
+    can never return to zero once an event with rows behind it is purged.
     """
 
     events: int
@@ -1228,6 +1233,8 @@ class LoopStatusCounts(BaseModel):
     dangling_links: int
     dangling_refs: int
     dangling_by_table: dict[str, int]
+    actionable_dangling_refs: int
+    actionable_dangling_by_table: dict[str, int]
     calibration_n: int
 
 
@@ -1253,7 +1260,7 @@ class LoopStatusResponse(FlexibleResponse):
 
 class ApiHealthResponse(FlexibleResponse):
     """Response for GET /api/health (audit 53.64). The handler writes all
-    seven keys unconditionally in this order, so nothing carries a default.
+    eight keys unconditionally in this order, so nothing carries a default.
     ``loop`` is the exact dict ``loop_status`` returns -- the same producer
     behind ``/loop/status`` -- so the field reuses the model named in 53.62
     rather than a second copy. The route needs
@@ -1264,6 +1271,12 @@ class ApiHealthResponse(FlexibleResponse):
     path). ``scheduler_running`` is ``bool | None`` because
     ``scheduler.running`` is None until the scheduler thread has answered
     once -- the value §53.62 pinned on ``LoopSchedulerState.running``.
+
+    ``failed_runs`` and ``stale_failed_runs`` split the ledger's failed rows by
+    whether they describe this instance (audit 53.99): the first makes the
+    response 503, the second is reported but does not. Two keys rather than one
+    filtered key, because a silent filter is indistinguishable from a job that
+    never failed.
     """
 
     status: str
@@ -1272,6 +1285,7 @@ class ApiHealthResponse(FlexibleResponse):
     scheduler_enabled: bool
     scheduler_lock_skipped: bool
     failed_runs: list[str]
+    stale_failed_runs: list[str]
     loop: LoopStatusResponse
 
 

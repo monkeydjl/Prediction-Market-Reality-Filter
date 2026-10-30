@@ -278,6 +278,22 @@ class WatchedJobSetTests(unittest.TestCase):
         loop_run_store.finish_run(run_id, status, **kw)
         return run_id
 
+    def _backdate_failed_run(self, job_name, started_at, error="boom"):
+        """A failed run stamped in the past -- what a previous boot leaves.
+
+        The store has no API for backdating on purpose, so the test writes the
+        column directly; seeding through start_run would make every row look
+        like it came from this process, which is exactly the distinction under
+        test.
+        """
+        run_id = self._run(job_name, "failed", error=error)
+        with sqlite_db.writing(sqlite_db.loop_db_path()) as conn:
+            conn.execute(
+                "UPDATE loop_runs SET started_at=?, finished_at=? WHERE id=?",
+                (started_at, started_at, run_id),
+            )
+        return run_id
+
     def test_a_failed_job_outside_the_old_three_is_reported(self):
         self._run("event_discover")
         self._run("world_cup_api_football_validate", "failed", error="0 fixtures")
@@ -305,6 +321,76 @@ class WatchedJobSetTests(unittest.TestCase):
         body = resp.json()
         self.assertEqual(body["status"], "degraded")
         self.assertEqual(body["failed_runs"], ["world_cup_api_football_validate"])
+
+    def test_a_failed_run_from_a_previous_boot_does_not_degrade_health(self):
+        """53.99: the live defect, reproduced.
+
+        ``event_discover_startup`` is a one-shot job that failed on 2026-09-10
+        and nothing will ever supersede that row, so /api/health answered 503
+        for eight months. A run nothing will retry is a record, not a state.
+        """
+        from fastapi.testclient import TestClient
+
+        from app.main import app
+
+        self._run("event_discover")
+        self._backdate_failed_run(
+            "event_discover_startup", "2026-09-10T19:51:22+00:00"
+        )
+
+        with patch.object(settings, "SCHEDULER_ENABLED", False):
+            resp = TestClient(app).get("/api/health")
+
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body["status"], "ok")
+        self.assertEqual(body["failed_runs"], [])
+        self.assertEqual(body["stale_failed_runs"], ["event_discover_startup"])
+        # Still visible: the row is history, not something to hide.
+        self.assertEqual(
+            body["loop"]["runs"]["event_discover_startup"]["status"], "failed"
+        )
+
+    def test_a_failure_from_this_boot_still_degrades_health(self):
+        """The half that must not be lost: a startup job failing on *this* boot
+        is a condition of this instance, and no restart clears it -- only a
+        restart does, which is the point."""
+        from fastapi.testclient import TestClient
+
+        from app.main import app
+
+        self._run("startup_sqlite_integrity", "failed", error="volume went away")
+
+        with patch.object(settings, "SCHEDULER_ENABLED", False):
+            resp = TestClient(app).get("/api/health")
+
+        self.assertEqual(resp.status_code, 503)
+        body = resp.json()
+        self.assertEqual(body["failed_runs"], ["startup_sqlite_integrity"])
+        self.assertEqual(body["stale_failed_runs"], [])
+
+    def test_a_scheduled_job_still_degrades_after_a_restart(self):
+        """An interval/cron job will run again, so its last run describes the
+        pipeline now even when it happened before this process started."""
+        from types import SimpleNamespace
+
+        from fastapi.testclient import TestClient
+
+        from app.core.scheduler import scheduler as real_scheduler
+        from app.main import app
+
+        self._backdate_failed_run("loop_db_maintenance", "2026-07-24T22:45:00+00:00")
+
+        with patch.object(settings, "SCHEDULER_ENABLED", False), patch.object(
+            real_scheduler,
+            "get_jobs",
+            return_value=[SimpleNamespace(id="loop_db_maintenance")],
+        ):
+            resp = TestClient(app).get("/api/health")
+
+        self.assertEqual(resp.status_code, 503)
+        self.assertEqual(resp.json()["failed_runs"], ["loop_db_maintenance"])
+        self.assertEqual(resp.json()["stale_failed_runs"], [])
 
     def test_every_ledger_job_name_appears_in_the_runs_block(self):
         """A hand-maintained list is what let twelve names go unwatched, so the
@@ -577,6 +663,36 @@ class DanglingRefCountTests(unittest.TestCase):
         # ... and the total no longer agrees with them, which is the point.
         self.assertEqual(counts["dangling_refs"], 1)
         self.assertEqual(counts["dangling_by_table"]["simulated_trades"], 1)
+
+    def test_an_open_stranded_trade_is_actionable(self):
+        """53.95: the row still has a settlement step blocked by the event."""
+        store.save_events([_make_record("evt-live")])
+        trades.open_trade(
+            "evt-gone", "t", direction="YES", entry_prob=70.0, market_prob=50.0,
+        )
+        counts = loop_status_service.loop_status()["counts"]
+        self.assertEqual(counts["dangling_refs"], 1)
+        self.assertEqual(counts["actionable_dangling_refs"], 1)
+        self.assertEqual(
+            counts["actionable_dangling_by_table"]["simulated_trades"], 1
+        )
+
+    def test_a_voided_stranded_trade_is_history_not_work(self):
+        """The live case after the 53.95 purge: the total stays 1 forever, and
+        the actionable reading is the one that returns to zero."""
+        store.save_events([_make_record("evt-live")])
+        trades.open_trade(
+            "evt-gone", "t", direction="YES", entry_prob=70.0, market_prob=50.0,
+        )
+        voided = trades.void_trade("evt-gone")
+        self.assertEqual(voided["status"], "voided")
+        counts = loop_status_service.loop_status()["counts"]
+        self.assertEqual(counts["dangling_refs"], 1)
+        self.assertEqual(counts["dangling_by_table"]["simulated_trades"], 1)
+        self.assertEqual(counts["actionable_dangling_refs"], 0)
+        self.assertEqual(
+            counts["actionable_dangling_by_table"]["simulated_trades"], 0
+        )
 
     def test_every_watched_table_contributes_to_the_total(self):
         """One stranded reference per table, each pinned individually so a

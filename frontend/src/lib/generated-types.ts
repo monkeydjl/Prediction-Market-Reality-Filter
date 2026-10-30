@@ -128,7 +128,7 @@ export interface AnalysisHistoryEntry {
 }
 /**
  * Response for GET /api/health (audit 53.64). The handler writes all
- * seven keys unconditionally in this order, so nothing carries a default.
+ * eight keys unconditionally in this order, so nothing carries a default.
  * ``loop`` is the exact dict ``loop_status`` returns -- the same producer
  * behind ``/loop/status`` -- so the field reuses the model named in 53.62
  * rather than a second copy. The route needs
@@ -139,6 +139,12 @@ export interface AnalysisHistoryEntry {
  * path). ``scheduler_running`` is ``bool | None`` because
  * ``scheduler.running`` is None until the scheduler thread has answered
  * once -- the value §53.62 pinned on ``LoopSchedulerState.running``.
+ *
+ * ``failed_runs`` and ``stale_failed_runs`` split the ledger's failed rows by
+ * whether they describe this instance (audit 53.99): the first makes the
+ * response 503, the second is reported but does not. Two keys rather than one
+ * filtered key, because a silent filter is indistinguishable from a job that
+ * never failed.
  */
 export interface ApiHealthResponse {
   status: string;
@@ -147,6 +153,7 @@ export interface ApiHealthResponse {
   scheduler_enabled: boolean;
   scheduler_lock_skipped: boolean;
   failed_runs: string[];
+  stale_failed_runs: string[];
   loop: LoopStatusResponse;
   [k: string]: unknown;
 }
@@ -227,11 +234,16 @@ export interface LoopRunView {
 }
 /**
  * The ``counts`` block of ``LoopStatusResponse`` (audit 53.62). All
- * thirteen keys are written unconditionally; the hand-written copy omitted
+ * fifteen keys are written unconditionally; the hand-written copy omitted
  * ``pending_reviews`` / ``breached_reviews`` (the whole review-queue depth
  * was the block's reason to exist) and claimed ``predictions`` / the
  * dangling map optional. ``predictions`` is a status-grouped count whose
  * key set varies with the data -- the map itself is always present.
+ *
+ * The ``actionable_`` pair (audit 53.95) is the subset an operator can act
+ * on: references whose row still has a next step blocked by the missing
+ * event. The plain ``dangling_`` pair stays as the historical total, which
+ * can never return to zero once an event with rows behind it is purged.
  */
 export interface LoopStatusCounts {
   events: number;
@@ -248,6 +260,10 @@ export interface LoopStatusCounts {
   dangling_links: number;
   dangling_refs: number;
   dangling_by_table: {
+    [k: string]: number;
+  };
+  actionable_dangling_refs: number;
+  actionable_dangling_by_table: {
     [k: string]: number;
   };
   calibration_n: number;

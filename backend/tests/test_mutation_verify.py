@@ -39,7 +39,7 @@ def _every_mutation():
 
 
 class InventoryTests(unittest.TestCase):
-    def test_the_thirteen_sets_are_present(self):
+    def test_the_fifteen_sets_are_present(self):
         """Pins the inventory, so a whole set cannot be dropped silently.
 
         Deliberately exact and ordered: adding a set means editing this test,
@@ -51,10 +51,13 @@ class InventoryTests(unittest.TestCase):
         listed -- ``market-snapshot-order`` was added without the rename -- so
         that rename (audit section 53.47) corrected the count as well. Renamed
         once more for ``market-snapshot-contract`` (audit section 53.49) and
-        again for ``frontend-type-closure`` (audit section 53.50), and once
+        again for ``frontend-type-closure`` (audit section 53.50), once
         more for ``odds-quota`` (audit section 53.94), where the pre-launch
         audit found the Odds API's quota-exhausted short circuit had no
-        assertion behind it.
+        assertion behind it, and again for ``dangling-actionable`` (53.95),
+        where the dashboard badge's reading had to stop counting history, and
+        once more for ``health-stale-runs`` (53.99), where one failed run from
+        a previous boot kept ``/api/health`` at 503 for eight months.
         """
         self.assertEqual(
             [s.key for s in mutation_verify.SETS],
@@ -72,6 +75,8 @@ class InventoryTests(unittest.TestCase):
                 "market-snapshot-contract",
                 "frontend-type-closure",
                 "odds-quota",
+                "dangling-actionable",
+                "health-stale-runs",
             ],
         )
 

@@ -274,6 +274,9 @@ _PROD_TEMPLATE = "backend/.env.production.example"
 _PROBE = "backend/scripts/report_probability_scale_outliers.py"
 _ODDS_API_SERVICE = "backend/app/services/odds_api_service.py"
 _ODDS_TESTS = "tests/test_odds_api_multi_league.py"
+_REF_CENSUS = "backend/app/memory/event_ref_census.py"
+_REF_CENSUS_TESTS = "tests/test_event_ref_census.py"
+_HEALTH_TESTS = "tests/test_loop_status_service.py"
 
 _PRED_STORE = "backend/app/memory/prediction_store.py"
 _TRADES_STORE = "backend/app/memory/simulated_trade_store.py"
@@ -6414,6 +6417,139 @@ SETS: tuple[MutationSet, ...] = (
                     "scheduler 测试整体 patch 掉本函数，这条分支此前从未被任何测试执行。"
                     "● 针三行（此函数不含注释行）、CRLF，命中 **1 次**（裸 if 行全文件 "
                     "3 次，针靠 logger 文案消歧）；删除型编辑，删除数 3。"
+                ),
+            ),
+        ),
+    ),
+    MutationSet(
+        key="dangling-actionable",
+        title="可处置悬空引用：谓词必须真的过滤掉终态行（D1–D3）",
+        rationale=(
+            "dangling_refs 数的是历史（删过事件就永久非零），actionable 数的是"
+            "「下一步动作还被这个引用挡着」的行——徽章读后者，所以在库清理过一次"
+            "事件之后，这里过滤掉的每一行都决定读数是 0 还是 1（§53.95 实测：被 "
+            "void 的交易让旧读数永远停在 1）。三处承重各不相同：D1 = 谓词是否真的"
+            "进了 SQL（去掉就退化成历史口径）；D2 = 声明为 None 的表是否真的被跳过"
+            "（decision_timeline 是纯历史，跳过它才使读数能回到 0）；D3 = 列不存在时"
+            "的兜底方向（必须偏多报，退成空集就会把活着的悬空引用藏起来）。"
+            "单独成套而不并入类型闭合套：判据族不同（对照 odds-quota 的加套先例）。"
+        ),
+        mutations=(
+            Mutation(
+                label="D1 忽略 live 谓词：终态行也计入可处置读数",
+                path=_REF_CENSUS,
+                old=(
+                    b'                    rows = conn.execute(f"{base} AND ({predicate})").fetchall()\r\n'
+                ),
+                new=(b"                    rows = conn.execute(base).fetchall()\r\n"),
+                guard_file=_REF_CENSUS_TESTS,
+                guards=(
+                    "test_terminal_simulated_trades_are_not_actionable",
+                    "test_only_open_predictions_are_actionable",
+                    "test_only_pending_review_items_are_actionable",
+                    "test_only_unverified_links_are_actionable",
+                ),
+                note=(
+                    "§53.95：把带谓词的查询换成不带谓词的，读数字段变成历史口径。"
+                    "● 针单行、CRLF（event_ref_census.py 纯 CRLF）、命中 **1 次**"
+                    "（已字节复核）；替换型编辑，删除数 0。⚠️ 四条用例的 id 必须按状态"
+                    "互不相同——普查按 distinct event_id 计数，同一 id 三种状态怎么过滤"
+                    "都是 1，断言对本次变异不敏感（§4.2）。"
+                ),
+            ),
+            Mutation(
+                label="D2 不跳过声明为 None 的表：纯历史表被当成可处置",
+                path=_REF_CENSUS,
+                old=(b"                if predicate is None:\r\n"),
+                new=(b"                if predicate is None and False:\r\n"),
+                guard_file=_REF_CENSUS_TESTS,
+                guards=("test_the_timeline_is_never_actionable",),
+                note=(
+                    "§53.95：None 落进 f-string 会拼出 `AND (None)`，SQLite 抛 "
+                    "OperationalError，被兜底分支吃掉后按全量计数 ⇒ decision_timeline "
+                    "从 0 变 1。这正是「删过事件后读数永久非零」的原始病灶。"
+                    "● 针单行、CRLF、命中 **1 次**（已字节复核）；替换型编辑，删除数 0。"
+                ),
+            ),
+            Mutation(
+                label="D3 兜底方向反转：谓词列缺失时按空集计数",
+                path=_REF_CENSUS,
+                old=(b"                    rows = conn.execute(base).fetchall()\r\n"),
+                new=(b"                    rows = []\r\n"),
+                guard_file=_REF_CENSUS_TESTS,
+                guards=(
+                    "test_a_missing_predicate_column_falls_back_to_counting_every_row",
+                ),
+                note=(
+                    "§53.95：列不存在时无法分类，只能偏多报（运维看得见数字会去查），"
+                    "退成空集就是把活着的悬空引用藏起来。"
+                    "● 针单行、CRLF、命中 **1 次**（已字节复核；注意 D1 的 new 与之字节"
+                    "相同，但本针在 except 分支内、全文件仅此一处）；替换型编辑，删除数 0。"
+                ),
+            ),
+        ),
+    ),
+    MutationSet(
+        key="health-stale-runs",
+        title="/api/health 降级判据：只数「描述本实例」的失败 run（H1–H3）",
+        rationale=(
+            "线上长期 503 的成因：event_discover_startup 在 2026-09-10 失败一次、"
+            "world_cup_api_football_validate 在 2026-07-07 失败一次，两者都不会有后继 run"
+            "（一个是启动即执行的一次性 job、一个是请求触发），于是 latest_run_per_job 永远"
+            "返回 failed，健康检查被钉在 503 八个月（§53.99 实测）。修法两个分支各自承重："
+            "① job 还在调度器里（interval/cron 会再跑）⇒ 失败描述当下的管线；② run 发生在"
+            "本进程启动之后 ⇒ 启动自检类 once job 的失败属于本次启动。任一支被去掉都会丢"
+            "真信号（H1/H2），两支都废掉就是回到旧行为（H3）——三条各钉一个方向。"
+            "单独成套：判据族既非类型闭合也非数据普查。"
+        ),
+        mutations=(
+            Mutation(
+                label="H1 去掉「本进程」分支：本次启动的启动自检失败不再降级",
+                path=_MAIN_APP,
+                group="health-failed-run-filter",
+                old=(
+                    b'        if job in scheduled_jobs or _run_is_from_this_process(run.get("started_at")):\r\n'
+                ),
+                new=(b"        if job in scheduled_jobs:\r\n"),
+                guard_file=_HEALTH_TESTS,
+                guards=("test_a_failure_from_this_boot_still_degrades_health",),
+                note=(
+                    "§53.99：启动自检 job 是一次性 date 任务，跑完就从 jobstore 消失，"
+                    "只留「在调度器里」这一支会把本次启动的失败判成历史 ⇒ 带病启动报 200。"
+                    "● 针单行、CRLF（main.py 纯 CRLF）、命中 **1 次**（已字节复核）；"
+                    "替换型编辑，删除数 0。"
+                ),
+            ),
+            Mutation(
+                label="H2 去掉「在调度器里」分支：调度任务的历史失败不再降级",
+                path=_MAIN_APP,
+                group="health-failed-run-filter",
+                old=(
+                    b'        if job in scheduled_jobs or _run_is_from_this_process(run.get("started_at")):\r\n'
+                ),
+                new=(b'        if _run_is_from_this_process(run.get("started_at")):\r\n'),
+                guard_file=_HEALTH_TESTS,
+                guards=("test_a_scheduled_job_still_degrades_after_a_restart",),
+                note=(
+                    "§53.99：interval/cron job 会再跑，其最新 run 失败意味着管线现在是坏的，"
+                    "与这条 run 发生在哪个进程无关。去掉这一支会让重启把真实故障洗成历史。"
+                    "● 与 H1 同字节段的两条相反改写，同 group；针命中 **1 次**；删除数 0。"
+                ),
+            ),
+            Mutation(
+                label="H3 回到旧行为：任何历史失败都算降级",
+                path=_MAIN_APP,
+                group="health-failed-run-filter",
+                old=(
+                    b'        if job in scheduled_jobs or _run_is_from_this_process(run.get("started_at")):\r\n'
+                ),
+                new=(b"        if True:\r\n"),
+                guard_file=_HEALTH_TESTS,
+                guards=("test_a_failed_run_from_a_previous_boot_does_not_degrade_health",),
+                note=(
+                    "§53.99：这就是被修掉的原始行为——一条上一代进程留下的失败行让健康检查"
+                    "永久 503。这条变异专门钉「修复本身」而不是某一支。"
+                    "● 针命中 **1 次**；替换型编辑，删除数 0。"
                 ),
             ),
         ),

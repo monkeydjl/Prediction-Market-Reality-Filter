@@ -1044,11 +1044,28 @@ class RateLimitTests(unittest.TestCase):
                 client.get("/ping")
 
 
-class _FakeScheduler:
-    """Stand-in for the APScheduler whose `running` is a read-only property."""
+class _ScheduledJob:
+    """Minimal APScheduler job: health reads only ``.id``."""
 
-    def __init__(self, running: bool):
+    def __init__(self, job_id: str):
+        self.id = job_id
+
+
+class _FakeScheduler:
+    """Stand-in for the APScheduler whose `running` is a read-only property.
+
+    ``jobs`` models the jobstore, and it is not decorative (audit 53.99):
+    /api/health asks which job names the scheduler still holds, because a
+    failed run that nothing will retry is history rather than a state. A fake
+    that answered only ``running`` would make every failed run look stale.
+    """
+
+    def __init__(self, running: bool, jobs: tuple[str, ...] = ()):
         self.running = running
+        self._jobs = jobs
+
+    def get_jobs(self) -> list[_ScheduledJob]:
+        return [_ScheduledJob(job_id) for job_id in self._jobs]
 
 
 class HealthTests(unittest.TestCase):
@@ -1187,8 +1204,15 @@ class HealthTests(unittest.TestCase):
 
         client = TestClient(app)
         # A failed scheduled run must surface as 503 so container/systemd
-        # healthchecks and uptime monitors trip instead of seeing a 200.
-        with patch("app.core.scheduler.scheduler", _FakeScheduler(True)), \
+        # healthchecks and uptime monitors trip instead of seeing a 200. The run
+        # is dated January on purpose: `event_discover` is still in the
+        # jobstore, so it will run again and the failure describes the pipeline
+        # now, however old the row is (53.99 -- an unscheduled job's old failure
+        # is history and must NOT trip this).
+        with patch(
+                    "app.core.scheduler.scheduler",
+                    _FakeScheduler(True, jobs=("event_discover",)),
+                ), \
                 patch(
                     "app.services.loop_status_service.loop_status",
                     return_value=minimal_loop_status_payload(

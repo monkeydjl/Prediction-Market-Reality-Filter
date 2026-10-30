@@ -30,6 +30,7 @@ def loop_status(
     resolved = list_resolved_events(events)
     prediction_counts = _prediction_counts()
     dangling_refs = _dangling_event_refs(events)
+    actionable_refs = _actionable_dangling_event_refs(events)
     orphan_count = _orphan_prediction_count(events)
     calibration = calibration_summary()
     review_queue = _review_queue_counts()
@@ -87,6 +88,15 @@ def loop_status(
             "dangling_links": dangling_refs.get("event_market_links", 0),
             "dangling_refs": sum(dangling_refs.values()),
             "dangling_by_table": dangling_refs,
+            # Audit 53.95: `dangling_refs` above counts history -- a voided
+            # trade whose event was purged is a fact, not a defect, so the
+            # badge reading it could never return to zero after the first
+            # purge (measured: stuck at 1 on the live database). These two
+            # keys count only the rows that still have a next step blocked,
+            # per LIVE_PREDICATES; that is the number an operator can act on,
+            # and the one the dashboard badge reads.
+            "actionable_dangling_refs": sum(actionable_refs.values()),
+            "actionable_dangling_by_table": actionable_refs,
             "calibration_n": calibration.get("n", 0),
         },
         "calibration": calibration,
@@ -164,6 +174,21 @@ def _dangling_event_refs(events: list[dict[str, Any]]) -> dict[str, int]:
         if entry.get("event_id")
     }
     return event_ref_census.dangling_counts(event_ids)
+
+
+def _actionable_dangling_event_refs(events: list[dict[str, Any]]) -> dict[str, int]:
+    """Same id set, filtered to references that still block a next step.
+
+    Built from the same ``events`` load rather than a second store read: the
+    two readings must agree about which ids exist, and /api/health is polled
+    constantly (E1's lesson, applied to the pair instead of to one query).
+    """
+    event_ids = {
+        str(entry.get("event_id") or "")
+        for entry in events
+        if entry.get("event_id")
+    }
+    return event_ref_census.actionable_dangling_counts(event_ids)
 
 
 def _orphan_prediction_count(events: list[dict[str, Any]]) -> int:

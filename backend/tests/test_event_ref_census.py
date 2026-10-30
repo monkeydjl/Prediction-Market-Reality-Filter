@@ -45,6 +45,36 @@ _ALTER_ADD = re.compile(
     re.I,
 )
 _EVENT_ID_COL = re.compile(r"^\s*event_id\b", re.M)
+# First token of a column-definition line inside a CREATE TABLE body.
+_COLUMN = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\b", re.M)
+# Table-level clauses that start a line but declare no column.
+_NON_COLUMN_LEADERS = {"CONSTRAINT", "PRIMARY", "UNIQUE", "CHECK", "FOREIGN"}
+# The column a live predicate filters on, e.g. "status = 'open'" -> "status".
+_PREDICATE_COLUMN = re.compile(
+    r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*(?:=|IN\b|IS\b|LIKE\b)", re.I
+)
+
+
+def _declared_columns() -> dict[str, set[str]]:
+    """Column names each table's CREATE TABLE constant declares, from source.
+
+    Same reason as ``_tables_declaring_event_id``: a live database only holds
+    the tables some code path has already touched, so a schema scan of it would
+    quietly narrow as the deployment shrinks.
+    """
+    found: dict[str, set[str]] = {}
+    for path in sorted(APP_ROOT.rglob("*.py")):
+        text = path.read_text(encoding="utf-8", errors="replace")
+        for name, body in _CREATE.findall(text):
+            for line in body.splitlines():
+                match = _COLUMN.match(line)
+                if not match:
+                    continue
+                token = match.group(1)
+                if token.upper() in _NON_COLUMN_LEADERS:
+                    continue
+                found.setdefault(name, set()).add(token)
+    return found
 
 
 def _tables_declaring_event_id() -> dict[str, set[str]]:
@@ -103,6 +133,53 @@ class EventRefTableCensusTests(unittest.TestCase):
             self.assertGreater(
                 len(reason.strip()), 80,
                 f"exemption for {table} needs a reason, not a placeholder",
+            )
+
+    def test_every_referencing_table_declares_a_live_predicate(self):
+        """The actionable reading and the census must cover the same tables.
+
+        Both directions: a watched table with no predicate would silently read
+        zero there (a live stranded row hidden), and a predicate for a table
+        the census no longer watches would be dead weight nobody notices.
+        """
+        declared = set(census.LIVE_PREDICATES)
+        watched = set(census.REFERENCING_TABLES)
+
+        self.assertFalse(
+            watched - declared,
+            "watched table(s) with no live predicate, so their actionable "
+            f"count would always read zero: {sorted(watched - declared)}. Add "
+            "each to LIVE_PREDICATES, using None if nothing can act on it.",
+        )
+        self.assertFalse(
+            declared - watched,
+            f"LIVE_PREDICATES names table(s) the census does not watch: "
+            f"{sorted(declared - watched)}",
+        )
+
+    def test_every_live_predicate_names_a_column_its_table_declares(self):
+        """A predicate on a missing column turns into a silent full count.
+
+        ``actionable_dangling_counts`` falls back to counting every row when the
+        column is absent, so a renamed column would not fail loudly -- it would
+        quietly report more stranded references than there are. Pin the names
+        against the CREATE TABLE constants instead.
+        """
+        declared = _declared_columns()
+        for table, predicate in census.LIVE_PREDICATES.items():
+            if predicate is None:
+                continue
+            match = _PREDICATE_COLUMN.match(predicate)
+            self.assertIsNotNone(
+                match, f"{table}: cannot read a column name out of {predicate!r}"
+            )
+            column = match.group(1)
+            self.assertIn(
+                column,
+                declared.get(table, set()),
+                f"{table}: live predicate filters on {column!r}, which the "
+                f"table's CREATE TABLE does not declare (has "
+                f"{sorted(declared.get(table, set()))})",
             )
 
     def test_the_census_regex_finds_a_known_table(self):
@@ -221,6 +298,197 @@ class DanglingCountsTests(unittest.TestCase):
 
         with patch.object(sqlite_db, "connect", side_effect=counting):
             census.dangling_counts({"evt-live"})
+        self.assertEqual(len(calls), 1, f"opened {len(calls)} connections")
+
+
+def _seed_typed(
+    path: str, schema: dict[str, str], rows: dict[str, list[tuple]]
+) -> None:
+    """Create each table with the given column list, then insert the rows."""
+    conn = sqlite3.connect(path)
+    try:
+        for table, columns in schema.items():
+            conn.execute(f"CREATE TABLE {table} ({columns})")
+        for table, values in rows.items():
+            width = len(values[0])
+            conn.executemany(
+                f"INSERT INTO {table} VALUES ({', '.join('?' * width)})", values
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+class ActionableDanglingCountsTests(unittest.TestCase):
+    """Only rows whose next step is blocked by the missing event are counted.
+
+    ``dangling_counts`` answers "how many rows point at a deleted event" -- a
+    number that can never return to zero once anything is purged. This reading
+    answers "how much work is still blocked", which is what an operator can act
+    on and what the dashboard badge shows (audit 53.95).
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.db = str(Path(self._tmp.name) / "v2_loop.db")
+        patcher = patch.object(sqlite_db, "loop_db_path", return_value=self.db)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_terminal_simulated_trades_are_not_actionable(self):
+        """The live case: a voided trade whose event was purged.
+
+        Distinct event ids per status on purpose: the census counts distinct
+        ids, so three rows sharing one id would be 1 either way and the
+        predicate would carry no weight (audit 54.2 -- an assertion has to be
+        sensitive to the mutation it is supposed to catch).
+        """
+        _seed_typed(
+            self.db,
+            {"simulated_trades": "event_id TEXT, status TEXT"},
+            {"simulated_trades": [
+                ("gone-open", "open"),
+                ("gone-closed", "closed"),
+                ("gone-voided", "voided"),
+            ]},
+        )
+        total = census.dangling_counts({"evt-live"})["simulated_trades"]
+        actionable = census.actionable_dangling_counts({"evt-live"})["simulated_trades"]
+        self.assertEqual(total, 3)
+        self.assertEqual(actionable, 1)
+
+    def test_only_open_predictions_are_actionable(self):
+        _seed_typed(
+            self.db,
+            {"predictions": "event_id TEXT, status TEXT"},
+            {"predictions": [
+                ("gone-open", "open"),
+                ("gone-scored", "scored"),
+                ("gone-voided", "voided"),
+            ]},
+        )
+        total = census.dangling_counts({"evt-live"})["predictions"]
+        actionable = census.actionable_dangling_counts({"evt-live"})["predictions"]
+        self.assertEqual(total, 3)
+        self.assertEqual(actionable, 1)
+
+    def test_only_pending_review_items_are_actionable(self):
+        _seed_typed(
+            self.db,
+            {"review_queue_items": "event_id TEXT, status TEXT"},
+            {"review_queue_items": [
+                ("gone-pending", "pending"),
+                ("gone-resolved", "resolved"),
+            ]},
+        )
+        total = census.dangling_counts({"evt-live"})["review_queue_items"]
+        actionable = census.actionable_dangling_counts({"evt-live"})[
+            "review_queue_items"
+        ]
+        self.assertEqual(total, 2)
+        self.assertEqual(actionable, 1)
+
+    def test_only_unverified_links_are_actionable(self):
+        """A verified link is a settled binding; an unverified one still needs
+        the human review that the missing event just made impossible."""
+        _seed_typed(
+            self.db,
+            {"event_market_links": "event_id TEXT, verified INTEGER"},
+            {"event_market_links": [("gone-unverified", 0), ("gone-verified", 1)]},
+        )
+        total = census.dangling_counts({"evt-live"})["event_market_links"]
+        actionable = census.actionable_dangling_counts({"evt-live"})[
+            "event_market_links"
+        ]
+        self.assertEqual(total, 2)
+        self.assertEqual(actionable, 1)
+
+    def test_the_timeline_is_never_actionable(self):
+        """Snapshots record decisions already taken; nothing waits on them.
+
+        Pinned explicitly because this is the table that would otherwise keep
+        the actionable reading permanently non-zero after any purge.
+        """
+        _seed_typed(
+            self.db,
+            {"decision_timeline": "event_id TEXT, snapshot_id TEXT"},
+            {"decision_timeline": [("gone", str(i)) for i in range(40)]},
+        )
+        actionable = census.actionable_dangling_counts({"evt-live"})
+        self.assertEqual(actionable["decision_timeline"], 0)
+        self.assertEqual(census.dangling_counts({"evt-live"})["decision_timeline"], 1)
+
+    def test_rows_pointing_at_a_live_event_are_not_counted(self):
+        _seed_typed(
+            self.db,
+            {"simulated_trades": "event_id TEXT, status TEXT"},
+            {"simulated_trades": [("evt-1", "open"), ("evt-2", "open")]},
+        )
+        self.assertEqual(
+            census.actionable_dangling_counts({"evt-1", "evt-2"})["simulated_trades"],
+            0,
+        )
+
+    def test_a_missing_predicate_column_falls_back_to_counting_every_row(self):
+        """Over-report rather than hide: an unclassifiable row is still a row.
+
+        The table has no ``status`` column, so the predicate cannot run. Reading
+        zero here would silently drop a live stranded reference.
+        """
+        _seed_typed(
+            self.db,
+            {"simulated_trades": "event_id TEXT"},
+            {"simulated_trades": [("gone",), ("gone",)]},
+        )
+        with self.assertLogs("app.memory.event_ref_census", level="INFO") as logs:
+            counts = census.actionable_dangling_counts({"evt-live"})
+        self.assertEqual(counts["simulated_trades"], 1)  # distinct ids, not rows
+        self.assertTrue(
+            any("does not match its schema" in line for line in logs.output),
+            logs.output,
+        )
+
+    def test_the_actionable_reading_never_exceeds_the_total(self):
+        """Per table, actionable <= dangling: the filter only removes rows."""
+        _seed_typed(
+            self.db,
+            {
+                "simulated_trades": "event_id TEXT, status TEXT",
+                "event_market_links": "event_id TEXT, verified INTEGER",
+            },
+            {
+                "simulated_trades": [("gone-open", "open"), ("gone-voided", "voided")],
+                "event_market_links": [("gone-unverified", 0), ("gone-verified", 1)],
+            },
+        )
+        total = census.dangling_counts({"evt-live"})
+        actionable = census.actionable_dangling_counts({"evt-live"})
+        self.assertEqual(set(actionable), set(census.REFERENCING_TABLES))
+        for table, count in actionable.items():
+            self.assertLessEqual(count, total[table], table)
+
+    def test_an_unreadable_database_reports_zeros_rather_than_raising(self):
+        with patch.object(sqlite_db, "loop_db_path", return_value="/nope/x.db"):
+            counts = census.actionable_dangling_counts({"evt-1"})
+        self.assertEqual(set(counts), set(census.REFERENCING_TABLES))
+        self.assertEqual(sum(counts.values()), 0)
+
+    def test_the_whole_census_uses_one_connection(self):
+        _seed_typed(
+            self.db,
+            {t: "event_id TEXT" for t in census.REFERENCING_TABLES},
+            {t: [("gone",)] for t in census.REFERENCING_TABLES},
+        )
+        real_connect = sqlite_db.connect
+        calls = []
+
+        def counting(path, *args, **kwargs):
+            calls.append(path)
+            return real_connect(path, *args, **kwargs)
+
+        with patch.object(sqlite_db, "connect", side_effect=counting):
+            census.actionable_dangling_counts({"evt-live"})
         self.assertEqual(len(calls), 1, f"opened {len(calls)} connections")
 
 

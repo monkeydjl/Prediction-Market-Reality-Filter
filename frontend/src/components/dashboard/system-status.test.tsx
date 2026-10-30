@@ -243,6 +243,48 @@ describe("SystemStatus", () => {
       );
     });
 
+    // 53.95: the backend total counts history and never returns to zero after a
+    // purge, so the badge reads the actionable subset and the total moves into
+    // the tooltip. Both halves are pinned here: the zero case and the case where
+    // the two readings differ in the other direction.
+    it("reads the actionable subtotal, not the historical total", async () => {
+      const badge = await renderLoaded({
+        dangling_refs: 1,
+        dangling_by_table: { simulated_trades: 1, predictions: 0 },
+        actionable_dangling_refs: 0,
+        actionable_dangling_by_table: { simulated_trades: 0 },
+      });
+
+      expect(badge).toHaveTextContent("引用异常 0");
+      expect(badge).toHaveAttribute(
+        "title",
+        "无待处置项 · 历史悬空引用 1（simulated_trades: 1）",
+      );
+    });
+
+    it("names only the tables that still need work when there is any", async () => {
+      const badge = await renderLoaded({
+        dangling_refs: 4,
+        dangling_by_table: { simulated_trades: 3, review_queue_items: 1 },
+        actionable_dangling_refs: 1,
+        actionable_dangling_by_table: { simulated_trades: 1, review_queue_items: 0 },
+      });
+
+      expect(badge).toHaveTextContent("引用异常 1");
+      expect(badge).toHaveAttribute("title", "simulated_trades: 1");
+    });
+
+    it("falls back to the historical total when the actionable key is absent", async () => {
+      // An older backend must not make the badge read 0 over a real broken
+      // reference: absent means unknown, not "none".
+      const badge = await renderLoaded({
+        dangling_refs: 2,
+        dangling_by_table: { predictions: 2 },
+      });
+
+      expect(badge).toHaveTextContent("引用异常 2");
+    });
+
     it("falls back to the two legacy keys when the total is absent", async () => {
       const badge = await renderLoaded({
         dangling_predictions: 2,

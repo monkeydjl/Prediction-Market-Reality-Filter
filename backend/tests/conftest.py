@@ -628,6 +628,8 @@ def minimal_loop_status_payload(**overrides) -> dict:
             dangling_links=0,
             dangling_refs=0,
             dangling_by_table={},
+            actionable_dangling_refs=0,
+            actionable_dangling_by_table={},
             calibration_n=0,
         ),
         calibration=PredictionCalibrationResponse(

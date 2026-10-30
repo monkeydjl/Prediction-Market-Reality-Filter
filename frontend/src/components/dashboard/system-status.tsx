@@ -250,16 +250,32 @@ export function SystemStatus() {
   const danglingRefs =
     status?.counts?.dangling_refs ??
     (status?.counts?.dangling_predictions ?? 0) + (status?.counts?.dangling_links ?? 0);
+  // 53.95: `dangling_refs` counts history and can never return to zero after
+  // the first purge (a voided trade still names its deleted event), so the
+  // badge reads the actionable subset — rows that still have a next step
+  // blocked. Backends that predate the key fall back to the total rather than
+  // to "—", exactly like the legacy pair above.
+  const actionableDanglingRefs =
+    status?.counts?.actionable_dangling_refs ?? danglingRefs;
   const danglingByTable = status?.counts?.dangling_by_table ?? {};
+  const actionableDanglingByTable =
+    status?.counts?.actionable_dangling_by_table ?? danglingByTable;
   // "3 broken references" is not actionable without knowing which store, and the
   // badge has no room for a breakdown.
+  const formatBreakdown = (byTable: Record<string, number>) =>
+    Object.entries(byTable)
+      .filter(([, n]) => n > 0)
+      .map(([table, n]) => `${table}: ${n}`)
+      .join(" · ");
+  // The historical total is only worth the tooltip when the badge is showing
+  // zero: that is the one case where "0" needs the follow-up "but N rows are
+  // still pointing at deleted events, and no action remains for them".
   const danglingTitle =
-    danglingRefs > 0
-      ? Object.entries(danglingByTable)
-          .filter(([, n]) => n > 0)
-          .map(([table, n]) => `${table}: ${n}`)
-          .join(" · ")
-      : "没有指向已删除事件的残留行";
+    actionableDanglingRefs > 0
+      ? formatBreakdown(actionableDanglingByTable)
+      : danglingRefs > 0
+        ? `无待处置项 · 历史悬空引用 ${danglingRefs}（${formatBreakdown(danglingByTable)}）`
+        : "没有指向已删除事件的残留行";
 
   return (
     <section className="flex flex-col gap-3 rounded-lg border border-border bg-card p-4">
@@ -308,7 +324,7 @@ export function SystemStatus() {
             <span className="rounded bg-secondary px-2 py-1">已结算 {status?.counts?.resolved_events ?? "—"}</span>
             <span className="rounded bg-secondary px-2 py-1">待审链接 {status?.counts?.pending_links ?? "—"}</span>
             <span className="rounded bg-secondary px-2 py-1" title={danglingTitle}>
-              引用异常 {danglingRefs}
+              引用异常 {actionableDanglingRefs}
             </span>
             <span className="rounded bg-secondary px-2 py-1">校准样本 {status?.counts?.calibration_n ?? "—"}</span>
             <span className="rounded bg-secondary px-2 py-1">版本 {overview?.version ?? health?.version ?? "—"}</span>

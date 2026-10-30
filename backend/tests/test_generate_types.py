@@ -2362,9 +2362,11 @@ class LoopStatusContractTests(unittest.TestCase):
              "predictions", "pending_links", "pending_reviews",
              "breached_reviews", "orphan_predictions",
              "dangling_predictions", "dangling_links", "dangling_refs",
-             "dangling_by_table", "calibration_n"],
-            "LoopStatusCounts is no longer the thirteen-key block (the "
-            "hand-written copy omitted the two review-queue depth keys)",
+             "dangling_by_table", "actionable_dangling_refs",
+             "actionable_dangling_by_table", "calibration_n"],
+            "LoopStatusCounts is no longer the fifteen-key block (the "
+            "hand-written copy omitted the two review-queue depth keys; "
+            "audit 53.95 added the two actionable dangling keys)",
         )
         self.assertEqual(
             LoopStatusCounts.model_fields["events"].annotation, int,
@@ -2820,9 +2822,10 @@ class ApiHealthContractTests(unittest.TestCase):
         self.assertEqual(
             list(fields),
             ["status", "version", "scheduler_running", "scheduler_enabled",
-             "scheduler_lock_skipped", "failed_runs", "loop"],
-            "ApiHealthResponse is no longer the seven-key envelope in "
-            "producer order",
+             "scheduler_lock_skipped", "failed_runs", "stale_failed_runs",
+             "loop"],
+            "ApiHealthResponse is no longer the eight-key envelope in "
+            "producer order (53.99 added stale_failed_runs)",
         )
         for name, want in (
             ("status", str),
@@ -2831,6 +2834,7 @@ class ApiHealthContractTests(unittest.TestCase):
             ("scheduler_enabled", bool),
             ("scheduler_lock_skipped", bool),
             ("failed_runs", list[str]),
+            ("stale_failed_runs", list[str]),
             ("loop", LoopStatusResponse),
         ):
             with self.subTest(field=name):

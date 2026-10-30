@@ -15431,3 +15431,64 @@ subtests；针审计 **275/275** 恰命中 1 次；tsc 零错；vitest 94 文件
 - 门：ruff ✓ / mypy ✓（331 文件）/ `generate_types --check` ✓ / 全量 **6749 passed + 11 skipped + 2507 subtests**，junit 9267 tests failures=0 errors=0（766s）；harness 自守护 64 passed + 350 subtests（junit 414/0/0）。
 - 前提与余项：ODDS 建议值以「免费层 500/月」为前提；若升级付费层可放宽间隔。Transfermarkt 的 ToS 结论必须由业务方给出，代码只能提供技术姿态。**生产 `.env` 的两处配置（ODDS 键、BACKUP_ENCRYPTION_KEY）仍未写**，属于上线动作而非代码。
 
+
+### 53.95 —— evtExpired 悬空交易作废闭环（启动冒烟线索 2 的处置）（2026-10-23）
+
+- 背景：HEAD 真实启动冒烟（uvicorn 真进程，非 TestClient）暴露 `dangling_by_table.simulated_trades=1` → `sim-9d89247045fc`（`event_id='evtExpired'`，"Will X happen by July 1, 2026?"，`status=open`，建于 2026-07-04T19:42，`decision=provisional_act`，entry 70 / market 40 / edge 30）。只读核查：`event_store.json` 257 条事件、`evtExpired` 全文 **0 命中** ⇒ 该事件已不存在，交易**永不可能结算**；`simulated_trades` 80 行中指向不存在事件的**仅此 1 行**，非系统性积压。
+- 处置（用户拍板 A）：先备份 `v2_loop.db`（17 809 408 B；拷贝后 `PRAGMA integrity_check` = ok、`foreign_key_check` 0 违反、`-wal` 0 字节），副本与源在**拷贝时刻**逐字一致（sha256 `5facaa93…`）→ 调契约层 `void_trade('evtExpired')`。后态：`status=voided`、`exit_reason=voided`、`exit_time=2026-10-23T15:30:50Z`，`pnl_pct`/`actual_outcome`/`is_win` 全 NULL（未结算、不进统计）；**二次调用返回 None**（幂等实证）。
+- 🔴 **旁证（顺带发现，值得单独记住）：所谓「只读」快照会改写 `v2_loop.db` 的字节**。`trade_stats()` / `loop_status()` 经 `_ensure_schema` 跑 DDL（`CREATE TABLE IF NOT EXISTS` + `_migrate` + `apply_migrations`），SQLite 即使**什么都没建**也会在提交时推进 schema cookie / change counter。实测（在副本上逐跳取 sha）：`6df8de7c` →（`trade_stats`）`a5f10818` →（`loop_status`）`b303e610`；纯 `select`、`PRAGMA journal_mode` 读取、`mode=ro` 打开均**不改字节**。⇒ **这个库的 sha256 不能当身份或完整性判据**（§4.3 的「还原后 sha256 一致」对 SQLite 只到逻辑内容层）；判处置前后必须走**内容比对**（status 计数 / 目标行 / `integrity_check` / `foreign_key_check`）。本节先前那版把「快照前」的读数 `e0448f77` 写成「副本 sha」，已按此更正——两次 sha 不同不是拷贝失败。
+- 复核：计数 open 48→47 / closed 31（不变）/ voided 1→2；closed 统计五元组（条数、win_rate、pnl 和、avg pnl、avg edge）前后逐字相同 **（31, 0.419, 52.39, 1.69, 10.79）**；走 HTTP（TestClient 后置）：`/api/events/trades/open` total=47、`/closed` total=31、`/voided` total=2 且含该行，outcome/pnl/is_win 均 null。
+- 🔴 **预期外的读数——`dangling_refs` 仍为 1，没有归零**。普查口径不带状态过滤：`event_ref_census.dangling_counts()` 的 SQL 是 `SELECT DISTINCT event_id FROM {table} WHERE event_id IS NOT NULL AND event_id != ''`，被 void 的行**照样计入**。⇒ 只要一个「有交易的事件」被删除，这条读数就**永久非零**；而 void 在语义上并不消除「历史行引用了一个已消失的事件」这个事实。两个方向：① 接受——把 dangling 当历史卫生指标，不追求归零；② 改普查按 status 排除 voided（契约变更：`/api/health` 的 `dangling_refs`/`dangling_by_table` 语义随之改变，`tests/test_event_ref_census.py` 的整库扫描与集合钉要同步）。**本次未动代码，留待拍板**（§5 的「0 必须只说一件事」在此反过来：一个恒不为 0 的 0 同样读不出信息）。
+- 顺带观察（未处置）：`event_store.json` 257 条中有 49 条的 event_id 不是 16 位 hex（`a`/`b`/`clean`/`evt-0`…`evt-9`/`resolved-1`/`test-1`/`none`/`llm1` 等），测试夹具混进了生产事件库。它们**不在** dangling 口径内（自身存在），但会进入事件列表与计数；清理须逐条核对交易/预测/时间线引用，属独立一片。
+- 备份与取证：`.workbuddy/v2_loop.backup-before-void-trade43.db`（gitignored）、`void_trade43_before.json` / `void_trade43_after.json` 快照、处置脚本 `void_trade43.py` 与 HTTP 复核脚本 `void_trade43_http.py` 同在 `.workbuddy/`。
+- 余项：数据处置闭合；`dangling` 口径问题转交下一片；冒烟线索 1（`/api/health` 因历史失败 run 永久 503）本次**未动**。
+
+### 53.96 —— dangling 口径落定：新增「可处置」读数，徽章改读它（2026-10-23）
+
+- 背景：§53.95 实测暴露 `dangling_refs` 处置后**不归零**（普查 SQL 无状态过滤）。用户拍板变体 B2：**新增读数，不改写既有键**（与 53.61 加 `dangling_refs` 而保留两个旧键同族）。
+- **为什么不「统一按 status 排除」**：五张表口径根本不一 —— `predictions` / `simulated_trades` / `review_queue_items` 有 `status`（review 还有 `CHECK (status IN ('pending','resolved'))`），`event_market_links` 只有 `verified`，`decision_timeline` **没有任何状态列**。统一按 status 过滤对后两张无法定义；而 `decision_timeline` 若照旧计入，删过事件后读数依旧永久非零——等于没改。站得住的定义只有一条：**这个引用后面还有没有下一步动作被它挡住**，逐表一条谓词。
+- **实现**：`LIVE_PREDICATES`（数据驱动，与 `REFERENCING_TABLES` / `EXEMPT_TABLES` 同族写法）：`predictions` → `status='open'`、`event_market_links` → `verified=0`、`simulated_trades` → `status='open'`、`review_queue_items` → `status='pending'`、`decision_timeline` → `None`（只追加的历史快照，恒 0）。新增 `actionable_dangling_counts()`：同一连接、unreadable → 零、distinct id；**谓词列缺失时回退为全量计数**——无法分类时偏多报（运维看见数字会去查），退成空集会把活着的悬空引用藏起来；日志走 `info`，否则 `/api/health` 每次轮询都写一条 warning。
+- **契约**：`LoopStatusCounts` 13 → **15 键**（`actionable_dangling_refs` / `actionable_dangling_by_table` 插在 dangling 三键之后、`calibration_n` 之前，保持「模型字段序 = 生产者 dict 插入序 = 线上键序」）；`generate_types` 重生成、前端 re-export 自动、手写模块零副本；`tests/conftest.py` 的 `LoopStatusCounts` 桩补两键（必存键不给默认值，桩必须显式给）。`dangling_refs` / `dangling_by_table` **语义未动**，仍是历史总量。
+- **前端**：徽章 `引用异常 N` 改读 `actionable_dangling_refs`；有可处置项时 tooltip 只列这些表；为 0 但历史非零时显示「无待处置项 · 历史悬空引用 N（逐表）」；旧后端缺该键时回退到历史总值（缺省=未知，不读 0——§5 的方向）。
+- **真实数据实测**：`dangling_refs=1`（`simulated_trades`，即 §53.95 那笔已 void 的交易）→ `actionable_dangling_refs=0`。同一响应里两个读数并存，正是这次的设计目标：历史看得见，待处置归零。
+- **守卫与变异（新套 `dangling-actionable`，14 套 / 301 条）**：D1 忽略谓词（4 条状态用例红）、D2 不跳过 `None` 表（`decision_timeline` 从 0 变 1）、D3 兜底方向反转（缺列用例红）。四阶段全 [OK]、还原 sha256 一致。新增两条声明守卫：`LIVE_PREDICATES` 与 `REFERENCING_TABLES` 双向集合相等；每条谓词筛选的列必须是该表 `CREATE TABLE` 真声明过的（源码扫描，否则改名后谓语会静默退化成全量计数）。
+- 🔴 **写用例时踩到的自身错误（记下来）**：首版四条状态用例让三种状态**共用同一个 event_id**，而普查按 distinct event_id 计数 ⇒ 过不过滤都读 1，断言对 D1 完全不敏感（四阶段也不会红）。改成「按状态互不相同的 id」后 D1 才 4 failed。这就是 §4.2「断言必须对变异敏感」的具体样子——不是断言写错了方向，而是夹具把信号抹平了。
+- 门：ruff ✓ / mypy ✓（331 文件）/ `generate_types --check` ✓ / 前端 `tsc --noEmit` ✓ / 全量 pytest **9285 tests, failures=0, errors=0, skipped=11**（13m35s）/ vitest **127 文件 758 tests**。
+
+### 53.97 —— 事件库夹具清理：49 条合成事件出库（2026-10-23/24）（数据处置）
+
+- **缘起**：§53.95 顺带观察到 `event_store.json` 257 条里 49 条的 `event_id` 不是 16 位 hex。用户拍板 C：清掉。**逐条取证后才动手**，不是按 id 长度删。
+- **它们是什么**（49 条同族的五条独立证据）：① `event_title` 恰为 `"Event <event_id>"`（45 条），剩下 4 条同族（`evt-5`…`evt-8`）；`test-1` 是 `"Will X happen?"`；② `probability.estimated` **全部 62.0**；③ `first_seen` **全部 2026-07-13**（同一次批量写入）；④ 与四个测试模块里的同一段夹具构造函数逐字对应（`event_title: f"Event {event_id}"`、`estimated: 62.0`）；⑤ 五张引用表**零引用**。
+- **引用复核（两道，独立）**：先做全仓扫描（所有 `backend/**/*.db` 的 event/id 列 + 所有 json/jsonl/csv 文本），再在**删除时刻**用契约层 `refs_for_event()` 复验一遍。全仓扫描命中 7 个 id，逐条看上下文后 6 个是**词形假阳性**（`"review_priority": "high"`、`"severity": "high"`、`"mapped_outcome":"none"`、CSV 队名 `Sana'a` 等），只有 1 个是真引用：`domain_reliability.db → domain_reliability_ledger.event_id='e1'`（domain `reuters.com`，correct=1，credibility=0.8，2026-07-31）。该表在 `EXEMPT_TABLES` 里（另一个库、`event_id` 是积分去重键而非指针），**本次未动**——见下「遗留」。
+- **处置**：备份 `event_store.json`（3 862 936 B，sha `c6556113…`，副本一致）→ 把 49 条完整导出成 `purged_fixture_events_20261024.json`（可逐条回滚）→ **单次原子写**移除（`locked_file` + `_load_for_write` + `write_json_atomic(indent=2)`，与 `DELETE /events/{id}` 路由同一组构件；逐条走路由会付出 49 次全文件重写）。
+- **结果**：257 → **208** 条；字节 3 862 936 → 3 711 530；**其余 208 条逐条 deep-equal 未变**（`after == before - targets` 断言通过）；备份 sha 与处置前一致。
+- **API 复核**：`/api/events/` total `165`（默认 `exclude_expired=true`；传 `exclude_expired=false` 得 **208**——差值是既有 TTL 过滤，不是删除副作用）；`/api/health` 的 `counts.events` 208、`resolved_events` **132→83**（48 条 resolved + `test-1` 未 resolved）、`open_opportunities` 27 不变、`dangling_refs` 1 / `actionable_dangling_refs` 0 不变、`calibration_n` 2 不变（无预测引用这些 id）。
+- **会不会再长出来**：跑两个造夹具的测试模块（`test_sweep_event_quality.py` / `test_report_quality_metrics.py`）前后，live store 的 sha **不变**（`58cbd356…`）⇒ 测试现已隔离到 `_TEST_DATA_DIR`；那 49 条是 2026-07-13 的一次性批量写入，当前代码不会复现。
+- **遗留（未动，待拍板）**：`domain_reliability_ledger` 里那条 `e1` 记录是**夹具留下的信用记录**（给 `reuters.com` 记了一次 correct）。它与本次清理同源，但在另一个库、且该表设计上允许 `event_id` 不解析；删它等于改一条信任测量，属独立决策。
+
+### 53.98 —— 夹具信用的清理：`domain_reliability` 按契约重建归零（2026-10-24）（数据处置）
+
+- **缘起**：§53.97 全仓扫描留下的唯一真引用——`domain_reliability.db` 里 `event_id='e1'` 那条（`reuters.com` / `correct=1` / `credibility=0.8`）。用户拍板 B。**先量影响再动手**，发现比预期严重：整个库的内容就是这条夹具的残留 —— ledger **1 行**，聚合表 **2 行**（`prediction_market` + `_all`），全部 `reuters.com`、全部 `sample_count=1`、`correct=1`、`credibility_sum=0.8`。也就是说，这个真实新闻域名在系统里有一条**唯一的、100% 正确的、伪造的**信任记录，而且它是库里**唯一**的 domain。
+- **机制选择（不用手写 DELETE）**：走 store 自己的对账路径 `rebuild_from_records(list_all_events())` —— 它清空两张表并按事件库重算。先在**副本**上预演：用当前 208 条记录重建，得到 ledger **0** / 聚合 **0**。即契约层自己对「事件库现在长什么样」的判读就是「这条信用不存在」。这比手工删行强：① 不用把 `DELETE FROM` 塞进数据处置（少一条只有我知道的真理）；② 聚合与 ledger 不会停在半截状态（ledger 空了但聚合还在继续计数）。
+- **处置**：备份 `domain_reliability.db`（28 672 B，sha `5620df1a…`，副本一致）→ `rebuild_from_records(208 条)`。
+- **结果**：ledger 1→0、聚合 2→0；两张表**结构完好**、`loop_schema_versions` 行数不变、`PRAGMA integrity_check` = ok；备份 sha 与处置前一致。
+- **可观测复核**：`GET /api/quality-metrics/domain-reliability` → **200**，`{domains: [], total_domains: 0, total_rows: 0, total_samples: 0, graded_samples: 0, brier_mean: null, brier_skill_score: null}` —— 空态是**显式**的（`brier_mean: null` 而不是 `0`），与 §5「0 必须只说一件事」一致；信任加权退回默认值，正是全新部署会走的路径。定向测试 `-k "domain_reliability or quality_metrics"` 176 passed / 23 subtests。
+- **为什么不会回来**：那条记录是 2026-07-31 `apply_resolution` 给夹具事件 `e1` 记的一次 correct；事件已从库里删除，没有任何路径会再给它加分（`rebuild_from_records` 现在是幂等的空集合）。
+- **残留零**：至此 §53.97 那批 49 条夹具在事件库、五张引用表、可靠度账本三处**全部清空**，`.workbench/` 与 CSV 的 6 个命中已逐条证明是词形假阳性。
+
+
+### 53.99 —— `/api/health` 的降级判据：只数「描述本实例」的失败 run（2026-10-24）
+
+- **缘起（启动冒烟线索 1）**：`/api/health` 长期 503。`degraded` 里唯一的动态输入是 `failed_runs`，它把 `loop_status().runs` 中**最新一条 run 为 `failed`** 的 job 全部算作降级。真实账本里恰好命中两条：`event_discover_startup`（`2026-09-10T19:51:22.207024+00:00`）与 `world_cup_api_football_validate`（`2026-07-07T17:46:46.955912+00:00`）。两者都**不会再有后继 run**——前者是启动即执行的一次性 job（fire 完就从 jobstore 摘掉），后者由请求触发、从不入 jobstore。于是「最新一条」永久指向那次失败：一次坏天气换来八个月的 503。
+- 🔴 **判据错在哪**：`latest run == failed` 只在「这个 job 还会再跑」时才描述当下管线。对不会再跑的 job，它是**历史**而非**状态**；而 health 的全部意义是描述**这个实例、此刻**。
+- **修法（两条分支，各自承重）**：`degraded` 只数同时满足「job 仍在调度器 jobstore 里」**或**「该 run 的 `started_at` 不早于本进程启动时刻」的失败 run。分支 ① 覆盖 interval/cron（会再跑 ⇒ 失败描述当下）；分支 ② 覆盖 once 型启动自检与请求触发型 job（本进程启动之后才写的失败 ⇒ 属于本次启动）。`_PROCESS_STARTED_AT` 在模块导入时取一次 `datetime.now(timezone.utc)`。
+- **被否决的备选：按墙钟年龄过滤**（「超过 N 天算陈旧」）。两个方向都错：一次八个月前的失败与一次八分钟前的失败，区别不在年龄而在「还会不会再跑」；反过来，长跑进程里本进程启动初期的失败会因「年龄够老」被**静默丢掉**——那恰恰是最该报警的一条。
+- **不静默过滤（§5）**：陈旧失败进独立键 `stale_failed_runs`，与 `failed_runs` 并列出现在响应里，且它们的 run 行**仍然**出现在 `loop.runs`。**一个被过滤掉的键与「从未失败」不可区分**——这就是 §5「0 必须只说一件事」在失败侧的镜像。
+- **不可解析的时间戳判 `False`（保守方向）**：`started_at` 缺失/非字符串/`fromisoformat` 抛 `ValueError` ⇒ 视为「不是本进程」（进 `stale`）。反着判会把每一行坏数据都变成 503。无 tz 的串按 UTC 解释——账本自己写的就是 UTC。
+- 🔴 **`scheduler.get_jobs()` 必须包在 try 里**：调度器在测试里被整个替换时这里可能是 `AttributeError`。health 端点因为读不到 job 列表而返回 500，等于把「探测本身挂了」伪装成「被测物挂了」。
+- **实测（把 failed-run 的贡献隔离出来）**：裸 `TestClient`（不跑 lifespan）恒为 **503**，但成因是 `scheduler_enabled=True and not scheduler.running`，与失败 run 无关——**这个巧合本身是个陷阱**：不启调度器的探针永远看不到 200，误判「没修好」。把调度器桩成 `running=True` + 空 jobstore 后只剩 failed-run 输入，得 `status_code 200`、`failed_runs=[]`、`stale_failed_runs=['event_discover_startup', 'world_cup_api_football_validate']`，两条 run 行仍以 `failed` 出现在 `loop.runs`。修复前同一条件下 `failed_runs` 就是这两个名字 ⇒ 503。
+- **契约**：`ApiHealthResponse` 7→8 键（`stale_failed_runs: list[str]` 紧跟 `failed_runs`，按生产者写入序）；一并重生成 `generated-types.ts`。前端目前**未读** `stale_failed_runs`（`grep` 只命中生成物本身）——键先入契约，UI 是否采用是独立决定。
+- **新套 `health-stale-runs`（15 套 / 304 条）**：H1 去掉「本进程」分支、H2 去掉「在调度器里」分支、H3 回到旧行为（任何历史失败都降级）。三条打在同一针上，其中两条各删一半条件、一条把整条判据退化，方向相反故同 `group="health-failed-run-filter"`；四阶段 [OK]×3，还原 sha256 一致。
+- 🔴 **顺带修出的测试假信号**：全量首跑 1 failure —— `test_operational_readiness` 的 `test_api_health_returns_503_when_degraded` 变成 200。根因：`_FakeScheduler` 只回答 `running`（旧代码也只读这一个属性），新代码问 `get_jobs()` 时被 try 兜住 ⇒ 所有失败 run 都被判成陈旧。**替身的契约随被测代码扩大而扩大**，缺失的方法还会被 `except` 静默吞掉——这是「守卫必须对该改动敏感」的反面教材。修法：`_FakeScheduler(running, jobs=())` 补 `get_jobs()`，失败用例改传 `jobs=("event_discover",)` 并在注释里明示判据是 jobstore 而非时间（run 日期故意留在一月）。
+- 门：ruff ✓ / mypy ✓（331 文件）/ `generate_types --check` ✓ / 全量 pytest **9294 tests, failures=0, errors=0, skipped=11**（12m17s；首跑 9294/1/0 即上条那颗）/ vitest **758 passed**（127 文件）。
+- 前提与余项：`SCHEDULER_ENABLED=False` 的部署里本判据不产生作用（那时 503 只由其它分支给出），但键仍在响应里。「一次性 job 的失败属于历史」只在**启动自检不会被重试**时成立——若将来给它加重试，首个失败行会被同一 job 的下一行覆盖，本分支自然退场，无需改码。

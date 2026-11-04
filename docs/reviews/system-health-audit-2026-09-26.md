@@ -15492,3 +15492,28 @@ subtests；针审计 **275/275** 恰命中 1 次；tsc 零错；vitest 94 文件
 - 🔴 **顺带修出的测试假信号**：全量首跑 1 failure —— `test_operational_readiness` 的 `test_api_health_returns_503_when_degraded` 变成 200。根因：`_FakeScheduler` 只回答 `running`（旧代码也只读这一个属性），新代码问 `get_jobs()` 时被 try 兜住 ⇒ 所有失败 run 都被判成陈旧。**替身的契约随被测代码扩大而扩大**，缺失的方法还会被 `except` 静默吞掉——这是「守卫必须对该改动敏感」的反面教材。修法：`_FakeScheduler(running, jobs=())` 补 `get_jobs()`，失败用例改传 `jobs=("event_discover",)` 并在注释里明示判据是 jobstore 而非时间（run 日期故意留在一月）。
 - 门：ruff ✓ / mypy ✓（331 文件）/ `generate_types --check` ✓ / 全量 pytest **9294 tests, failures=0, errors=0, skipped=11**（12m17s；首跑 9294/1/0 即上条那颗）/ vitest **758 passed**（127 文件）。
 - 前提与余项：`SCHEDULER_ENABLED=False` 的部署里本判据不产生作用（那时 503 只由其它分支给出），但键仍在响应里。「一次性 job 的失败属于历史」只在**启动自检不会被重试**时成立——若将来给它加重试，首个失败行会被同一 job 的下一行覆盖，本分支自然退场，无需改码。
+### 53.100 —— main CI backend-tests 红：守卫针把 Windows checkout 烤进了断言（2026-11-03/04）
+
+- **缘起**：run `41071479601`（`fc13dcc`，push 后首跑）`backend-tests` FAILED——1 FAILED + 2 SUBFAILED，
+  全部落在 `tests/test_generate_types.py` 的三条 needle 断言（行 3107/3109/3249）。回溯：`0b96965` 已红、
+  `6fdb280`（10-02）绿 ⇒ 破口在 10-02~10-24 之间；定位到 `313499d`（§53.66，五小 POST 契约批量具名）——
+  **红在本批三笔提交（`6f66884`/`8108fc6`/`fc13dcc`）之前**，push 只是把既有问题暴露到 CI。
+- 🔴 **根因**：三条多行 needle 硬编码 `\r\n`——本机 checkout 是 CRLF 所以全绿，CI 是 LF checkout 所以恒失配。
+  这正是核心 §4.3「跨行针行尾匹配目标文件」经验的反噬：那条经验只适用**变异 apply/revert 的字节匹配**
+  （被改写目标就在本机、就按本机行尾写回）；**只读断言**（守卫读生成物验证拼接形状）的匹配对象是
+  checkout 出来的磁盘字节，跨平台 checkout 行尾不同 ⇒ 针必须对行尾不敏感。
+- **修法（haystack 侧归一化，不是针侧适配）**：`_API_TS_PATH.read_bytes().decode("utf-8").replace("\r\n", "\n")`
+  归一化后匹配，needle 改 `\n`；两处 docstring 一并更正——site 2 旧文引用「53.65 教训：针的行尾匹配目标文件」
+  作为 `\r\n` 的依据，正是把平台相对经验写成了绝对规则（CI run 41071479601 是实证）。
+- **影响面**：无变异针指向 `test_generate_types.py`（`_T_GENERATE_TYPES` 仅作 guard_file 出现）⇒ 改断言不碰 harness。
+- **验证（全绿）**：LF probe（模拟 CI checkout 归一化后三针全中）；callsite 测试 70 tests 0F0E；全文件
+  1284 tests 0F0E；mutation 静态套件 64 tests + 359 subtests 0F0E；`eol_audit.py --all` damage none；
+  ruff HEAD ≡ 工作树规则集（F401×2/F402/F541 共 4 条既有错误，不在 CI 门 `ruff check app/` 内）。
+- 🔴 **ruff 比对方法论**：把 HEAD 快照放进 `.workbuddy/tmp/` 会按文件位置解析到另一套 ruff 配置
+  （多出 I001/PLW1510），产生假差异 ⇒ 两侧都用 `--stdin-filename backend/tests/test_generate_types.py -`
+  强制同配置，再比 `uniq -c` 规则集（行号会因编辑增删漂移，不能逐行比）。
+- **附带查证**：同 run 只有 4 个 job，`frontend-tests` 整个缺席（非失败）；本地 `ci.yml:83` 定义仍在
+  ⇒ GitHub 端异常，push 修复后重看。§53.86 的 `bytes.count` 假 0 与本案同族反方向：LF 针在 CRLF 树假 0（本机）、
+  CRLF 针在 LF 树假 0（CI）——针审计口径必须用 harness 的 `count_needle`（按 checkout 归一化）。
+- **教训入册**：MEMORY.md §4.3「跨行针行尾匹配目标文件」已加前提限定（仅限变异 apply/revert）；只读断言
+  禁止硬编码行尾，haystack 归一化才是正解。

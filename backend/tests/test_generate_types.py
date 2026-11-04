@@ -3096,17 +3096,22 @@ class SmallInlineContractTests(unittest.TestCase):
 
         Each call site must read the named envelope; the check is textual
         because ``api<T>`` is a cast that asserts nothing. Each needle
-        includes the URL so it is unique in the file.
+        includes the URL so it is unique in the file. The haystack and the
+        multi-line needles are EOL-normalized to LF: ``api.ts``'s checkout
+        EOL is platform-dependent (CRLF on Windows, LF on CI), and a
+        read-only ``assertIn`` must not bake either in (run 41071479601).
         """
-        api_text = _API_TS_PATH.read_bytes().decode("utf-8")
+        api_text = _API_TS_PATH.read_bytes().decode("utf-8").replace(
+            "\r\n", "\n"
+        )
 
         for needle in (
             'api<SparklinesResponse>("/events/batch-sparklines"',
             'api<ResolveExpiredResponse>("/events/resolve-expired"',
             "api<TranslateAllResponse>(`/events/translate-all?force=",
-            "api<TranslateEventResponse>(\r\n"
+            "api<TranslateEventResponse>(\n"
             "      `/events/${encodeURIComponent(id)}/translate?force=",
-            'api<ResetEventDataResponse>(\r\n      "/events/reset",',
+            'api<ResetEventDataResponse>(\n      "/events/reset",',
         ):
             with self.subTest(needle=needle[:52]):
                 self.assertIn(
@@ -3239,14 +3244,19 @@ class DeleteEventContractTests(unittest.TestCase):
         """The ``api.ts`` call site must read the named envelope.
 
         Textual because ``api<T>`` is a cast that asserts nothing. The
-        needle spans two lines and api.ts is a CRLF file, so the needle
-        carries ``\\r\\n`` (the 53.65 lesson: the needle's line endings
-        match the target file, not the script).
+        needle spans two lines, so both the haystack and the needle are
+        EOL-normalized to LF before matching: ``api.ts``'s checkout EOL
+        is platform-dependent (CRLF on Windows, LF on CI). The 53.65
+        needle rule is for byte-exact mutation apply/revert, not for a
+        read-only ``assertIn`` -- CI caught exactly that (run
+        41071479601, this very guard red on Linux).
         """
-        api_text = _API_TS_PATH.read_bytes().decode("utf-8")
+        api_text = _API_TS_PATH.read_bytes().decode("utf-8").replace(
+            "\r\n", "\n"
+        )
 
         self.assertIn(
-            "api<DeleteEventResponse>(\r\n"
+            "api<DeleteEventResponse>(\n"
             "      `/events/${encodeURIComponent(id)}`,",
             api_text,
             "the DELETE call site no longer reads the named envelope: "

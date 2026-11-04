@@ -139,3 +139,6 @@ backend/event_store.json.bak*
 backend/*.db.bak*
 backend/*.db-*
 nul
+
+# ── Test artifacts ─────────────────────────────────────────────────────────────
+backend/.test-junit/

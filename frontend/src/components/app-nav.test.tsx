@@ -127,6 +127,83 @@ describe("AppNav", () => {
     );
   });
 
+  // Locks the direction-color convention 涨红跌绿 (CN market convention) on
+  // the hot-news ticker: rising movers are red (--up tokens), falling green
+  // (--down). Valence tokens --pos/--neg must not appear here. See globals.css.
+  it("colors ticker deltas rising red and falling green per the direction convention", async () => {
+    moversMock.mockResolvedValue({
+      count: 2,
+      movers: [
+        {
+          event_id: "evt-fed",
+          event_title: "Fed rate cut September",
+          trend: {
+            observations: 4,
+            direction: "rising",
+            first_probability: 53.5,
+            latest_probability: 62,
+            net_change: 8.5,
+            min_probability: 52.1,
+            max_probability: 63.4,
+            range: 11.3,
+            volatility: 2.83,
+            recent_change: 1.2,
+            pattern: "trending_up",
+            first_seen: "2026-09-01T08:00:00+00:00",
+            last_seen: "2026-09-05T20:00:00+00:00",
+            span_hours: 108,
+          },
+        },
+        {
+          event_id: "evt-btc",
+          event_title: "BTC above 100k",
+          trend: {
+            observations: 3,
+            direction: "falling",
+            first_probability: 43.2,
+            latest_probability: 40,
+            net_change: -3.2,
+            min_probability: 39.4,
+            max_probability: 44.1,
+            range: 4.7,
+            volatility: 2.35,
+            recent_change: -0.8,
+            pattern: "trending_down",
+            first_seen: "2026-09-02T09:00:00+00:00",
+            last_seen: "2026-09-06T12:00:00+00:00",
+            span_hours: 99,
+          },
+        },
+      ],
+    });
+
+    render(<AppNav />);
+    const ticker = await screen.findByTestId("hot-news-ticker");
+    await waitFor(() => {
+      expect(ticker).toHaveAttribute("data-live", "true");
+    });
+
+    const risingLink = screen.getByTestId("ticker-item-evt-fed");
+    const risingDelta = within(risingLink).getByText("+8.5pp");
+    expect(risingDelta).toHaveClass("text-up");
+    expect(risingDelta).not.toHaveClass("text-pos");
+    expect(risingDelta).not.toHaveClass("text-neg");
+    const risingDot = risingLink.querySelector("span.rounded-full");
+    expect(risingDot).not.toBeNull();
+    expect(risingDot).toHaveClass("bg-up");
+    expect(risingDot).not.toHaveClass("bg-pos");
+
+    const fallingLink = screen.getByTestId("ticker-item-evt-btc");
+    const fallingDelta = within(fallingLink).getByText("-3.2pp");
+    expect(fallingDelta).toHaveClass("text-down");
+    expect(fallingDelta).not.toHaveClass("text-neg");
+    expect(fallingDelta).not.toHaveClass("text-pos");
+    const fallingDot = fallingLink.querySelector("span.rounded-full");
+    expect(fallingDot).not.toBeNull();
+    expect(fallingDot).toHaveClass("bg-down");
+    expect(fallingDot).not.toHaveClass("bg-neg");
+  });
+
   it("renders four group labels", () => {
     render(<AppNav />);
 

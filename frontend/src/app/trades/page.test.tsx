@@ -289,6 +289,48 @@ describe("TradesPage", () => {
     expect(await within(nextOpenSection as HTMLElement).findByText("Open trade page 2")).toBeInTheDocument();
   });
 
+  // Locks the direction-color convention 涨红跌绿 (CN market convention):
+  // profit/win = red (--up tokens), loss = green (--down tokens). Valence
+  // tokens --pos/--neg must not appear on PnL or win/loss cells. See
+  // globals.css for the token split.
+  it("colors profit and wins red, losses green per the direction convention", async () => {
+    const user = userEvent.setup();
+    apiMocks.tradeStats.mockResolvedValue({ ...stats, total_closed: 2 });
+    apiMocks.openTrades.mockResolvedValue({ count: 0, trades: [] });
+    apiMocks.closedTrades.mockResolvedValue({
+      count: 2,
+      trades: [
+        closedTrade,
+        {
+          ...closedTrade,
+          trade_id: "sim-loss",
+          event_id: "evt-loss",
+          event_title: "Loss trade event",
+          pnl_pct: -4.2,
+          is_win: 0,
+        },
+      ],
+    });
+
+    render(<TradesPage />);
+
+    await user.click(await screen.findByRole("button", { name: /已平仓/ }));
+
+    const winRow = (await screen.findByText("Closed trade event")).closest("tr");
+    expect(winRow).not.toBeNull();
+    const winPnl = within(winRow as HTMLElement).getByText("+9.14pt%");
+    expect(winPnl).toHaveClass("text-up");
+    expect(winPnl).not.toHaveClass("text-pos");
+    expect(within(winRow as HTMLElement).getByText("赢")).toHaveClass("text-up");
+
+    const lossRow = (await screen.findByText("Loss trade event")).closest("tr");
+    expect(lossRow).not.toBeNull();
+    const lossPnl = within(lossRow as HTMLElement).getByText("-4.20pt%");
+    expect(lossPnl).toHaveClass("text-down");
+    expect(lossPnl).not.toHaveClass("text-neg");
+    expect(within(lossRow as HTMLElement).getByText("输")).toHaveClass("text-down");
+  });
+
   it("gives voided trades their own tab and says the settlement fields are unsettled", async () => {
     const user = userEvent.setup();
     const voidedTrade: SimTrade = {

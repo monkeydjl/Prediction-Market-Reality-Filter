@@ -66,9 +66,9 @@ export function WeightDiffTable({
                   <td
                     className={`p-2 text-right font-mono tabular-nums ${
                       (r.delta ?? 0) > 0
-                        ? "text-pos"
+                        ? "text-up"
                         : (r.delta ?? 0) < 0
-                          ? "text-neg"
+                          ? "text-down"
                           : "text-muted-foreground"
                     }`}
                   >

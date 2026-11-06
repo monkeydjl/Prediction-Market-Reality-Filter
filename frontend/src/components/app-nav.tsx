@@ -242,10 +242,13 @@ function HotNewsTicker() {
                   <span
                     className={cn(
                       "size-1 rounded-full",
+                      // Direction tokens per CN convention 涨红跌绿: rising =
+                      // red (--up), falling = green (--down). Not pos/neg,
+                      // which carry valence (ok/fail) semantics.
                       (item.delta ?? 0) > 0.5
-                        ? "bg-pos"
+                        ? "bg-up"
                         : (item.delta ?? 0) < -0.5
-                          ? "bg-neg"
+                          ? "bg-down"
                           : "bg-primary/70",
                     )}
                     aria-hidden="true"
@@ -256,9 +259,9 @@ function HotNewsTicker() {
                       className={cn(
                         "font-mono tabular-nums",
                         (item.delta ?? 0) > 0
-                          ? "text-pos"
+                          ? "text-up"
                           : (item.delta ?? 0) < 0
-                            ? "text-neg"
+                            ? "text-down"
                             : "",
                       )}
                     >

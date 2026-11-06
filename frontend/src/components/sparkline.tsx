@@ -36,11 +36,13 @@ function SparklineBase({
 
   const line = points.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
 
+  // Direction coloring per CN market convention 涨红跌绿: up = red (--color-up),
+  // down = green (--color-down). Direction tokens, not valence --pos/--neg.
   const color =
     trend === "up"
-      ? "var(--color-pos)"
+      ? "var(--color-up)"
       : trend === "down"
-        ? "var(--color-neg)"
+        ? "var(--color-down)"
         : "var(--color-muted-foreground)";
   const desc =
     trend === "up"

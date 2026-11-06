@@ -33,4 +33,26 @@ describe("SummaryBar", () => {
     expect(screen.getByText("平均情报价值")).toBeInTheDocument();
     expect(screen.getByText("42.5")).toBeInTheDocument();
   });
+
+  // Locks the direction-color convention 涨红跌绿 (CN market convention):
+  // the rising card is red (--up tokens), the falling card green (--down).
+  // Valence tokens --pos/--neg must not appear on these direction stats.
+  // See globals.css for the token split.
+  it("colors rising red and falling green per the direction convention", () => {
+    render(
+      <SummaryBar
+        summary={{ total: 5, rising: 12, falling: 7, avgValue: 42.5, tracking: 3, archived: 1 }}
+      />,
+    );
+
+    const risingValue = screen.getByText("12");
+    expect(risingValue).toHaveClass("text-up");
+    expect(risingValue).not.toHaveClass("text-pos");
+    expect(risingValue).not.toHaveClass("text-neg");
+
+    const fallingValue = screen.getByText("7");
+    expect(fallingValue).toHaveClass("text-down");
+    expect(fallingValue).not.toHaveClass("text-neg");
+    expect(fallingValue).not.toHaveClass("text-pos");
+  });
 });

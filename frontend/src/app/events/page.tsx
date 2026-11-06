@@ -62,7 +62,18 @@ function fmtHours(hours: number | null | undefined) {
   return `${(hours / 24).toFixed(1)}d`;
 }
 
-function signedTone(n: number | null | undefined) {
+// Change quantities (net/recent change of probability or edge) carry
+// DIRECTION semantics: rising = red (--up), falling = green (--down) per the
+// CN convention 涨红跌绿. Zero stays neutral.
+function changeTone(n: number | null | undefined) {
+  if (n == null || n === 0) return "text-muted-foreground";
+  return n > 0 ? "text-up" : "text-down";
+}
+
+// Edge LEVELS (latest/peak) carry VALENCE semantics — a positive edge is a
+// better opportunity, not a price movement — so they keep pos (green) / neg
+// (red). Do not swap these with the change tones above.
+function edgeTone(n: number | null | undefined) {
   if (n == null || n === 0) return "text-muted-foreground";
   return n > 0 ? "text-pos" : "text-neg";
 }
@@ -99,8 +110,8 @@ function TrendEdgeSummary({
           <SmallMetric label="方向" value={direction} />
           <SmallMetric label="样本" value={String(trend?.observations ?? 0)} />
           <SmallMetric label="当前" value={fmtMaybePct(trend?.latest_probability, 1)} />
-          <SmallMetric label="净变化" value={fmtMaybeSigned(trend?.net_change)} tone={signedTone(trend?.net_change)} />
-          <SmallMetric label="近期变化" value={fmtMaybeSigned(trend?.recent_change)} tone={signedTone(trend?.recent_change)} />
+          <SmallMetric label="净变化" value={fmtMaybeSigned(trend?.net_change)} tone={changeTone(trend?.net_change)} />
+          <SmallMetric label="近期变化" value={fmtMaybeSigned(trend?.recent_change)} tone={changeTone(trend?.recent_change)} />
           <SmallMetric label="平均波动" value={fmtMaybeSigned(trend?.volatility)} />
         </div>
       </div>
@@ -113,10 +124,10 @@ function TrendEdgeSummary({
         <div className="grid grid-cols-2 gap-x-4 gap-y-2">
           <SmallMetric label="样本" value={String(edge?.observations ?? 0)} />
           <SmallMetric label="年龄" value={fmtHours(edge?.age_hours)} />
-          <SmallMetric label="当前 edge" value={fmtMaybeSigned(edge?.latest_edge)} tone={signedTone(edge?.latest_edge)} />
-          <SmallMetric label="峰值 edge" value={fmtMaybeSigned(edge?.peak_edge)} tone={signedTone(edge?.peak_edge)} />
-          <SmallMetric label="净变化" value={fmtMaybeSigned(edge?.net_edge_change)} tone={signedTone(edge?.net_edge_change)} />
-          <SmallMetric label="近期变化" value={fmtMaybeSigned(edge?.recent_edge_change)} tone={signedTone(edge?.recent_edge_change)} />
+          <SmallMetric label="当前 edge" value={fmtMaybeSigned(edge?.latest_edge)} tone={edgeTone(edge?.latest_edge)} />
+          <SmallMetric label="峰值 edge" value={fmtMaybeSigned(edge?.peak_edge)} tone={edgeTone(edge?.peak_edge)} />
+          <SmallMetric label="净变化" value={fmtMaybeSigned(edge?.net_edge_change)} tone={changeTone(edge?.net_edge_change)} />
+          <SmallMetric label="近期变化" value={fmtMaybeSigned(edge?.recent_edge_change)} tone={changeTone(edge?.recent_edge_change)} />
         </div>
       </div>
     </div>

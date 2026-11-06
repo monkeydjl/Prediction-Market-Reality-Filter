@@ -4,6 +4,9 @@ import { fmtSignedPct, PRIORITY_LABELS, STATUS_LABELS } from "@/lib/format";
 
 // Signed probability delta as a colored pill. Always icon + text + color,
 // never color alone (accessibility).
+// Direction coloring follows the CN market convention 涨红跌绿: rising = red
+// (--up), falling = green (--down). These are direction tokens, not the
+// valence --pos/--neg (ok=green / fail=red) used by status/success UI.
 export function DeltaPill({
   delta,
   className,
@@ -18,8 +21,8 @@ export function DeltaPill({
     <span
       className={cn(
         "inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 font-mono text-xs font-medium tabular-nums",
-        rising && "bg-pos/15 text-pos",
-        falling && "bg-neg/15 text-neg",
+        rising && "bg-up/15 text-up",
+        falling && "bg-down/15 text-down",
         !rising && !falling && "bg-muted text-muted-foreground",
         className,
       )}

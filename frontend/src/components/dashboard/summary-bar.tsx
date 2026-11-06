@@ -34,16 +34,20 @@ function Stat({
   value: string;
   hint: string;
   icon: React.ReactNode;
-  tone?: "default" | "pos" | "neg" | "signal";
+  tone?: "default" | "pos" | "neg" | "signal" | "up" | "down";
 }) {
   const toneClass =
-    tone === "pos"
-      ? "text-pos"
-      : tone === "neg"
-        ? "text-neg"
-        : tone === "signal"
-          ? "text-primary"
-          : "text-foreground";
+    tone === "up"
+      ? "text-up"
+      : tone === "down"
+        ? "text-down"
+        : tone === "pos"
+          ? "text-pos"
+          : tone === "neg"
+            ? "text-neg"
+            : tone === "signal"
+              ? "text-primary"
+              : "text-foreground";
   return (
     <div className="flex flex-col gap-1 px-4 py-3 first:pl-4">
       <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -71,14 +75,15 @@ export function SummaryBar({ summary }: { summary: DashboardSummary }) {
         value={String(summary.rising)}
         hint="近期发生概率走高"
         icon={<TrendingUp className="size-3.5" aria-hidden="true" />}
-        tone="pos"
+        // Direction tone per CN convention 涨红跌绿: rising = red (--up).
+        tone="up"
       />
       <Stat
         label="概率下行"
         value={String(summary.falling)}
         hint="近期发生概率走低"
         icon={<TrendingDown className="size-3.5" aria-hidden="true" />}
-        tone="neg"
+        tone="down"
       />
       <Stat
         label="平均情报价值"

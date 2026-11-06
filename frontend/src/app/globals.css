@@ -32,6 +32,10 @@
   --color-pos-foreground: var(--pos-foreground);
   --color-neg: var(--neg);
   --color-neg-foreground: var(--neg-foreground);
+  --color-up: var(--up);
+  --color-up-foreground: var(--up-foreground);
+  --color-down: var(--down);
+  --color-down-foreground: var(--down-foreground);
   --color-signal: var(--signal);
   --color-warn: var(--warn);
   --color-chart-1: var(--chart-1);
@@ -72,6 +76,16 @@
   --pos-foreground: oklch(0.16 0.02 160);
   --neg: oklch(0.64 0.2 22);
   --neg-foreground: oklch(0.96 0.01 20);
+  /* Direction tokens (涨红跌绿, CN market convention): up = red, down = green.
+     Deliberately separate from --pos/--neg, which carry VALENCE semantics
+     (success/ok/healthy = green, failure/error/breach = red) and must not
+     flip with market direction. Numeric-movement components (delta pills,
+     sparklines, PnL, weight diffs) use --up/--down; status/success/error
+     UI keeps using --pos/--neg. */
+  --up: oklch(0.64 0.2 22);
+  --up-foreground: oklch(0.96 0.01 20);
+  --down: oklch(0.72 0.15 158);
+  --down-foreground: oklch(0.16 0.02 160);
   --signal: oklch(0.74 0.12 195);
   --warn: oklch(0.78 0.13 75);
   --chart-1: oklch(0.74 0.12 195);

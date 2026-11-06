@@ -47,7 +47,8 @@ function StatCard({
 // "null" both mean "not measured". `== null` below catches both.
 function PnlBadge({ pnl }: { pnl: number | null | undefined }) {
   if (pnl == null) return <span className="text-muted-foreground">—</span>;
-  const cls = pnl >= 0 ? "text-pos" : "text-neg";
+  // CN market convention 涨红跌绿: profit = red (up), loss = green (down).
+  const cls = pnl >= 0 ? "text-up" : "text-down";
   return (
     <span className={`font-mono font-semibold tabular-nums ${cls}`}>
       {fmtSignedPct(pnl, 2)}%
@@ -477,9 +478,9 @@ export default function TradesPage() {
                             <td
                               className={`px-4 py-2 font-mono tabular-nums ${
                                 t.is_win === 1
-                                  ? "text-pos"
+                                  ? "text-up"
                                   : t.is_win === 0
-                                    ? "text-neg"
+                                    ? "text-down"
                                     : ""
                               }`}
                             >

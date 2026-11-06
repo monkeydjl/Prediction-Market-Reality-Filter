@@ -15545,3 +15545,64 @@ subtests；针审计 **275/275** 恰命中 1 次；tsc 零错；vitest 94 文件
 - **提交**：`c554681` 单笔 chore(frontend)（仅 lockfile；前端锁文件变更不触及后端四门）。
 - **教训入册**：audit-ci 是实时库门——**绿不是稳态**，锁文件不变也会红；每轮红按 `fixAvailable` 分派
   （true→升级 / false→allowlist）；镜像源只允许出现在 node_modules 重建命令里，落盘前必须 grep 复核锁文件。
+### 53.102 —— 方向色与好坏色混在 pos/neg 一对令牌里：涨红跌绿落地（2026-11-05）
+
+- **缘起**：前端普查发现方向类组件全是西式「涨绿跌红」——`--pos: oklch(…158)`（绿）/
+  `--neg: oklch(…22)`（红），DeltaPill rising→pos、Sparkline up→pos、PnlBadge 盈→pos、is_win 赢→pos、
+  WeightDiffTable delta>0→pos。与用户固定规范**涨红跌绿**（CN 市场惯例）相反；该规范只存在于用户跨项目
+  长期记忆，**仓库内零记录**（全仓 grep 无「涨红跌绿」）——记忆里的约定不落到代码与守卫就会静默漂移。
+- 🔴 **关键判断：`pos/neg` 是双语义混杂**——同一对令牌既当**方向色**（涨/跌、盈/亏、增/减）又当
+  **好坏色**（成功/失败横幅、来源状态 ok/failed、SupportMeter 高低、drift 风险高低、scheduler
+  success/failed、review-queue 通过/违规、engine-performance 准确率高低…全仓 ~90 文件）。
+  **全局交换 pos/neg 的值会把错误横幅翻成绿、成功横幅翻成红** ⇒ 拆令牌是唯一正路：
+  新增 `--up`（红，涨）/`--down`（绿，跌），好坏语义继续用 pos/neg 不动。
+- **修法**：globals.css 增 `--up/--down`（色值复用现有红/绿）+ `@theme inline` 映射（up/down-foreground
+  同步）；4 处方向组件换令牌——DeltaPill（rising→bg-up/15 text-up）、Sparkline（up→var(--color-up)）、
+  trades PnlBadge（盈≥0→text-up）与 is_win（赢→text-up）、WeightDiffTable（delta>0→text-up）。
+  **边界裁决**：trades 的 `direction==="YES"` 标签保留 pos/neg——它是押注方向标签不是数值涨跌；
+  drift/SupportMeter/准确率等保留 pos/neg——数值有方向但语义是好坏。
+- **守卫（正向控制 + 反向钉）**：新建 indicators.test.tsx（3：rising 落 text-up/bg-up/15 且
+  `not.toHaveClass("text-pos")`、falling 同理、flat 无方向令牌）+ sparkline.test.tsx（3：stroke
+  `var(--color-up)`/`var(--color-down)`/muted 逐 trend 断言）+ WeightDiffTable.test.tsx（1：正/负/零/null
+  四行逐格）+ trades page.test 扩展（+1：`+9.14pt%` 盈与「赢」落 text-up、`-4.20pt%` 亏与「输」落
+  text-down，双向反向钉）。
+- **验证**：vitest 130 files / 766 tests 与期望精确对账（基线 127/758 + 3 新文件 7 测试 + trades 1），
+  连两轮干净；tsc --noEmit exit 0；eslint 0 errors（1 条既有 warning：ingest-console 'line'）；build
+  `Compiled successfully` + `Generating static pages (40/40)` + out/ 261 文件；tsconfig.json 构建 sha256
+  前后一致（EXIT=1 为 safe-delete 收尾拦 export-detail.json——本机已知模式，非构建失败）。
+- 🔴 **附带坑一：vitest 收集 flake 新形态**——首轮 129 files / 760 tests + 1 unhandled error
+  （比磁盘真值 130 文件少 1 个文件 6 条测试），隔离环境（无并发任务）也偶发；连两轮重跑 130/766 干净。
+  判据升级：**全量跑后必须对账**（磁盘 `find -name "*.test.*" | wc -l` × 期望测试数），
+  对不上就重跑，别把「全绿」当真。
+- 🔴 **附带坑二**：`--reporter=basic` 在 vitest 4 是 `ERR_LOAD_URL`——basic reporter 已移除，
+  flag 被当作自定义 reporter 模块路径加载；用默认 reporter 或 `--reporter=dot`。
+- **EOL 附记**：改动 9 文件字节画像零 MIXED（3 纯 CRLF + 6 纯 LF；Edit 保留原行尾再次实证——
+  CRLF 文件编辑后仍 CRLF、LF 文件编辑后仍 LF）；git「LF will be replaced by CRLF」警告是 autocrlf
+  提示而非损坏（§1 判据复用）。
+#### 53.102.1 —— 第二轮全站普查：方向/好坏逐文件裁决与三处补翻（2026-11-05/06）
+
+- **方法**：老板点名「扩展到 sports 赔率变动等页面」⇒ 对全仓剩余 ~30 个 pos/neg 消费文件逐个
+  grep-with-context 分类（方向 vs 好坏 vs 边界），不凭文件名与数量推测。
+- **裁决保留（好坏语义，共 ~85 处不动）**：成功/失败横幅与错误态（全站 error 都留 neg）、来源/任务
+  状态徽章（ok/failed、healthy、verified、ready）、SupportMeter 支持度、drift 漂移风险高低、
+  scheduler 与 backfill 成败、review-queue ERROR/SLA 违约、**Edge 正负着色**（edges 页 edgeTone、
+  decision-card Edge/信任、events 页当前/峰值 edge）——hint 明示「正为好」，edge 是机会价差不是
+  变化量；**晋级概率/夺冠概率分档**（qualification-table、tournament-simulation，高概率=前景好）；
+  **预测质量**（exact/close/wrong、brier 阈值、skill>0、命中率）；**比分一致性/缓存命中率**等
+  health 族；**YES/NO 押注方向标签**（RecommendationCard DIRECTION_STYLES、decision-timeline
+  DIRECTION_COLORS、trades direction 列）——押注方向不是数值涨跌，与 PnL 裁决相反各按其义。
+- **补翻 3 处（第二轮实翻）**：① app-nav 热点快讯 ticker——导航 delta 圆点 bg-pos/bg-neg →
+  bg-up/bg-down、delta 数字 text-pos/text-neg → text-up/text-down（每页可见，漏掉它 = 同屏两套
+  方向色）；② dashboard summary-bar——「概率上行」tone pos→up、「概率下行」neg→down（Stat 组件
+  tone 类型扩展 up/down 分支，pos/neg 分支保留向后兼容）；③ events 详情页 signedTone **拆分**——
+  原 helper 同函上色「概率/edge 变化量」（方向）与「edge 水平值」（好坏）：拆为 changeTone
+  （净变化/近期变化 → up/down）与 edgeTone（当前/峰值 edge → 保留 pos/neg），注释钉死裁决理由。
+- **守卫 +2（均含反向钉）**：summary-bar.test 新增「上行红/下行绿」断言（夹具值取唯一数 12/7 防
+  跨卡 getByText 撞车）；app-nav.test 新增 ticker 逐项断言（+8.5pp→text-up+bg-up、-3.2pp→
+  text-down+bg-down，not text-pos/text-neg/bg-pos/bg-neg）。
+- **验证**：vitest 130 files / 768 tests（766 + 新守卫 2）一次对账干净；tsc --noEmit exit 0；
+  eslint 0 errors（1 条既有 warning）；build **exit 0** + Compiled successfully + (40/40) + out/
+  261 文件 + tsconfig sha256 前后一致（本轮 shim 未触发收尾拦截）。
+- **EOL**：第二轮 5 个触碰文件全纯 CRLF（Edit 保留原行尾），全批 14 文件零 MIXED。
+- **方向类终版清单（7 组件全翻转）**：DeltaPill、Sparkline、PnlBadge、is_win、WeightDiffTable、
+  app-nav ticker、summary-bar 上行/下行卡、events 页变化量（changeTone）——valence ~85 处保留。

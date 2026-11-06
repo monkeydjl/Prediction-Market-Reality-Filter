@@ -15606,3 +15606,112 @@ subtests；针审计 **275/275** 恰命中 1 次；tsc 零错；vitest 94 文件
 - **EOL**：第二轮 5 个触碰文件全纯 CRLF（Edit 保留原行尾），全批 14 文件零 MIXED。
 - **方向类终版清单（7 组件全翻转）**：DeltaPill、Sparkline、PnlBadge、is_win、WeightDiffTable、
   app-nav ticker、summary-bar 上行/下行卡、events 页变化量（changeTone）——valence ~85 处保留。
+#### 53.102.2 —— 实时价格表补涨跌 delta：零方向色的活行情流（2026-11-06）
+
+- **缺口**：sports 实时价格表（websocket 行情流，match 页唯一 tabular 实时数据）只有错误态用色，
+  **任何涨跌信息都不存在**——每行是孤立快照，无「较前值」。涨红跌绿落地后的第一个「补缺失」而非
+  「纠方向」项。
+- **修法**：按 `(type, outcome, bookmaker)` 序列对比前一快照的 implied_prob（跨书商/类型比较无意义）；
+  「隐含概率」列内联 delta chip（`▲+5.0pt`/`▼-5.0pt`，▲▼ 提供非色信号）。deadband ±0.5pt 与
+  DeltaPill 平地带对齐；首样本无 delta；price/decimal_odds 列保持中性（赔率数值涨跌与概率涨跌
+  经济含义相反，同屏双向着色会互相打架——只着色产品主量：概率）。
+- **守卫 +4**：同序列上行（text-up，not pos）/ 下行（text-down，not neg）/ **序列隔离**
+  （type/bookmaker 不同不比较）/ 死区不显示。
+- 🔴 **NameError 三犯**：`sortedUpdates` 改名 `rows` 后 ：100 的空态分支引用漏改——**7 条测试全红
+  才暴露**（正好是用户记忆「grep 证明锚点在 ≠ 改动自洽」的已知模式；改名类编辑后必须全跑该组件测试）。
+- **验证**：vitest 130 files / 772 tests 对账精确（768 + 4 新守卫）；tsc exit 0；eslint 0 errors
+  （1 既有 warning）；build exit 0 + Compiled successfully + (40/40) + out/ 261 文件 + tsconfig
+  sha256 不变；两文件零 MIXED。
+#### 53.102.3 —— 详情页「概率变化」漏翻：变化量扫描法的补网（2026-11-06）
+
+- **方法升级**：逐文件人工分类会有漏网（signal-summary 就是两轮普查都放过了——它有 tone 机制、
+  看起来「已着色」）。新扫描判据：`grep -rl "net_change|recent_change|\\.delta" | grep -v
+  "text-up|bg-up|text-down|bg-down|DeltaPill"`——**展示变化量却没有任何方向令牌的文件**。
+  全站只命中 2 个：一个测试文件、一个 signal-summary。
+- **漏翻实锤**：signal-summary「概率变化」Metric `delta > 0.5 → pos(绿)`——与 DeltaPill 完全同语义
+  （同一 `event.delta`、同一 ±0.5 平地带），详情页与仪表盘同屏异色。修法：Metric tone 类型扩展
+  up/down 分支（pos/neg 分支保留给质量量），「概率变化」改 up/down。
+- **边界复核**：同组件「证据支持度」（高=好）与「交叉验证背离」（大=坏）、signal-panel 背离阈值
+  ——全是好坏语义保留。
+- **守卫 +1**：signal-summary.test 概率变化 三态（+3.2pt→text-up / -3.2pt→text-down / +0.3pt→
+  muted，各带反向钉）+ 质量量保留断言（evidenceSupport 70%→text-pos not text-up）。
+- **验证**：vitest 130 files / 773 tests（772 + 1）；tsc exit 0；eslint 0 errors（1 既有 warning）；
+  build exit 0 + (40/40) + out/ 261 文件 + tsconfig sha256 不变。
+- **方向类终版 +1 = 9 处**：DeltaPill、Sparkline、PnlBadge、is_win、WeightDiffTable、app-nav
+  ticker、summary-bar 上下行卡、events 变化量、signal-summary 概率变化。
+### §53.102.4 — 第二维度扫描收口：events 方向 tone + link-audit-trail Δ 着色（2026-11-06）
+
+方向色扫过逐文件分类（~30 文件）后，再开**第二扫描维度**（快照对/比较型展示）查漏，命中两处：
+
+1. **events/page.tsx** — `TrendSummary.direction`（rising/falling/stable）此前以中性文本渲染。
+   新增 `directionTone()` helper（rising→text-up / falling→text-down / 其余 text-foreground），
+   应用到 `<SmallMetric label="方向">`。稳定态不着色（无方向信息）。
+2. **link-audit-trail.tsx** — Δ（`delta_pp`，链接审计快照首末概率差）此前无色。改三元着色：
+   delta_pp>0→text-up / <0→text-down / null→中性"—"。与 §53.102.2 realtime 增量同判据：
+   **方向量着 up/down，不做好坏解读**。
+
+守卫：新建 `link-audit-trail.test.tsx` 3 测（+9.0pp→text-up 且 **not text-pos**；-3.4pp→text-down 且
+**not text-neg**；缺失→中性）——反向钉防两类令牌回混；mock `useLinkAudit` + `MarketPriceAudit` 夹具。
+
+验证：vitest 全量 **131 files / 776 tests 全绿**（磁盘对账 131=130+1 ✓，773+3）；tsc 0 错；
+eslint 0E1W（ingest-console 既有基线）；next build `Compiled successfully` + **(40/40)** +
+out/ **261** 文件（递归口径；`ls out|wc -l`=26 是顶层条目数，两口径别混）；tsconfig sha256
+`732a19e6…` 前后一致。EOL：5 个既有触达文件全 CRLF（Edit 保留行尾）、2 个新建测试全 LF，**零 MIXED**。
+
+教训（构建判据补充）：`grep -E "Generating static pages \("` 会漏配——实际行是
+`Generating static pages using 23 workers (40/40)`，"(" 前隔着 "using 23 workers"；
+判据锚「Compiled successfully」+「(40/40)」+ out/ 递归计数，**不锚整短语**。
+### §53.102.5 — 第三维度扫描：符号网 + formatter 消费者审计，两处漏翻收口（2026-11-06）
+
+**第三维度两张网**：
+
+1. **箭头符号网**（▲▼↑↓↗↘ × 无方向令牌）：全站仅 3 文件——realtime 表两文件已收口（§53.102.2）；
+   `segment-compare-panel.tsx` 的 ↑/↓ 是**表格排序指示符**（升序/降序，非数值涨跌）——合理中性，
+   着方向色反而误导。扩展符号集（△▽∧∨∆∇↕⇅）零命中。⇒ 符号网零真漏翻。
+2. **formatter 消费者审计**（`fmtSignedPct`/`formatDeltaPt` 全消费点逐一定性）——这才是真金，两处漏翻：
+   a. **trades 汇总卡「累计 PnL / 平均收益」**：明细行 PnlBadge 已红绿（§53.102.1），汇总卡 StatCard
+      硬编码 text-foreground ⇒ 同屏异待遇。修：StatCard 加 `valueClassName` 可选 prop（默认中性），
+      两卡按符号着色（与 PnlBadge 同判据 `>= 0 → up`）。
+   b. **daily-intel movers「全历史净变化」（`all_time_net_change`）**：与同行 DeltaPill（day_net）
+      同语义（概率净值变化）却是灰色。修：td 拆分支——`previous_close` → 按符号 text-up/text-down；
+      「首日」回退（`first_in_day`，无历史基线）保持 muted。
+
+**裁决维持中性（不加色）**：trades `entry_edge`/`directionalEdgeOf` 列、recent-predictions `raw_edge`
+（Edge=好坏语义、现状无色；「保留 pos/neg」指已有着色处不动，不要求给无色处加色）；engine-comparison-view
+的 StatCard（率值分档 pos/warn/neg = 既有好坏裁决）；events 页「平均波动」（波动无方向）。
+
+- 🔴 **扫描网缺陷（方法论）**：第一维变化量扫描是**文件级**过滤（`grep -rl 字段 | grep -v 令牌`）——
+  daily-intel 文件内 DeltaPill（已着色）把整文件从网里放走，掩盖了同文件 `all_time_net_change` 漏翻
+  （`net_change` 子串本应命中）。**文件级网只防「整文件无着色」，防不了「同文件混合态」**。
+  升级方向：行级/块级交叉，或 formatter 消费者枚举（本轮实证后者更硬）。
+- 🔴 **守卫夹具必须走渲染分支**：daily-intel 夹具 `first_in_day` 时 `all_time_net_change` 根本不渲染
+  （首日分支）——负值断言对着永不到达的代码，测试红才暴露。两分支互斥 ⇒ 夹具拆两行 movers
+  （previous_close 负值行 + first_in_day 行各测各的分支）。
+
+验证：vitest 全量 **131 files / 778 tests**（776 + 2 it；daily-intel 另一断言并入既有用例）对账精确；
+tsc 0；eslint 0E1W（既有）；build `Compiled successfully` + **(40/40)** + out/ 261（递归）+ tsconfig sha
+`732a19e6…` 前后一致；4 触达文件零 MIXED（trades 页/daily-intel 均为既有 LF，Edit 保留行尾；
+`git diff --numstat` 核对改动行数与编辑精确匹配、无整文件重写）。
+### §53.102.6 — 第四维度：趋势词网 + 反向自检 ⇒ 方向色普查收官（2026-11-06，零代码改动轮）
+
+**第四维度两张网（本轮均净绿，无代码改动）**：
+
+1. **趋势语义词网**（`movement|rising|falling` 全部消费点 × 方向令牌）：全站 9 文件消费——events
+   （TREND_DIRECTION_LABELS + directionTone）、trades/app-nav/summary-bar/signal-summary/indicators/
+   link-audit/realtime 均已收口（注释俱在）。唯一发现：**daily-intel headline 的 `movement` 字段
+   未消费**——头条方向信息由 DeltaPill（day_net）承载，无信息缺失；属「字段未消费」而非「消费了
+   没着色」，是否渲染 movement 标签是产品决策，不代决。
+2. **反向自检**（13 处已裁决文件中的 pos/neg 残留逐一读上下文）：全部是好坏语义——错误横幅 ×5
+   （trades/events/signal-summary 面板/link-audit/realtime/daily-intel）、YES/NO 押注方向标签
+   （trades ×3，押注方向≠数值涨跌）、decision 徽章（act=绿/provisional=warn）、SupportMeter
+   支持度分档（≥0.7 绿/≥0.45 warn/否则红）、edgeTone（Edge 正负=机会好坏）、Metric/Stat 的
+   tone 分支链本体。**零违规**。
+
+**普查收官宣言**：五张网全部走完——①逐文件人工分类（~30 文件）②变化量数据字段网
+（net_change/recent_change/.delta）③快照对/比较型展示 ④箭头符号网（▲▼↑↓↗↘△▽∧∨∆∇↕⇅）
+⑤趋势语义词网 + formatter 消费者审计 + 反向自检。发现并修复 7 处漏翻（signal-summary、events
+方向 tone、link-audit Δ、trades 汇总卡 ×2、daily-intel 全历史净变化、realtime 概率增量—第①网外
+的增量功能），方向类终版 **13 处**全走 up/down + 反向钉守卫；裁决维持中性/好坏处全部逐一定性留档。
+后续新组件照 §5a 判据办（方向量一律 up/down + 反向钉），无需再开普查。
+
+验证：本轮零代码改动 ⇒ 无需全门重跑（前轮 131 files / 778 tests 全绿仍有效；扫描仅读）。

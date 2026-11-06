@@ -148,10 +148,17 @@ export function DailyIntelDigestDashboard() {
                     <td className="py-1.5 font-mono tabular-nums">
                       {fmtPct(m.open, 1)} → {fmtPct(m.close, 1)}
                     </td>
-                    <td className="py-1.5 font-mono tabular-nums text-muted-foreground">
-                      {m.open_source === "previous_close"
-                        ? fmtSignedPct(m.all_time_net_change, 1)
-                        : "首日"}
+                    <td className="py-1.5 font-mono tabular-nums">
+                      {/* 涨红跌绿: all_time_net_change is a direction quantity
+                          (same semantics as the sibling DeltaPill day_net);
+                          the muted tone stays only for the "首日" fallback. */}
+                      {m.open_source === "previous_close" ? (
+                        <span className={m.all_time_net_change >= 0 ? "text-up" : "text-down"}>
+                          {fmtSignedPct(m.all_time_net_change, 1)}
+                        </span>
+                      ) : (
+                        <span className="text-muted-foreground">首日</span>
+                      )}
                     </td>
                     <td className="py-1.5 font-mono tabular-nums text-muted-foreground">
                       {m.day_observations}

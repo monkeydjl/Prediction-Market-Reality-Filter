@@ -331,6 +331,28 @@ describe("TradesPage", () => {
     expect(within(lossRow as HTMLElement).getByText("输")).toHaveClass("text-down");
   });
 
+  it("colors the summary PnL cards with direction tokens (up=red, down=green)", async () => {
+    // Summary cards use distinct values so the assertions cannot collide with
+    // the per-trade badge texts rendered elsewhere on the page.
+    apiMocks.tradeStats.mockResolvedValue({
+      ...stats,
+      total_pnl_pct: 12.34,
+      avg_pnl_pct: -5.67,
+    });
+    apiMocks.openTrades.mockResolvedValue({ count: 0, trades: [] });
+    apiMocks.closedTrades.mockResolvedValue({ count: 0, trades: [] });
+
+    render(<TradesPage />);
+
+    const total = await screen.findByText("+12.34pt%");
+    expect(total).toHaveClass("text-up");
+    expect(total).not.toHaveClass("text-pos");
+
+    const avg = screen.getByText("-5.67pt%");
+    expect(avg).toHaveClass("text-down");
+    expect(avg).not.toHaveClass("text-neg");
+  });
+
   it("gives voided trades their own tab and says the settlement fields are unsettled", async () => {
     const user = userEvent.setup();
     const voidedTrade: SimTrade = {

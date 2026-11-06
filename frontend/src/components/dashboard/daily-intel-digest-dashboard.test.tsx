@@ -63,6 +63,64 @@ describe("DailyIntelDigestDashboard", () => {
       expect(screen.getByTestId("digest-movers")).toBeInTheDocument();
       // Overview bar shows the digest day.
       expect(screen.getByText("2026-09-25")).toBeInTheDocument();
+
+      // 涨红跌绿: all-time net change is a direction quantity — positive is red.
+      const allTime = within(screen.getByTestId("digest-movers")).getByText("+11.2pt");
+      expect(allTime).toHaveClass("text-up");
+      expect(allTime).not.toHaveClass("text-pos");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("colors negative all-time net change green and keeps the first-day fallback muted", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(eventsApi.digest).mockResolvedValue({
+        ...fullPayload,
+        movers: [
+          {
+            event_id: "ev-neg",
+            event_title: "负净值事件",
+            movement: "falling",
+            day_net: -2.1,
+            open: 61.1,
+            close: 59.0,
+            open_source: "previous_close",
+            day_observations: 3,
+            all_time_net_change: -3.4,
+            close_ts: "2026-09-25T22:30:00+00:00",
+          },
+          {
+            event_id: "ev-first",
+            event_title: "首日事件",
+            movement: "rising",
+            day_net: 1.5,
+            open: 50.0,
+            close: 51.5,
+            open_source: "first_in_day",
+            day_observations: 1,
+            all_time_net_change: 1.5,
+            close_ts: "2026-09-25T22:30:00+00:00",
+          },
+        ],
+      });
+      render(<DailyIntelDigestDashboard />);
+      await act(async () => {
+        await vi.runOnlyPendingTimersAsync();
+      });
+
+      const movers = screen.getByTestId("digest-movers");
+      // Negative net change is a downward direction → green (not neg).
+      const neg = within(movers).getByText("-3.4pt");
+      expect(neg).toHaveClass("text-down");
+      expect(neg).not.toHaveClass("text-neg");
+
+      // "first_in_day" has no all-time baseline → muted fallback, never colored.
+      const firstDay = within(movers).getByText("首日");
+      expect(firstDay).toHaveClass("text-muted-foreground");
+      expect(firstDay).not.toHaveClass("text-up");
+      expect(firstDay).not.toHaveClass("text-down");
     } finally {
       vi.useRealTimers();
     }

@@ -87,6 +87,14 @@ function SmallMetric({ label, value, tone = "text-foreground" }: { label: string
   );
 }
 
+// Trend-direction label follows 涨红跌绿: rising = red (--up), falling =
+// green (--down). Same convention as changeTone above.
+function directionTone(direction: string | null | undefined): string {
+  if (direction === "rising") return "text-up";
+  if (direction === "falling") return "text-down";
+  return "text-foreground";
+}
+
 function TrendEdgeSummary({
   trend,
   edge,
@@ -107,7 +115,7 @@ function TrendEdgeSummary({
           <span className="rounded bg-secondary px-2 py-0.5 text-[11px] text-muted-foreground">{pattern}</span>
         </div>
         <div className="grid grid-cols-2 gap-x-4 gap-y-2">
-          <SmallMetric label="方向" value={direction} />
+          <SmallMetric label="方向" value={direction} tone={directionTone(trend?.direction)} />
           <SmallMetric label="样本" value={String(trend?.observations ?? 0)} />
           <SmallMetric label="当前" value={fmtMaybePct(trend?.latest_probability, 1)} />
           <SmallMetric label="净变化" value={fmtMaybeSigned(trend?.net_change)} tone={changeTone(trend?.net_change)} />

@@ -10,7 +10,7 @@ function Metric({
 }: {
   label: string;
   value: string;
-  tone: "pos" | "neg" | "neutral";
+  tone: "pos" | "neg" | "neutral" | "up" | "down";
   detail: string;
 }) {
   return (
@@ -22,6 +22,10 @@ function Metric({
       <span
         className={cn(
           "font-mono text-sm font-semibold tabular-nums",
+          // "up"/"down" = direction tones (涨红跌绿: rising red, falling green),
+          // for movement quantities; "pos"/"neg" = valence (good/bad).
+          tone === "up" && "text-up",
+          tone === "down" && "text-down",
           tone === "pos" && "text-pos",
           tone === "neg" && "text-neg",
           tone === "neutral" && "text-muted-foreground",
@@ -92,7 +96,9 @@ export function SignalSummary({
           label="概率变化"
           detail="相对基准的变动"
           value={`${event.delta > 0 ? "+" : ""}${event.delta.toFixed(1)}pt`}
-          tone={event.delta > 0.5 ? "pos" : event.delta < -0.5 ? "neg" : "neutral"}
+          // Direction tone per CN convention 涨红跌绿 (same quantity and the
+          // same ±0.5 deadband as DeltaPill) — not the valence pos/neg.
+          tone={event.delta > 0.5 ? "up" : event.delta < -0.5 ? "down" : "neutral"}
         />
         <Metric
           label="证据支持度"

@@ -28,15 +28,18 @@ function StatCard({
   label,
   value,
   sub,
+  valueClassName,
 }: {
   label: string;
   value: string;
   sub?: string;
+  /** Optional tone override for the value span; defaults to neutral foreground. */
+  valueClassName?: string;
 }) {
   return (
     <div className="flex flex-col rounded-lg border border-border bg-card p-4">
       <span className="text-xs text-muted-foreground">{label}</span>
-      <span className="mt-1 text-2xl font-bold tabular-nums text-foreground">{value}</span>
+      <span className={`mt-1 text-2xl font-bold tabular-nums ${valueClassName ?? "text-foreground"}`}>{value}</span>
       {sub && <span className="mt-0.5 text-xs text-muted-foreground">{sub}</span>}
     </div>
   );
@@ -193,6 +196,15 @@ export default function TradesPage() {
                   ? `${fmtSignedPct(stats.total_pnl_pct, 2)}%`
                   : "—"
               }
+              // CN convention 涨红跌绿: PnL is a direction quantity (money
+              // movement), same semantics as the per-trade PnlBadge.
+              valueClassName={
+                stats?.total_pnl_pct == null
+                  ? undefined
+                  : stats.total_pnl_pct >= 0
+                    ? "text-up"
+                    : "text-down"
+              }
             />
             <StatCard
               label="平均收益"
@@ -200,6 +212,13 @@ export default function TradesPage() {
                 stats?.avg_pnl_pct != null
                   ? `${fmtSignedPct(stats.avg_pnl_pct, 2)}%`
                   : "—"
+              }
+              valueClassName={
+                stats?.avg_pnl_pct == null
+                  ? undefined
+                  : stats.avg_pnl_pct >= 0
+                    ? "text-up"
+                    : "text-down"
               }
             />
             <StatCard

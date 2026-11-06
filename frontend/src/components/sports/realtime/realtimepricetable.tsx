@@ -1,11 +1,42 @@
 "use client";
 
+import { useMemo } from "react";
 import { usePriceStream, type PriceUpdate } from "@/lib/use-price-stream";
 import { ScrollableTable } from "@/components/ui/scrollable-table";
 import { RealtimePriceIndicator } from "./RealtimePriceIndicator";
 
 interface RealtimePriceTableProps {
   matchId: string;
+}
+
+/** Same-series key: a snapshot only compares against the previous snapshot of
+ *  the same (type, outcome, bookmaker) stream — crossing series would compare
+ *  prices from different books. */
+function seriesKey(u: PriceUpdate): string {
+  return `${u.type ?? ""}|${u.outcome ?? ""}|${u.bookmaker ?? ""}`;
+}
+
+/** Per-update implied-probability delta vs the previous snapshot of the same
+ *  series (null = series first sample). Direction coloring follows the CN
+ *  convention 涨红跌绿: prob rising = red (--up), falling = green (--down). */
+const PROB_DEADBAND = 0.005; // 0.5pt, mirrors DeltaPill's flat band
+
+function computeProbDeltas(updates: PriceUpdate[]): (number | null)[] {
+  const lastProbBySeries = new Map<string, number>();
+  return updates.map((u) => {
+    const key = seriesKey(u);
+    const previous = lastProbBySeries.get(key);
+    lastProbBySeries.set(key, u.implied_prob);
+    if (previous === undefined || !Number.isFinite(u.implied_prob)) return null;
+    const delta = u.implied_prob - previous;
+    return Math.abs(delta) < PROB_DEADBAND ? null : delta;
+  });
+}
+
+function formatDeltaPt(delta: number | null): string | null {
+  if (delta === null) return null;
+  const pt = delta * 100;
+  return `${pt > 0 ? "▲" : "▼"}${pt > 0 ? "+" : ""}${pt.toFixed(1)}pt`;
 }
 
 function formatTime(capturedAt: string | undefined): string {
@@ -32,7 +63,13 @@ function formatNumber(value: number | undefined, digits = 2): string {
 export function RealtimePriceTable({ matchId }: RealtimePriceTableProps) {
   const { updates, isConnected, error, disabled } = usePriceStream(matchId);
 
-  const sortedUpdates: PriceUpdate[] = [...updates].reverse();
+  // Latest first; deltas computed chronologically then reversed in lockstep.
+  const rows = useMemo(() => {
+    const deltas = computeProbDeltas(updates);
+    return updates
+      .map((update, i) => ({ update, delta: deltas[i] }))
+      .reverse();
+  }, [updates]);
 
   return (
     <div data-testid="realtime-price-table">
@@ -60,7 +97,7 @@ export function RealtimePriceTable({ matchId }: RealtimePriceTableProps) {
         </div>
       )}
 
-      {sortedUpdates.length === 0 ? (
+      {rows.length === 0 ? (
         <div data-testid="empty" className="text-sm text-muted-foreground">
           {disabled
             ? "推送已关闭，无实时数据"
@@ -83,12 +120,24 @@ export function RealtimePriceTable({ matchId }: RealtimePriceTableProps) {
               </tr>
             </thead>
             <tbody>
-              {sortedUpdates.map((u, idx) => (
+              {rows.map(({ update: u, delta }, idx) => (
                 <tr key={`${u.captured_at ?? ""}-${u.type}-${idx}`} className="border-b">
                   <td className="py-1 pr-2 tnum">{formatTime(u.captured_at)}</td>
                   <td className="py-1 pr-2">{u.type ?? "-"}</td>
                   <td className="py-1 pr-2">{u.outcome ?? "-"}</td>
-                  <td className="py-1 pr-2 tnum">{formatPercent(u.implied_prob)}</td>
+                  <td className="py-1 pr-2 tnum">
+                    {formatPercent(u.implied_prob)}
+                    {delta !== null && (
+                      <span
+                        className={`ml-1.5 font-mono text-xs font-medium tabular-nums ${
+                          delta > 0 ? "text-up" : "text-down"
+                        }`}
+                        data-testid={`prob-delta-${idx}`}
+                      >
+                        {formatDeltaPt(delta)}
+                      </span>
+                    )}
+                  </td>
                   <td className="py-1 pr-2 tnum">{formatNumber(u.price)}</td>
                   <td className="py-1 pr-2 tnum">{formatNumber(u.decimal_odds)}</td>
                   <td className="py-1 pr-2">{u.bookmaker ?? "-"}</td>

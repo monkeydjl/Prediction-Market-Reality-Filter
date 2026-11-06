@@ -71,7 +71,19 @@ export function LinkAuditTrail({ linkId }: { linkId: number }) {
           </div>
           <div>
             <dt className="text-muted-foreground">Δ</dt>
-            <dd className="font-mono tabular-nums">{signedPp(data.delta_pp)}</dd>
+            <dd
+              className={`font-mono tabular-nums ${
+                // Direction tone per CN convention 涨红跌绿: the price-path
+                // net change rising = red (--up), falling = green (--down).
+                data.delta_pp != null && data.delta_pp > 0
+                  ? "text-up"
+                  : data.delta_pp != null && data.delta_pp < 0
+                    ? "text-down"
+                    : ""
+              }`}
+            >
+              {signedPp(data.delta_pp)}
+            </dd>
           </div>
           <div>
             <dt className="text-muted-foreground">最大回撤</dt>

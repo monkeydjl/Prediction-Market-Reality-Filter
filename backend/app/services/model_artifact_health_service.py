@@ -223,7 +223,10 @@ def inspect_artifact(name: str, path: Path, *, now: dt.date) -> dict[str, Any]:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         entry["status"] = STATUS_UNREADABLE
-        entry["detail"] = f"could not parse {path.name}: {exc}"
+        # OSError text embeds the full filesystem path; expose the exception
+        # class name only (same disclosure level as the wrong-shape branch
+        # below). Full text stays in logs via logger handlers — audit 53.102.8.
+        entry["detail"] = f"could not parse {path.name}: {type(exc).__name__}"
         return entry
     if not isinstance(raw, dict):
         entry["status"] = STATUS_UNREADABLE

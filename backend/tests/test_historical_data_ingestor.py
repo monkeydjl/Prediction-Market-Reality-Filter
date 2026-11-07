@@ -58,7 +58,10 @@ async def test_api_failure_returns_errors(ingestor):
         result = await ingestor.ingest_season("nba", "2024-25")
     assert result["matches"] == 0
     assert len(result["errors"]) == 1
-    assert "API down" in result["errors"][0]
+    # The errors list reaches the backfill-seed HTTP response: class name
+    # only, never the raw exception text (audit 53.102.8).
+    assert result["errors"][0] == "Fetch failed: Exception"
+    assert "API down" not in result["errors"][0]
 
 
 @pytest.mark.asyncio

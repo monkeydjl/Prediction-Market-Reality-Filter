@@ -79,6 +79,12 @@ class InspectArtifactStatusTests(unittest.TestCase):
         entry = health.inspect_artifact("dixon_coles", path, now=_TODAY)
         self.assertEqual(entry["status"], health.STATUS_UNREADABLE)
         self.assertTrue(entry["exists"])
+        # The detail reaches the public /quality-metrics/model-artifacts
+        # response: it must name the exception class, never embed the raw
+        # message (OSError messages include the full filesystem path) —
+        # audit 53.102.8.
+        self.assertIn("JSONDecodeError", entry["detail"])
+        self.assertNotIn("{not json", entry["detail"])
 
     def test_json_list_is_unreadable_not_ok(self) -> None:
         """A valid JSON document of the wrong shape must not read as healthy."""

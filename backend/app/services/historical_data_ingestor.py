@@ -236,7 +236,12 @@ class HistoricalDataIngestor:
             games = await fetcher(season)
         except Exception as exc:
             logger.exception("Failed to fetch %s season %s", sport, season)
-            return {"matches": 0, "results": 0, "errors": [str(exc)]}
+            # The errors list reaches the backfill-seed HTTP response; raw
+            # exception text can embed URLs and internal paths. Class name
+            # only — same controlled disclosure as the route-level handler in
+            # events.py:982. Full text stays in logs (logger.exception) —
+            # audit 53.102.8.
+            return {"matches": 0, "results": 0, "errors": [f"Fetch failed: {type(exc).__name__}"]}
 
         matches_stored = 0
         results_stored = 0

@@ -68,6 +68,57 @@ class WorldCupPredictionRoutesTests(unittest.TestCase):
         self.assertEqual(resp.json()["status"], "ok")
         init_mock.assert_called_once_with()
 
+    def test_prediction_history_degraded_flag_distinguishes_load_failure_from_empty(self):
+        """Criterion 5 (audit 53.102.7): the except-fallback used to return the
+        same status/count/history shape as a genuine "no rows yet" response,
+        making a load failure indistinguishable from absence. The degraded
+        switch must separate the two while keeping the HTTP-200 degradation.
+        """
+        client = _prediction_client()
+
+        broken_session = MagicMock()
+        broken_session.query.side_effect = RuntimeError("db exploded")
+        with patch(
+            "app.api.routes.world_cup_predictions.get_prediction_session",
+            return_value=broken_session,
+        ):
+            resp = client.get(
+                "/world-cup/predictions/matches/m1/prediction-history"
+            )
+
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body["status"], "ok")
+        self.assertIs(body["degraded"], True)
+        self.assertEqual(body["count"], 0)
+        self.assertEqual(body["history"], [])
+
+    def test_prediction_history_normal_branch_reports_not_degraded(self):
+        """The non-empty-shape branch must explicitly say degraded=False so the
+        frontend only trusts the explicit value (missing key = unknown)."""
+        client = _prediction_client()
+
+        history_query = MagicMock()
+        history_query.filter_by.return_value.filter.return_value.order_by.return_value.all.return_value = []
+        prediction_query = MagicMock()
+        prediction_query.filter_by.return_value.first.return_value = None
+        session = MagicMock()
+        session.query.side_effect = [history_query, prediction_query]
+
+        with patch(
+            "app.api.routes.world_cup_predictions.get_prediction_session",
+            return_value=session,
+        ):
+            resp = client.get(
+                "/world-cup/predictions/matches/m1/prediction-history"
+            )
+
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body["status"], "ok")
+        self.assertIs(body["degraded"], False)
+        self.assertEqual(body["count"], 0)
+
     def test_prediction_db_failure_does_not_expose_exception_text(self):
         client = _prediction_client()
         sensitive_error = (

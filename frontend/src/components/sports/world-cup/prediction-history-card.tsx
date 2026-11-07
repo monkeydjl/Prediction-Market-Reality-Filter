@@ -78,6 +78,7 @@ function historyDataQualityLabel(notes: string[] | undefined): string {
 
 export function PredictionHistoryCard({ match }: PredictionHistoryCardProps) {
   const [history, setHistory] = useState<PredictionHistoryEntry[]>([]);
+  const [degraded, setDegraded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -87,7 +88,8 @@ export function PredictionHistoryCard({ match }: PredictionHistoryCardProps) {
         setLoading(true);
         setError(null);
         const data = await fetchPredictionHistory(match.match_id);
-        setHistory(data);
+        setHistory(data.history);
+        setDegraded(data.degraded);
       } catch (err) {
         setError(err instanceof Error ? err.message : "加载失败");
       } finally {
@@ -145,7 +147,9 @@ export function PredictionHistoryCard({ match }: PredictionHistoryCardProps) {
     return (
       <div className="rounded-lg border border-dashed bg-secondary/30 p-6 text-center">
         <Clock className="mx-auto size-8 text-muted-foreground opacity-50" />
-        <p className="mt-2 text-sm text-muted-foreground">暂无预测历史</p>
+        <p className="mt-2 text-sm text-muted-foreground">
+          {degraded ? "预测历史加载失败，已降级为空（可稍后重试）" : "暂无预测历史"}
+        </p>
       </div>
     );
   }

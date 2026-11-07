@@ -141,7 +141,9 @@ async function worldCupFetchError(response: Response, fallback: string): Promise
 /**
  * Fetch prediction history for a match
  */
-export async function fetchPredictionHistory(matchId: string): Promise<PredictionHistoryEntry[]> {
+export async function fetchPredictionHistory(
+  matchId: string
+): Promise<{ history: PredictionHistoryEntry[]; degraded: boolean }> {
   const response = await fetch(
     `${API_BASE}/world-cup/predictions/matches/${matchId}/prediction-history`,
     { cache: 'no-store' }
@@ -151,11 +153,15 @@ export async function fetchPredictionHistory(matchId: string): Promise<Predictio
     throw new Error(`Failed to fetch prediction history: ${response.statusText}`);
   }
 
-  // The envelope writes all four keys on every path -- including the
+  // The envelope writes all five keys on every path -- including the
   // degrade-to-empty `except` fallback -- so `history` needs no `|| []`
-  // fallback (audit 53.77).
+  // fallback (audit 53.77). `degraded` separates a load failure from a
+  // genuine "no rows yet" (criterion 5, audit 53.102.7).
   const data = (await response.json()) as PredictionHistoryResponse;
-  return data.history.filter((entry) => !entry.trigger?.endsWith("_comparison"));
+  return {
+    history: data.history.filter((entry) => !entry.trigger?.endsWith("_comparison")),
+    degraded: data.degraded,
+  };
 }
 
 /**

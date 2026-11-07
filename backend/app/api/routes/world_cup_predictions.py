@@ -362,6 +362,7 @@ async def get_prediction_history(match_id: str) -> dict[str, Any]:
         return {
             "status": "ok",
             "match_id": match_id,
+            "degraded": False,
             "count": len(history),
             "history": [
                 _serialize_history_entry(h, current_prediction, current_payload)
@@ -371,11 +372,15 @@ async def get_prediction_history(match_id: str) -> dict[str, Any]:
 
     except Exception as hist_err:
         # Degrade to empty history instead of returning HTTP 500, so the
-        # frontend can fall back to the "no history yet" empty state.
+        # frontend can fall back to the "no history yet" empty state. `degraded`
+        # keeps this shape distinguishable from a genuine "no rows yet"
+        # (criterion 5: one 0 must only say one thing — load failure is not
+        # absence).
         logger.error("Failed to load prediction history for %s: %s", match_id, hist_err, exc_info=True)
         return {
             "status": "ok",
             "match_id": match_id,
+            "degraded": True,
             "count": 0,
             "history": [],
         }

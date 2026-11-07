@@ -122,6 +122,61 @@ class WorldCupAnalyticsRouteAuthTests(unittest.TestCase):
         self.assertEqual(body["total_entries"], 2)
         self.assertEqual(body["fresh_count"], 1)
         self.assertEqual(body["stale_count"], 1)
+        # Criterion 5: the non-empty branch must carry the explicit switch too.
+        self.assertIs(body["has_entries"], True)
+        self.assertIn("cache_hit_rate", body)
+
+    def test_odds_cache_stats_empty_table_reports_explicit_switch(self):
+        """Criterion 5 (audit 53.102.7): zeros alone cannot distinguish "never
+        fetched any odds" from "odds fetching disabled/failed". The empty
+        response carries has_entries=False and mirrors the non-empty branch's
+        cache_hit_rate key.
+        """
+        resp = self.client.get("/analytics/odds-cache-stats")
+
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertIs(body["has_entries"], False)
+        self.assertIn("cache_hit_rate", body)
+        self.assertEqual(body["total_entries"], 0)
+
+    def test_accuracy_stats_empty_table_reports_explicit_switch(self):
+        """Criterion 5: an empty MatchResult table must be distinguishable from
+        a refresh failure with empty stale data. The all-zero response carries
+        has_results=False and mirrors the non-empty branch's shape (adds
+        predicted_matches/exact_score_correct, drops the dead by_engine key no
+        consumer reads).
+        """
+        resp = self.client.get("/analytics/accuracy-stats")
+
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertIs(body["has_results"], False)
+        self.assertIn("predicted_matches", body)
+        self.assertIn("exact_score_correct", body)
+        self.assertNotIn("by_engine", body)
+        self.assertEqual(body["total_matches"], 0)
+
+    def test_accuracy_stats_with_results_reports_has_results_true(self):
+        self._add_finished_fixture()
+        self.session.add(MatchResult(
+            match_id="m1",
+            final_home_score=2,
+            final_away_score=1,
+            outcome="home_win",
+            finished_at=datetime(2026, 6, 20, 20, 0, 0),
+            predicted_home_score=2.0,
+            predicted_away_score=1.0,
+            outcome_correct=1,
+        ))
+        self.session.commit()
+
+        resp = self.client.get("/analytics/accuracy-stats")
+
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertIs(body["has_results"], True)
+        self.assertEqual(body["total_matches"], 1)
 
     def test_analytics_post_routes_require_write_key(self):
         paths = [

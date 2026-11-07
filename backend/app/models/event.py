@@ -3096,13 +3096,16 @@ class PredictionHistoryResponse(FlexibleResponse):
     """Response for ``GET /matches/{match_id}/prediction-history`` (audit 53.77).
 
     One envelope shape: both the success path and the degrade-to-empty
-    ``except`` fallback write the same four keys, so no flag is needed at this
+    ``except`` fallback write the same five keys, so no flag is needed at this
     level -- the conditionality lives one level down, in
-    ``PredictionHistoryEntry``.
+    ``PredictionHistoryEntry``. ``degraded`` separates a load failure from a
+    genuine "no rows yet" (criterion 5); both branches write it unconditionally,
+    so it carries no default (audit 53.102.7).
     """
 
     status: str
     match_id: str
+    degraded: bool
     count: int
     history: list[PredictionHistoryEntry]
 

@@ -38,6 +38,9 @@ interface AccuracyStats {
   avg_brier_score: number;
   exact_score_correct: number;
   by_stage?: AccuracyByStage[];
+  // Criterion 5: explicit switch separating "no finished matches yet" from
+  // "refresh failed and stale data is also empty" (audit 53.102.7).
+  has_results: boolean;
 }
 
 interface OddsCacheStats {
@@ -46,6 +49,8 @@ interface OddsCacheStats {
   stale_count: number;
   estimated_api_calls_saved: number;
   cache_hit_rate: number;
+  // Criterion 5: "never fetched any odds" vs "odds fetching disabled/failed".
+  has_entries: boolean;
 }
 
 interface SystemHealth {
@@ -2145,6 +2150,11 @@ export function AnalyticsDashboard() {
               <Target className="size-4 text-primary" />
               <h3 className="text-sm font-semibold">预测准确率</h3>
             </div>
+            {!accuracyStats.has_results && (
+              <p className="mt-3 rounded-md bg-secondary/50 px-3 py-2 text-xs text-muted-foreground">
+                暂无已完赛比赛记录，准确率待数据积累
+              </p>
+            )}
             <div className="mt-4 space-y-3">
               <div className="flex items-center justify-between text-sm">
                 <span className="text-muted-foreground">已验证比赛</span>
@@ -2264,6 +2274,11 @@ export function AnalyticsDashboard() {
               <Database className="size-4 text-primary" />
               <h3 className="text-sm font-semibold">赔率缓存统计</h3>
             </div>
+            {!cacheStats.has_entries && (
+              <p className="mt-3 rounded-md bg-secondary/50 px-3 py-2 text-xs text-muted-foreground">
+                缓存为空——尚未抓取任何赔率快照
+              </p>
+            )}
             <div className="mt-4 space-y-3">
               <div className="flex items-center justify-between text-sm">
                 <span className="text-muted-foreground">缓存条目</span>

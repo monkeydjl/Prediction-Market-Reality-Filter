@@ -28,7 +28,7 @@ const match: MatchFixtureRecord = {
 
 describe("PredictionHistoryCard engine label", () => {
   it("shows Elo-only history as the public Elo+赔率 engine", async () => {
-    vi.mocked(fetchPredictionHistory).mockResolvedValue([
+    vi.mocked(fetchPredictionHistory).mockResolvedValue({ history: [
       {
         timestamp: "2026-06-24T12:00:00Z",
         predicted_score: { home: 1.03, away: 1.61 },
@@ -43,7 +43,7 @@ describe("PredictionHistoryCard engine label", () => {
         data_quality: "partial",
         data_quality_notes: ["data_quality_missing"],
       },
-    ]);
+    ], degraded: false });
 
     render(<PredictionHistoryCard match={match} />);
 
@@ -51,7 +51,7 @@ describe("PredictionHistoryCard engine label", () => {
   });
 
   it("shows integrated methods as the integrated engine", async () => {
-    vi.mocked(fetchPredictionHistory).mockResolvedValue([
+    vi.mocked(fetchPredictionHistory).mockResolvedValue({ history: [
       {
         timestamp: "2026-06-24T12:00:00Z",
         predicted_score: { home: 1.03, away: 1.61 },
@@ -63,7 +63,7 @@ describe("PredictionHistoryCard engine label", () => {
         data_quality: "partial",
         data_quality_notes: ["data_quality_missing"],
       },
-    ]);
+    ], degraded: false });
 
     render(<PredictionHistoryCard match={match} />);
 
@@ -71,7 +71,7 @@ describe("PredictionHistoryCard engine label", () => {
   });
 
   it("shows calibration and contribution metadata when history includes it", async () => {
-    vi.mocked(fetchPredictionHistory).mockResolvedValue([
+    vi.mocked(fetchPredictionHistory).mockResolvedValue({ history: [
       {
         timestamp: "2026-06-24T12:00:00Z",
         predicted_score: { home: 2, away: 1 },
@@ -125,7 +125,7 @@ describe("PredictionHistoryCard engine label", () => {
         data_quality: "real",
         data_quality_notes: [],
       },
-    ]);
+    ], degraded: false });
 
     render(<PredictionHistoryCard match={match} />);
 
@@ -136,7 +136,7 @@ describe("PredictionHistoryCard engine label", () => {
   });
 
   it("labels prediction history rows with missing or degraded data quality", async () => {
-    vi.mocked(fetchPredictionHistory).mockResolvedValue([
+    vi.mocked(fetchPredictionHistory).mockResolvedValue({ history: [
       {
         timestamp: "2026-06-24T12:00:00Z",
         predicted_score: { home: 1, away: 1 },
@@ -148,10 +148,34 @@ describe("PredictionHistoryCard engine label", () => {
         data_quality: "partial",
         data_quality_notes: ["data_quality_missing"],
       },
-    ]);
+    ], degraded: false });
 
     render(<PredictionHistoryCard match={match} />);
 
     expect(await screen.findByText("历史质量未标记")).toBeInTheDocument();
+  });
+
+  it("distinguishes a degraded load from a genuine empty history", async () => {
+    // Criterion 5 (audit 53.102.7): a load failure must not read as "no
+    // history yet".
+    vi.mocked(fetchPredictionHistory).mockResolvedValue({
+      history: [],
+      degraded: true,
+    });
+    render(<PredictionHistoryCard match={match} />);
+
+    expect(await screen.findByText(/加载失败，已降级为空/)).toBeInTheDocument();
+    expect(screen.queryByText("暂无预测历史")).not.toBeInTheDocument();
+  });
+
+  it("keeps the plain empty state for a non-degraded empty history", async () => {
+    vi.mocked(fetchPredictionHistory).mockResolvedValue({
+      history: [],
+      degraded: false,
+    });
+    render(<PredictionHistoryCard match={match} />);
+
+    expect(await screen.findByText("暂无预测历史")).toBeInTheDocument();
+    expect(screen.queryByText(/加载失败/)).not.toBeInTheDocument();
   });
 });

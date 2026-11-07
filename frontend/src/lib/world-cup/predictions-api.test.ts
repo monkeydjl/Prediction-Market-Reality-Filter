@@ -54,6 +54,7 @@ describe("fetchPredictionHistory", () => {
         JSON.stringify({
           status: "ok",
           match_id: "match-1",
+          degraded: false,
           count: 2,
           history: [
             {
@@ -86,11 +87,12 @@ describe("fetchPredictionHistory", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const { fetchPredictionHistory } = await import("./predictions-api");
-    const history = await fetchPredictionHistory("match-1");
+    const result = await fetchPredictionHistory("match-1");
 
-    expect(history).toHaveLength(1);
-    expect(history[0].trigger).toBe("manual");
-    expect(history[0].predicted_score).toEqual({ home: 1.069, away: 1.108 });
+    expect(result.degraded).toBe(false);
+    expect(result.history).toHaveLength(1);
+    expect(result.history[0].trigger).toBe("manual");
+    expect(result.history[0].predicted_score).toEqual({ home: 1.069, away: 1.108 });
   });
 });
 

@@ -7294,17 +7294,19 @@ class WorldCupPredictionHistoryContractTests(unittest.TestCase):
         fields = PredictionHistoryResponse.model_fields
         self.assertEqual(
             list(fields),
-            ["status", "match_id", "count", "history"],
+            ["status", "match_id", "degraded", "count", "history"],
             "PredictionHistoryResponse is no longer the key order both "
-            "get_prediction_history return paths build (audit 53.77)",
+            "get_prediction_history return paths build (audit 53.77; "
+            "degraded added by 53.102.7 to separate a load failure from a "
+            "genuine empty)",
         )
         for name, field in fields.items():
             with self.subTest(field=name):
                 self.assertTrue(
                     field.is_required(),
                     f"PredictionHistoryResponse.{name} gained a default; both "
-                    "return paths write all four keys, so a default could only "
-                    "hide a regression (audit 53.77)",
+                    "return paths write all five keys, so a default could only "
+                    "hide a regression (audit 53.77; degraded by 53.102.7)",
                 )
         self.assertTrue(issubclass(PredictionHistoryResponse, FlexibleResponse))
         self.assertEqual(

@@ -584,13 +584,20 @@ async def get_accuracy_stats(session: Session = Depends(get_prediction_session_d
     results = session.query(MatchResult).all()
 
     if not results:
+        # Criterion 5 (audit 53.102.7): all-zero accuracy must say it comes from
+        # an empty MatchResult table — the same zeros also appear when refresh
+        # fails and stale data is empty. Shape mirrors the non-empty branch
+        # (adds predicted_matches/exact_score_correct, drops the dead `by_engine`
+        # key no consumer reads) plus an explicit has_results switch.
         return {
             "total_matches": 0,
+            "predicted_matches": 0,
             "outcome_accuracy": 0.0,
             "avg_score_mae": 0.0,
             "avg_brier_score": 0.0,
-            "by_engine": {},
+            "exact_score_correct": 0,
             "by_stage": [],
+            "has_results": False,
         }
 
     # Only count matches that actually have predictions (outcome_correct is not None).
@@ -629,6 +636,7 @@ async def get_accuracy_stats(session: Session = Depends(get_prediction_session_d
         "avg_brier_score": round(avg_brier, 3),
         "exact_score_correct": sum(1 for r in predicted if abs(r.home_error or 0) < 0.5 and abs(r.away_error or 0) < 0.5),
         "by_stage": by_stage,
+        "has_results": True,
     }
 
 
@@ -830,11 +838,16 @@ async def get_odds_cache_stats(session: Session = Depends(get_prediction_session
     cache_entries = session.query(OddsCache).all()
 
     if not cache_entries:
+        # Criterion 5: zeros alone cannot distinguish "never fetched any odds"
+        # from "odds fetching disabled/failed" — an explicit switch can. Also
+        # mirrors the non-empty branch's cache_hit_rate key.
         return {
             "total_entries": 0,
             "fresh_count": 0,
             "stale_count": 0,
-            "estimated_api_calls_saved": 0
+            "estimated_api_calls_saved": 0,
+            "cache_hit_rate": 0.0,
+            "has_entries": False,
         }
 
     now = datetime.now(timezone.utc)
@@ -859,7 +872,8 @@ async def get_odds_cache_stats(session: Session = Depends(get_prediction_session
         "fresh_count": fresh,
         "stale_count": stale,
         "estimated_api_calls_saved": api_calls_saved,
-        "cache_hit_rate": round(fresh / len(cache_entries), 3) if cache_entries else 0
+        "cache_hit_rate": round(fresh / len(cache_entries), 3) if cache_entries else 0,
+        "has_entries": True,
     }
 
 

@@ -369,10 +369,12 @@ function responseFor(url: string) {
   if (url.includes("/accuracy-stats")) {
     return {
       total_matches: 2,
+      predicted_matches: 2,
       outcome_accuracy: 0.5,
       avg_score_mae: 1,
       avg_brier_score: 0.685,
       exact_score_correct: 0,
+      has_results: true,
     };
   }
   if (url.includes("/odds-cache-stats")) {
@@ -382,6 +384,7 @@ function responseFor(url: string) {
       stale_count: 0,
       estimated_api_calls_saved: 1,
       cache_hit_rate: 1,
+      has_entries: true,
     };
   }
   if (url.includes("/system-health")) {
@@ -768,5 +771,76 @@ describe("AnalyticsDashboard", () => {
       confirmed: true,
     });
     expect(await screen.findByText("Verified correction saved for stale-r16")).toBeInTheDocument();
+  });
+
+  it("shows the empty-state hint when accuracy stats have no results", async () => {
+    // Criterion 5 (audit 53.102.7): all-zero accuracy must be labeled as
+    // "no finished matches" rather than silently rendering 0.0 everywhere.
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/accuracy-stats")) {
+        return {
+          ok: true,
+          json: async () => ({
+            total_matches: 0,
+            predicted_matches: 0,
+            outcome_accuracy: 0,
+            avg_score_mae: 0,
+            avg_brier_score: 0,
+            exact_score_correct: 0,
+            has_results: false,
+          }),
+        };
+      }
+      return { ok: true, json: async () => responseFor(url) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    window.sessionStorage.setItem("pmrf.operatorApiKey", "secret");
+
+    render(<AnalyticsDashboard />);
+
+    expect(await screen.findByText("暂无已完赛比赛记录，准确率待数据积累")).toBeInTheDocument();
+  });
+
+  it("shows the empty-state hint when the odds cache is empty", async () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/odds-cache-stats")) {
+        return {
+          ok: true,
+          json: async () => ({
+            total_entries: 0,
+            fresh_count: 0,
+            stale_count: 0,
+            estimated_api_calls_saved: 0,
+            cache_hit_rate: 0,
+            has_entries: false,
+          }),
+        };
+      }
+      return { ok: true, json: async () => responseFor(url) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    window.sessionStorage.setItem("pmrf.operatorApiKey", "secret");
+
+    render(<AnalyticsDashboard />);
+
+    expect(await screen.findByText("缓存为空——尚未抓取任何赔率快照")).toBeInTheDocument();
   });
 });

@@ -15715,3 +15715,73 @@ tsc 0；eslint 0E1W（既有）；build `Compiled successfully` + **(40/40)** + 
 后续新组件照 §5a 判据办（方向量一律 up/down + 反向钉），无需再开普查。
 
 验证：本轮零代码改动 ⇒ 无需全门重跑（前轮 131 files / 778 tests 全绿仍有效；扫描仅读）。
+### §53.102.7 — 零值门控普查（后端版）：三张网抓一处实锤 + 两处全零候选，§5 判据全量收口（2026-11-07）
+
+**普查方法（三张 AST 探针网，生产者驱动）**：186 个路由端点全扫——
+1. **网 1 · 字面量空值**：路由函数返回 dict 字面量中含空容器/零值键的 return（15 命中 / 12 端点）；
+2. **网 2 · 同形状多分支**：同函数 ≥2 个 return dict 顶层键集合相同（6 命中）——抓
+   "except 降级与真没有不可区分"（get_prediction_history 模式）；
+3. **网 3 · except 降级 return 全谱**：路由函数 ExceptHandler 里的全部 return——**全后端仅 1 处**。
+
+**实锤（修复）**：`world_cup_predictions.py get_prediction_history` 的 except 降级返回
+`status: "ok", count: 0, history: []`——读失败伪装成「真没有」，与正常空态完全同形状（53.77 的
+信封设计当时未区分）。修复走**具名信封三件套**：模型 `PredictionHistoryResponse` 加
+`degraded: bool`（两分支无条件写 ⇒ 无默认值、不加旗，§Z11；键序 status→match_id→degraded→count→history
+= 生产者 dict 插入序，§Z21）→ generate_types 重生成 → 前端 `fetchPredictionHistory` 签名改
+`{ history, degraded }`（解包层此前会丢掉开关）→ card 空态区分「加载失败已降级」vs「暂无预测历史」。
+**53.77 守卫按设计拦截**：`test_generate_types` 钉 envelope 键序 + 全 required——degraded 加键后
+该守卫红 ⇒ 换判据（五键）+ 注明 53.102.7，重跑 0F0E。
+
+**候选（修复）**：`world_cup_analytics.py` 两端点空态全零不带开关——
+- `accuracy-stats`：0 分不清「无已完赛比赛」vs「refresh 失败且 stale 也空」（refresh 异常被吞，
+  logger.warning 后继续）。修复：空态加 `has_results: False` + **形状补齐**（补 predicted_matches/
+  exact_score_correct——空态原缺这两键）+ **删死键 `by_engine`**（空态独有、正常分支无、前端 interface
+  无此键=零消费者）；非空分支加 `has_results: True`。
+- `odds-cache-stats`：0 分不清「没抓过赔率」vs「抓取功能没配」。修复：空态加 `has_entries: False`
+  + 补 `cache_hit_rate: 0.0`（形状补齐）；非空分支加 `has_entries: True`。
+- 前端 analytics-dashboard：手写 interface 加两开关字段 + 面板空态提示条
+  （「暂无已完赛比赛记录」/「缓存为空——尚未抓取任何赔率快照」）。
+
+**12 处合规定性（不加改）**：`list_engines_meta`（kernel_enabled 开关=先例本体）、
+sport_edges/sport_odds 四端点（skipped+skip_reason 三成因：no_prediction/no_verified_links/no_odds）、
+`resolve_expired_events`/`batch_switch_engine`（动作端点计数+message）、`analyze_match_prediction`
+（cached 开关本身）、`translate_event_title`（三分支 message 显式区分）、`get_prediction_timeline`
+（无 except，读失败显式 500；[] 的 match 维度歧义与 no_odds 同族但弱，记录不代决）。
+**§5 判据全量收口**：零值/空态响应全部带生产者开关或显式失败语义。
+
+**验证**：后端 pytest 全量 6,770 passed + 11 skipped + 2,500 subtests（唯一红=53.77 守卫按设计拦截，
+换判据后单跑 44 tests 0F0E）；ruff `All checks passed`、mypy `no issues in 331 files`；
+前端 vitest **131 files / 782 tests**（777+5 守卫）对账精确、tsc 0、eslint 0E1W（既有）、
+build Compiled successfully + (40/40) + out/ 261 + tsconfig sha `732a19e6…` 不变；触达 12 文件
+零 MIXED（predictions-api.test.ts LF 既有）。**测试教训**：API 层解包（`data.history`）会吞掉
+envelope 新键——前端消费改动必须从 API 层开始，组件层单改看不见开关。
+### §53.102.8 — 错误消息泄露普查：四张网扫 186 端点 + 服务层构造点，2 处实锤修复（2026-11-07）
+
+**普查方法（四张网，AST + 透传链追踪）**：
+1. **网 1 · HTTPException/JSONResponse detail 非常量**：16 处命中——逐个定性**全合规**
+   （用户输入回显 404/422 ×9、异常**类名**受控披露 ×1（events.py:982，先例）、常量拼接 ×2、
+   字面量比对门后透传 ×1（world_cup_predictions.py:436 仅放行 "Match not found"）、参数回显 ×3）；
+2. **网 2 · except 内 return dict 内插异常**：**零命中**；
+3. **网 3 · except 降级 return 全谱**：1 处（= 零值普查已修的 get_prediction_history）；
+4. **网 4 · 服务层 error 字段构造 → 透传链**：9 处 `str(exc)` 构造点逐个追到响应——
+   **2 处实锤**（见下）+ 7 处合规（_safe_fact_error 白名单消毒先例 ×1、固定文案 ×3、
+   日志侧不达响应 ×2、死代码零 importer ×1——quality_diff_service 若未来接线需消毒、
+   llm_gateway `_redact_error` 只替换 API key 但 error_message 无路由消费）。
+
+**实锤修复（两处，均对齐既有受控披露先例 `type(exc).__name__`）**：
+- `model_artifact_health_service.py:226`：`detail = f"could not parse {path.name}: {exc}"` →
+  `{type(exc).__name__}`——OSError 原文含**完整文件系统路径**，原样透传到公开的
+  `GET /quality-metrics/model-artifacts`（无写权限门）；同函数 wrong-shape 分支本就是类名披露
+  （先例就在旁边）。
+- `historical_data_ingestor.py:241`：`errors: [str(exc)]` → `[f"Fetch failed: {type(exc).__name__}"]`——
+  任意异常原文（网络错误含 URL/内部路径）透传到 `POST /backfill-seed` 响应；同文件其余 6 处
+  errors.append 本就是固定文案（:346/:445/:608），disclosure 测试钉了消毒合同——本处是漏网的第 7 处。
+
+**测试**：ingestor 的 `test_api_failure_returns_errors` 原本**钉死了泄露行为**（断言 "API down" 在
+errors 里）——换成正向钉（`== "Fetch failed: Exception"` + `not in` 原文）；artifact 的
+`test_unparseable_file_is_unreadable` 补反向钉（含 JSONDecodeError 类名、不含原始文本）。
+
+**验证**：受影响 3 测试文件 76 tests 0F0E；ruff/mypy 全绿；后端全量 pytest 重跑 0F0E（junit 门）。
+**方法论**：路由层 AST 网抓不到「服务层构造 error 字符串 → 路由透传」的间接链路——**必须追透传链**
+（构造点 → 谁消费 → 到不到响应）；`_safe_fact_error` 白名单与 disclosure 测试是仓库已有的消毒
+范式，新 error 字段一律对齐。

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import io
+import json
 import sys
 import zipfile
 from contextlib import AbstractContextManager
@@ -63,6 +65,75 @@ def _reject_arcname_collisions(paths: list[Path]) -> None:
                 "file."
             )
         seen[path.name] = path
+
+
+def _is_event_store(path: Path) -> bool:
+    """True when ``path`` is the configured event store, whatever it is named.
+
+    Compared by resolved path rather than basename: the archive member name is
+    part of the restore contract, but the *setting* is what decides which file
+    is the store, and a deployment is free to call it something else.
+    """
+    configured = getattr(settings, "EVENT_STORE_FILE", "")
+    if not configured:
+        return False
+    try:
+        return path.resolve() == Path(configured).resolve()
+    except OSError:  # pragma: no cover - resolve() on a deleted path
+        return False
+
+
+def _shape_failure(path: Path) -> str | None:
+    """Why ``path`` is not the state store it claims to be, or None.
+
+    Size cannot answer this: an empty install and a mispointed setting both
+    produce a tiny member, and the archive written on 2026-09-09 (13 bytes,
+    ``{"secret": 1}``) read as "a backup ran". Shape can:
+
+    * a JSON state store's top level is an object (all four here are mappings);
+    * every event-store value is an entry object, because every consumer
+      indexes ``entry["record"]`` and a scalar would raise on read.
+
+    Unparseable JSON is deliberately **not** refused -- the bytes are the
+    recovery, and a store already broken is exactly when an operator wants a
+    copy. Only "parses, but is a different file" is a refusal.
+    """
+    if path.suffix.lower() != ".json":
+        return None
+    try:
+        with io.open(path, encoding="utf-8") as fh:
+            payload = json.load(fh)
+    except (OSError, ValueError, UnicodeDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return f"the top level has type {type(payload).__name__}, expected an object"
+    if _is_event_store(path):
+        for event_id, entry in payload.items():
+            if not isinstance(entry, dict):
+                return (
+                    f"entry {event_id!r} has type {type(entry).__name__}, "
+                    "expected an object"
+                )
+    return None
+
+
+def _assert_stores_look_like_themselves(paths: list[Path]) -> None:
+    """Refuse to archive a file that is not the store it is configured as.
+
+    Reachable mistake: `EVENT_STORE_FILE` (or a sibling) pointing at a fixture
+    or a leftover. The resulting archive passes every checksum `restore_stores`
+    performs and restores cleanly into an empty store, so "a pmrf-backup-*.zip
+    exists" would be the only signal -- and it would be false.
+    """
+    for path in paths:
+        reason = _shape_failure(path)
+        if reason:
+            raise RuntimeError(
+                f"Refusing to write a backup that does not contain the state it "
+                f"claims: {path} -- {reason}. Check the path setting for this "
+                f"store (for example EVENT_STORE_FILE) before archiving: a wrong "
+                f"path produces an archive that restores cleanly and is empty."
+            )
 
 
 def _prune_backups(backup_dir: Path, keep: int | None) -> None:
@@ -193,11 +264,17 @@ def create_backup(
 
     Under ``PMRF_ENV=production`` the plaintext branch is refused outright --
     see :func:`_resolve_encryption_key`.
+
+    The candidate stores are checked for shape before the archive is opened
+    (see :func:`_assert_stores_look_like_themselves`): a mispointed path setting
+    would otherwise produce a small, checksum-clean archive of the wrong file.
     """
     # Resolved first, before any directory is created or any archive path is
     # named, so a refusal leaves nothing behind: a zero-byte or half-written
     # pmrf-backup-*.zip in the volume reads as "the backup ran".
     key = _resolve_encryption_key(encryption_key)
+    paths = _candidate_paths()
+    _assert_stores_look_like_themselves(paths)
 
     base = Path(__file__).resolve().parents[1]
     backup_dir = Path(output_dir).resolve() if output_dir else base / "backups"
@@ -206,7 +283,7 @@ def create_backup(
     archive = backup_dir / f"pmrf-backup-{stamp}.zip"
 
     with _open_zip(archive, key) as zf:
-        for path in _candidate_paths():
+        for path in paths:
             zf.write(path, arcname=path.name)
 
     _prune_backups(backup_dir, keep)

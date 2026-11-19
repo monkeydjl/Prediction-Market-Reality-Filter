@@ -30,9 +30,14 @@ from scripts import backup_stores  # noqa: E402
 # A key value distinctive enough that a substring search for it is meaningful.
 SECRET_KEY = "backup-passphrase-DO-NOT-LOG-9f3a"
 
+# 53.103: the fixture has to look like the store it stands in for. `create_backup`
+# now refuses an event store whose values are not entry objects, and the old
+# `{"secret": 1}` payload was exactly the shape the gate exists to reject.
+VALID_EVENT_STORE = '{"evt-1": {"event_id": "evt-1", "record": {}}}'
+
 
 @contextlib.contextmanager
-def one_store_in(base: Path, payload: str = '{"secret": 1}'):
+def one_store_in(base: Path, payload: str = VALID_EVENT_STORE):
     """Point every state store at `base`, with only event_store.json present.
 
     Mirrors the sibling fixtures in test_operational_readiness.py: the other
@@ -132,7 +137,7 @@ class ProductionRefusesPlaintextTests(unittest.TestCase):
             with pyzipper.AESZipFile(archive) as zf:
                 zf.setpassword(SECRET_KEY.encode("utf-8"))
                 self.assertEqual(
-                    zf.read("event_store.json").decode("utf-8"), '{"secret": 1}'
+                    zf.read("event_store.json").decode("utf-8"), VALID_EVENT_STORE
                 )
 
 
@@ -392,13 +397,19 @@ class KeyNeverLeaksTests(unittest.TestCase):
                     patch.object(scheduler, "_start_run", return_value="run-1"), \
                     patch.object(
                         scheduler, "_finish_run",
-                        lambda run_id, status, **kw: recorded.append(
-                            (status, str(kw.get("error") or ""))
+                        # Explicit keywords, not `**kw`: the fake has to fail on
+                        # a signature change instead of quietly recording None.
+                        lambda run_id, status, *, result=None, exc=None,
+                               reason=None: recorded.append(
+                            (status, str(exc or ""))
                         )):
                 import asyncio
                 asyncio.run(scheduler._job_backup_stores())
 
         self.assertEqual([status for status, _ in recorded], ["failed"], recorded)
+        # The operator-facing message names the missing variable and never its
+        # value. It reaches the operator through the exception; the ledger keeps
+        # only `type(exc).__name__`, so the secret has no path to that surface.
         self.assertIn("BACKUP_ENCRYPTION_KEY", recorded[0][1])
         self.assertNotIn(SECRET_KEY, recorded[0][1])
 
@@ -425,7 +436,9 @@ class RestoreStaysCompatibleTests(unittest.TestCase):
         requires_pyzipper(self)
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
-            with one_store_in(base, payload='{"round": "trip"}'), \
+            with one_store_in(
+                base, payload='{"round-1": {"event_id": "round-1", "record": {}}}'
+            ), \
                     patch.object(settings, "PMRF_ENV", "production"), \
                     patch.object(settings, "BACKUP_ENCRYPTION_KEY", SECRET_KEY):
                 archive = backup_stores.create_backup(str(base / "backups"))
@@ -436,7 +449,7 @@ class RestoreStaysCompatibleTests(unittest.TestCase):
             self.assertTrue(result["applied"])
             self.assertEqual(
                 (target / "event_store.json").read_text(encoding="utf-8"),
-                '{"round": "trip"}',
+                '{"round-1": {"event_id": "round-1", "record": {}}}',
             )
 
     def test_a_plaintext_archive_is_not_mistaken_for_an_encrypted_one(self):
@@ -448,7 +461,9 @@ class RestoreStaysCompatibleTests(unittest.TestCase):
         """
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
-            with one_store_in(base, payload='{"legacy": true}'), \
+            with one_store_in(
+                base, payload='{"legacy-1": {"event_id": "legacy-1", "record": {}}}'
+            ), \
                     patch.object(settings, "PMRF_ENV", "development"), \
                     patch.object(settings, "BACKUP_ENCRYPTION_KEY", ""):
                 archive = backup_stores.create_backup(str(base / "backups"))
@@ -462,7 +477,7 @@ class RestoreStaysCompatibleTests(unittest.TestCase):
             self.assertTrue(result["applied"])
             self.assertEqual(
                 (target / "event_store.json").read_text(encoding="utf-8"),
-                '{"legacy": true}',
+                '{"legacy-1": {"event_id": "legacy-1", "record": {}}}',
             )
 
     def test_an_encrypted_archive_without_a_key_is_refused_not_read_as_garbage(self):

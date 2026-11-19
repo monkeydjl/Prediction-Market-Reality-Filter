@@ -1553,7 +1553,11 @@ class BackupTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             event_store = base / "event_store.json"
-            event_store.write_text('{"secret": 1}', encoding="utf-8")
+            # 53.103: an event store is a mapping of id -> entry object;
+            # `create_backup` refuses anything else now, and the old
+            # `{"secret": 1}` fixture was the refused shape.
+            payload = '{"evt-1": {"event_id": "evt-1", "record": {}}}'
+            event_store.write_text(payload, encoding="utf-8")
 
             with patch.object(settings, "EVENT_STORE_FILE", str(event_store)), \
                     patch.object(settings, "EVENT_AUDIT_FILE", str(base / "missing.jsonl")), \
@@ -1577,7 +1581,7 @@ class BackupTests(unittest.TestCase):
             with pyzipper.AESZipFile(archive) as zf:
                 zf.setpassword(b"hunter2")
                 content = zf.read("event_store.json")
-            self.assertEqual(content.decode("utf-8"), '{"secret": 1}')
+            self.assertEqual(content.decode("utf-8"), payload)
 
     def test_backup_plaintext_when_key_empty(self):
         import zipfile

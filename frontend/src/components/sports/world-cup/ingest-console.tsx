@@ -115,7 +115,13 @@ function ResultBlock({
    * retired loose bag never carried (audit 53.90). */
   line?: string;
 }) {
-  const summary = summarize(result);
+  // 53.103: 53.91 retired the loose bag and, with it, the read of `line` --
+  // both status call sites kept passing their specialised summary and it was
+  // silently dropped, so the fact panel fell back to "共 N 条" (and "共 0 条"
+  // when the archive is missing) while the data-source panel rendered no
+  // summary line at all. Prefer the caller's line; the generic summariser
+  // stays as the fallback for the per-family action results.
+  const summary = line ?? summarize(result);
   return (
     <div data-testid={testId} className="mt-3 space-y-2 text-sm">
       {summary && <p className="text-foreground">{summary}</p>}

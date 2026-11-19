@@ -196,12 +196,15 @@ describe("SystemStatus", () => {
     /**
      * Render and wait until the fetched counts are on screen.
      *
-     * The wait is load-bearing, not ceremony. On the first render `status` is
-     * null, so the badge reads "引用异常 0" — `findByText("引用异常 0")` resolves
-     * against that loading frame and returns before any data arrives, which
-     * makes an assertion about a zero count pass no matter what the component
-     * does with the payload. `事件 3` comes only from the fetched counts, so
-     * awaiting it proves `setStatus` has landed.
+     * The wait is load-bearing, not ceremony: `事件 3` comes only from the
+     * fetched counts, so awaiting it proves `setStatus` has landed. It used to
+     * be doubly load-bearing for a reason worth keeping on record -- before
+     * 53.133 the loading frame also read "引用异常 0", so
+     * `findByText("引用异常 0")` could resolve against the frame *before* any
+     * data arrived and make a zero assertion pass no matter what the component
+     * did with the payload. That trap is gone (the frame reads "—" now), but
+     * the wait stays: it is what keeps every assertion here about the payload
+     * rather than about the first paint.
      */
     const renderLoaded = async (counts: Record<string, unknown>) => {
       apiMocks.health.mockResolvedValue({
@@ -306,6 +309,274 @@ describe("SystemStatus", () => {
 
       expect(badge).toHaveTextContent("引用异常 0");
       expect(badge).toHaveAttribute("title", "没有指向已删除事件的残留行");
+    });
+  });
+
+  // 53.133: the badge ended both fallbacks in `?? 0`, so two different unknowns
+  // were painted as the same number: "the question has not been asked yet" and
+  // "this backend sends none of the three keys". §5 does not allow a reader to
+  // mistake one of those for "there are no broken references". Each case below
+  // asserts the "—" *and* the absence of the zero, because a badge that always
+  // says "—" would pass the first half alone.
+  describe("引用异常 的三个读数", () => {
+    it("does not print a zero before the answer arrives", async () => {
+      apiMocks.health.mockReturnValue(new Promise(() => {}));
+      render(<SystemStatus />);
+      await waitFor(() => expect(apiMocks.health).toHaveBeenCalled());
+
+      expect(screen.getByText(/^引用异常/)).toHaveTextContent("引用异常 —");
+      expect(screen.queryByText("引用异常 0")).not.toBeInTheDocument();
+    });
+
+    it("shows — when counts carries none of the three keys", async () => {
+      // A backend that rewrote the block, or a proxy that trimmed it: absence
+      // is not zero, and summing two missing keys into "0" is a guess.
+      apiMocks.health.mockResolvedValue({
+        status: "ok",
+        version: "test",
+        loop: {
+          scheduler: { running: true },
+          runs: {},
+          recent_runs: [],
+          counts: { events: 3, resolved_events: 1, pending_links: 0 },
+        },
+      });
+      render(<SystemStatus />);
+      await screen.findByText("事件 3");
+
+      expect(screen.getByText(/^引用异常/)).toHaveTextContent("引用异常 —");
+      expect(screen.queryByText("引用异常 0")).not.toBeInTheDocument();
+    });
+
+    it("shows — when the loop block has no counts at all", async () => {
+      apiMocks.health.mockResolvedValue({
+        status: "ok",
+        version: "test",
+        loop: { scheduler: { running: true }, runs: {}, recent_runs: [] },
+      });
+      render(<SystemStatus />);
+      await waitFor(() => expect(apiMocks.health).toHaveBeenCalled());
+
+      expect(await screen.findByText(/^引用异常/)).toHaveTextContent("引用异常 —");
+    });
+  });
+
+  // 53.126: the producer has said *which* zero it is since §53.116–§53.119, and
+  // nothing in `frontend/src` read any of those three switches -- the panel
+  // showed a confident 0 for an empty table and for a broken query alike.
+  //
+  // Each case below asserts both directions on purpose. A badge that always
+  // prints 「读取失败」 would pass every failure case here and quietly destroy
+  // the all-clear reading, so the "everything is fine" case pins the numbers.
+  describe("§5 门控：这个 0 是真的吗", () => {
+    /**
+     * `事件 3` is the same ready-marker the dangling tests use: the first render
+     * frame has `status === null`, where these badges already say `预测 —`, so
+     * awaiting a badge text would resolve against the loading frame and pass no
+     * matter what the payload said.
+     */
+    const renderLoaded = async (
+      counts: Record<string, unknown>,
+      reviewQueue?: Record<string, unknown>,
+    ) => {
+      apiMocks.health.mockResolvedValue({
+        status: "ok",
+        version: "test",
+        loop: {
+          scheduler: { running: true },
+          runs: {},
+          recent_runs: [],
+          counts: { events: 3, resolved_events: 1, pending_links: 0, ...counts },
+          ...(reviewQueue ? { review_queue: reviewQueue } : {}),
+        },
+      });
+      render(<SystemStatus />);
+      await screen.findByText("事件 3");
+    };
+
+    it("renders a real zero as zero when all three switches are true", async () => {
+      await renderLoaded(
+        {
+          predictions: { open: 0 },
+          predictions_available: true,
+          pending_reviews: 0,
+          breached_reviews: 0,
+        },
+        { available: true, enabled: true },
+      );
+
+      expect(screen.getByText("预测 0")).toBeInTheDocument();
+      expect(screen.getByText("审核待办 0")).toBeInTheDocument();
+      expect(screen.getByText("SLA 逾期 0")).toBeInTheDocument();
+      expect(screen.queryByText(/读取失败/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/未启用/)).not.toBeInTheDocument();
+    });
+
+    it("a failed predictions read is not a zero", async () => {
+      await renderLoaded({ predictions: {}, predictions_available: false });
+
+      expect(screen.getByText("预测 读取失败")).toBeInTheDocument();
+      expect(screen.queryByText("预测 0")).not.toBeInTheDocument();
+    });
+
+    it("a failed review-queue read is not a zero, on either number", async () => {
+      // One switch for the pair: `pending_reviews` / `breached_reviews` are
+      // copied out of this block, so reading `counts` alone cannot tell.
+      await renderLoaded(
+        { pending_reviews: 0, breached_reviews: 0 },
+        { available: false, enabled: true },
+      );
+
+      expect(screen.getByText("审核待办 读取失败")).toBeInTheDocument();
+      expect(screen.getByText("SLA 逾期 读取失败")).toBeInTheDocument();
+      expect(screen.queryByText("审核待办 0")).not.toBeInTheDocument();
+    });
+
+    it("a disabled queue says so instead of reporting a failed read", async () => {
+      // `enabled: false` is a configuration, not a defect: nothing is ever
+      // enqueued, so 0 is the correct answer and calling it a failed read would
+      // send the operator to a log that has nothing in it.
+      await renderLoaded(
+        { pending_reviews: 0, breached_reviews: 0 },
+        { available: true, enabled: false },
+      );
+
+      expect(screen.getByText("审核待办 未启用")).toBeInTheDocument();
+      expect(screen.getByText("SLA 逾期 未启用")).toBeInTheDocument();
+      expect(screen.queryByText(/读取失败/)).not.toBeInTheDocument();
+    });
+
+    it("keeps the failed-read fact in the tooltip when the queue is also off", async () => {
+      await renderLoaded(
+        { pending_reviews: 0, breached_reviews: 0 },
+        { available: false, enabled: false },
+      );
+
+      const badge = screen.getByText("审核待办 未启用");
+      expect(badge).toHaveAttribute("title", expect.stringContaining("本次读取也失败了"));
+    });
+
+    it("falls back to the numbers when an older backend sends no switch", async () => {
+      // §5: absent means unknown, not false. A panel that printed 「读取失败」
+      // for a backend predating the key would be a permanent false alarm.
+      await renderLoaded({
+        predictions: { open: 2, resolved: 1 },
+        pending_reviews: 4,
+        breached_reviews: 1,
+      });
+
+      expect(screen.getByText("预测 3")).toHaveAttribute("title", "open: 2 · resolved: 1");
+      expect(screen.getByText("审核待办 4")).toBeInTheDocument();
+      expect(screen.getByText("SLA 逾期 1")).toBeInTheDocument();
+      expect(screen.queryByText(/读取失败|未启用/)).not.toBeInTheDocument();
+    });
+  });
+
+  // 53.128: the badge only totals `predictions`, and `orphan_predictions` had no
+  // reader at all -- which is how a number that means "an event settled while
+  // its prediction stayed open" came to be named "孤儿" and never shown.
+  describe("预测台账与结算未收口", () => {
+    const renderLoaded = async (counts: Record<string, unknown>) => {
+      apiMocks.health.mockResolvedValue({
+        status: "ok",
+        version: "test",
+        loop: {
+          scheduler: { running: true },
+          runs: {},
+          recent_runs: [],
+          counts: { events: 3, resolved_events: 1, pending_links: 0, ...counts },
+        },
+      });
+      render(<SystemStatus />);
+      await screen.findByText("事件 3");
+    };
+
+    it("names the status breakdown, biggest first", async () => {
+      await renderLoaded(
+        {
+          predictions: { open: 49, scored: 2, observed: 119, voided: 1 },
+          predictions_available: true,
+        },
+      );
+
+      const chips = screen.getAllByTestId(/^prediction-status-/).map((el) => el.textContent);
+      expect(chips).toEqual(["已观测 119", "进行中 49", "已评分 2", "已作废 1"]);
+      expect(screen.getByText("共 171 条")).toBeInTheDocument();
+      // The scored/observed split is not cosmetic: both mean "the event
+      // resolved", but only act rows enter the calibration signal.
+      expect(screen.getByTestId("prediction-status-observed")).toHaveAttribute(
+        "title",
+        expect.stringContaining("不进校准"),
+      );
+    });
+
+    it("renders a status the panel does not know by name", async () => {
+      // The map's vocabulary can grow; a chip that vanished would hide rows.
+      await renderLoaded({ predictions: { open: 1, quarantined: 3 }, predictions_available: true });
+
+      expect(screen.getByTestId("prediction-status-quarantined")).toHaveTextContent("quarantined 3");
+    });
+
+    it("replaces the chips with the log lines when the read failed", async () => {
+      await renderLoaded({ predictions: {}, predictions_available: false, orphan_predictions: 0 });
+
+      expect(screen.getByText(/prediction status counts unavailable/)).toBeInTheDocument();
+      expect(screen.getByText("这次没读到")).toBeInTheDocument();
+      expect(screen.queryAllByTestId(/^prediction-status-/)).toHaveLength(0);
+      expect(screen.queryByText("共 0 条")).not.toBeInTheDocument();
+    });
+
+    it("says the ledger is empty rather than rendering an empty row", async () => {
+      // The other zero: the read worked and there is genuinely nothing here.
+      await renderLoaded({ predictions: {}, predictions_available: true });
+
+      expect(screen.getByText("台账里还没有预测。")).toBeInTheDocument();
+      expect(screen.getByText("共 0 条")).toBeInTheDocument();
+    });
+
+    it("gates the settlement-left-open badge and says what it counts", async () => {
+      await renderLoaded({ predictions: { open: 49 }, predictions_available: true, orphan_predictions: 2 });
+
+      expect(screen.getByText("结算未收口 2")).toHaveAttribute(
+        "title",
+        expect.stringContaining("已结算事件"),
+      );
+    });
+
+    it("a failed read does not turn the settlement count into a zero", async () => {
+      await renderLoaded({ predictions: {}, predictions_available: false, orphan_predictions: 0 });
+
+      expect(screen.getByText("结算未收口 读取失败")).toBeInTheDocument();
+      expect(screen.queryByText("结算未收口 0")).not.toBeInTheDocument();
+    });
+
+    // 53.132: it used to live inside the collapse, which put the panel's most
+    // concrete content one hover away -- and a tooltip is unreachable on touch.
+    it("shows the distribution without expanding the panel", async () => {
+      await renderLoaded({
+        predictions: { open: 49, scored: 2, observed: 119, voided: 1 },
+        predictions_available: true,
+      });
+
+      // The toggle still reads 展开, so the chips below cannot have come from
+      // expanding it -- that is the whole assertion.
+      expect(screen.getByRole("button", { name: "展开系统状态" })).toBeInTheDocument();
+      expect(screen.getByText("预测台账")).toBeInTheDocument();
+      expect(screen.getByText("共 171 条")).toBeInTheDocument();
+      expect(screen.getByTestId("prediction-status-observed")).toHaveTextContent("已观测 119");
+    });
+
+    it("does not render the ledger before the answer arrives", async () => {
+      // `status === null` means "not asked yet". A 「共 0 条」 in that frame is
+      // the same confident zero as a failed read (§5), so this block waits for
+      // the payload instead of drawing a placeholder.
+      apiMocks.health.mockReturnValue(new Promise(() => {}));
+      render(<SystemStatus />);
+      await waitFor(() => expect(apiMocks.health).toHaveBeenCalled());
+
+      expect(screen.queryByText("预测台账")).not.toBeInTheDocument();
+      expect(screen.queryByText("共 0 条")).not.toBeInTheDocument();
+      expect(screen.queryAllByTestId(/^prediction-status-/)).toHaveLength(0);
     });
   });
 });

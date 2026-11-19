@@ -177,4 +177,67 @@ describe("IngestConsole", () => {
     expect(screen.getByTestId("source-row-api-football")).toHaveTextContent("409");
     expect(screen.getByTestId("source-api-football-validate")).toBeInTheDocument();
   });
+
+  // 53.103: both status panels pass a specialised `line` into ResultBlock, and
+  // 53.91 had silently dropped the read of it. Without these two assertions the
+  // regression was invisible: eslint only warns about the unused prop, and no
+  // test ever looked at either testid.
+  it("renders the fact-store summary with its by_kind breakdown, not a bare count", async () => {
+    ingestMocks.status.mockResolvedValue({
+      tournament: "fifa_world_cup_2026",
+      configured_path: "sports_facts.json",
+      exists: true,
+      updated_at: "2026-10-24T00:00:00+00:00",
+      file_mtime: "2026-10-24T00:00:00+00:00",
+      count: 104,
+      by_kind: { match_result: 100, standing: 4 },
+    });
+    const { unmount } = render(<IngestConsole />);
+
+    // The generic summariser would render "共 104 条" here and lose the kinds.
+    expect(
+      await screen.findByText("事实档案 共 104 条 · match_result 100 / standing 4"),
+    ).toBeInTheDocument();
+    unmount();
+
+    // §5: a missing archive must say so. The generic path showed "共 0 条",
+    // which reads as "there are none" when the file is not there at all.
+    ingestMocks.status.mockResolvedValue({
+      tournament: "fifa_world_cup_2026",
+      configured_path: "sports_facts.json",
+      exists: false,
+      updated_at: "",
+      file_mtime: null,
+      count: 0,
+      by_kind: {},
+    });
+    render(<IngestConsole />);
+
+    expect(await screen.findByText("事实档案不存在")).toBeInTheDocument();
+  });
+
+  it("renders the data-source readiness summary instead of nothing", async () => {
+    ingestMocks.sourceStatus.mockResolvedValue({
+      facts: { count: 104 },
+      configured_sources: {},
+      real_data_readiness: {
+        ok: false,
+        issues: ["qualification_source_missing"],
+        last_import_failed: true,
+        recommended_qualification_import_label: "导入预选赛事实",
+      },
+      scheduled_import: {},
+      matchday_refresh: {},
+      runs: {},
+    });
+    render(<IngestConsole />);
+
+    await userEvent.click(screen.getByTestId("source-status-button"));
+
+    // None of the keys the generic summariser reads exist on this envelope,
+    // so before the fix this panel rendered no summary line at all.
+    expect(
+      await screen.findByText("就绪检查 1 项待处理 · 上次导入失败 · 导入预选赛事实"),
+    ).toBeInTheDocument();
+  });
 });

@@ -56,6 +56,17 @@ OVERLAY_FLAGS_LEFT_OFF = (
     "WORLD_CUP_CHALLENGE_ENABLED",
 )
 
+# The metered odds path, named nowhere in the deploy files until §53.105. The
+# pair is the point: the bridge flag gates the scheduler job and ODDS_API_ENABLED
+# gates the service, so naming one of them leaves the other as an invisible
+# prerequisite and the source stays dark with no error.
+ODDS_KEYS = (
+    "PHASE7_SPORT_MARKET_BRIDGE_ENABLED",
+    "ODDS_API_ENABLED",
+    "ODDS_FETCH_INTERVAL_MIN",
+    "ODDS_API_KEY",
+)
+
 
 def _assignments(path: Path) -> set[str]:
     return {
@@ -316,6 +327,47 @@ class TestEnvOverlayExamples(unittest.TestCase):
             f".env.production.example assigns {pinned}; an overlay value wins "
             f"over the base .env, so this would switch off a flag an operator "
             f"turned on there",
+        )
+
+    def test_the_production_overlay_states_the_odds_quota_posture(self):
+        """A metered source was named in no deploy file at all.
+
+        §53.94 measured the cost and left the value open: N+1 paid calls per run
+        with no response cache on this path, against a free tier of 500 requests
+        a month, at a development default of 10 minutes (~4 320 runs a month).
+        An operator who turned the job on from the template had nothing to read
+        saying so, and the interval is the only cost knob there is.
+
+        Three assertions, because naming is not the whole posture: the four keys
+        have to be *named* (a ``KEY=`` line, commented), *not assigned* (an
+        overlay value wins over base ``.env`` and would re-time a deliberate
+        interval), and the block has to point at the quota readout an operator
+        watches afterwards.
+        """
+        path = BACKEND_DIR / ".env.production.example"
+        names = _names_in_any_form(path)
+        missing = [k for k in ODDS_KEYS if k not in names]
+        self.assertEqual(
+            missing,
+            [],
+            f".env.production.example never names {missing}; the odds job is "
+            "metered, off by default, and gated by two flags -- an operator who "
+            "wants it has to learn all of that from somewhere",
+        )
+
+        pinned = sorted(set(ODDS_KEYS) & _assignments(path))
+        self.assertEqual(
+            pinned,
+            [],
+            f".env.production.example assigns {pinned}; with override=True this "
+            "would replace an interval the operator chose in the base .env",
+        )
+
+        self.assertIn(
+            "x-requests-remaining",
+            path.read_text(encoding="utf-8"),
+            "the block does not name the quota header, so nothing tells an "
+            "operator how to check what the job is spending",
         )
 
     def test_no_overlay_blanks_a_configured_channel(self):

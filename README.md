@@ -27,8 +27,8 @@ AI 驱动的**事件情报与概率变化分析平台**，内置 **Sports Predic
 
 | 层 | 目录 | 职责 |
 |----|------|------|
-| API | `backend/app/api/routes/` | 17 个路由文件：`/events`、`/predictions`、`/review-queue`、`/betting`、`/futures`、`/analytics`、`/world-cup/*`、`/ws`（WebSocket 实时推送）等；写接口经 X-API-Key 鉴权 |
-| Services | `backend/app/services/` | 业务服务层（157 个服务）：事件智能、LLM 网关、校准闭环、结论挑战、体育事实/信号/结算、数据源客户端等 |
+| API | `backend/app/api/routes/` | 16 个路由文件：`/events`、`/predictions`、`/review-queue`、`/betting`、`/futures`、`/analytics`、`/world-cup/*`、`/ws`（WebSocket 实时推送）等；写接口经 X-API-Key 鉴权 |
+| Services | `backend/app/services/` | 业务服务层（156 个服务）：事件智能、LLM 网关、校准闭环、结论挑战、体育事实/信号/结算、数据源客户端等 |
 | Kernel | `backend/app/kernel/` | 运动无关预测核心：Protocol 协议（DataAdapter / FeatureBuilder / PredictionEngine / LearningService）、11 个预测引擎（Elo-Odds、Dixon-Coles、BTD、GBM、Ensemble、Situational 等）、回测框架 + Bayesian 参数优化 |
 | Sports | `backend/app/sports/` | 体育专用实现：football / basketball / baseball / hockey / lol + `_shared`（Elo 计算器、队伍别名等） |
 | Memory | `backend/app/memory/` | 13 个状态 store：event、prediction、review queue、decision timeline、simulated trade、source trust registry 等 |
@@ -129,15 +129,17 @@ npm run build
 ## 测试与质量
 
 ```bash
-# 后端（436 个测试文件）
+# 后端（442 个测试文件）
 cd backend
 pip install -r requirements.txt -r requirements-dev.txt
 python -m compileall app tests
 python -m pytest tests
 
-# 前端（127 个测试文件，vitest）
+# 前端（131 个测试文件，vitest）
 cd frontend
 npm run typecheck && npm test && npm run lint && npm run build
+# 沙箱里 build 可能停在批量删除守卫上：编译 / 静态生成可能已全绿，而 out/ 仍是上一次的
+# ⇒ 判据是 out/index.html 的时间戳，不是退出码；见 docs/ops/RUNBOOK.md「Local builds in the agent sandbox」
 
 # 前端 TS 类型由后端生成，不手写 interface
 cd backend && python scripts/generate_types.py
@@ -145,7 +147,7 @@ cd backend && python scripts/generate_types.py
 
 质量工具链（`backend/scripts/`）：
 
-- **`mutation_verify.py`** — 字节级变异验证 harness（15 套 / 300+ 条变异）：对每条守卫测试做「变异后必须变红 → 还原后必须重新变绿 → sha256 逐字节一致」四阶段验证，证明测试真的锁住了行为。
+- **`mutation_verify.py`** — 字节级变异验证 harness（24 套 / 345 条变异）：对每条守卫测试做「变异后必须变红 → 还原后必须重新变绿 → sha256 逐字节一致」四阶段验证，证明测试真的锁住了行为。
 - **`eol_audit.py`** — 行尾符损坏审计（字节画像判据）。
 - **`report_probability_scale_outliers.py`** — 常驻只读探针，报告疑似 0-1 刻度错位的存量概率。
 - `backup_stores.py` / `restore_stores.py` / `verify_store_counts.py` — 备份恢复与数量核对。

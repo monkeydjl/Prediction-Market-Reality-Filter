@@ -234,11 +234,23 @@ export interface LoopRunView {
 }
 /**
  * The ``counts`` block of ``LoopStatusResponse`` (audit 53.62). All
- * fifteen keys are written unconditionally; the hand-written copy omitted
+ * sixteen keys are written unconditionally; the hand-written copy omitted
  * ``pending_reviews`` / ``breached_reviews`` (the whole review-queue depth
  * was the block's reason to exist) and claimed ``predictions`` / the
  * dangling map optional. ``predictions`` is a status-grouped count whose
  * key set varies with the data -- the map itself is always present.
+ *
+ * ``predictions_available`` (audit 53.116/53.117) is the §5 switch for that
+ * map **and** for ``orphan_predictions`` below: both are counted from the same
+ * table, so a failed read of either flags both. ``{}`` / ``0`` mean "none"
+ * only when it is true. The reads used to swallow their exceptions and return
+ * the same zero either way, so a broken query and an empty table were the same
+ * picture. Required, not defaulted -- the producer writes it on every path,
+ * and a default would let a future caller forget.
+ *
+ * ``pending_reviews`` / ``breached_reviews`` are copied out of the
+ * ``review_queue`` block, so their zero is disambiguated by *that* block's
+ * ``available`` / ``enabled`` (audits 53.118/53.119) -- not by any key here.
  *
  * The ``actionable_`` pair (audit 53.95) is the subset an operator can act
  * on: references whose row still has a next step blocked by the missing
@@ -252,6 +264,7 @@ export interface LoopStatusCounts {
   predictions: {
     [k: string]: number;
   };
+  predictions_available: boolean;
   pending_links: number;
   pending_reviews: number;
   breached_reviews: number;
@@ -330,11 +343,27 @@ export interface CalibrationSegment {
 /**
  * The ``review_queue`` block of ``LoopStatusResponse`` (audit 53.62) --
  * the key the hand-written frontend copy could not name at all. Both the
- * live path (``queue_sla_summary``) and the try/except fallback write the
- * same eight keys in this order; the fallback only empties the maps and
- * nulls the two oldest fields.
+ * live path (``queue_sla_summary`` plus the two facts) and the try/except
+ * fallback write the same ten keys in this order; the fallback only empties
+ * the maps, nulls the two oldest fields, and sets ``available`` false.
+ *
+ * ``available`` (audit 53.118) is the §5 switch for the block: on a failed
+ * read every number below is 0 -- and ``counts.pending_reviews`` /
+ * ``counts.breached_reviews`` are copied from here, so the same failure made
+ * four readings look like "nothing pending". It is not ``predictions_available``
+ * and cannot be: this is a different store (§53.117). Required, not defaulted.
+ *
+ * ``enabled`` (audit 53.119) is the *other* reason those numbers are zero:
+ * the feature gate. With it off nothing is ever enqueued, so the block answers
+ * zero forever, and the 53.118 probe measured that a disabled queue and a
+ * drained one are byte-identical. Three states, three facts: ``enabled`` false
+ * = the producer never ran; ``enabled`` true + ``available`` false = the read
+ * failed; both true = the numbers are real. Echoed for the same reason
+ * `GET /review-queue/sla` echoes it.
  */
 export interface ReviewQueueSummary {
+  available: boolean;
+  enabled: boolean;
   pending_total: number;
   oldest_age_hours: number | null;
   oldest_item_id: string | null;

@@ -28,26 +28,40 @@ def loop_status(
     # `events`, so /api/health -- polled constantly by container healthchecks
     # and uptime monitors -- paid two full whole-file passes per poll (E1).
     resolved = list_resolved_events(events)
-    prediction_counts = _prediction_counts()
+    # Calibration first, counts second: both read the `predictions` table, and
+    # only the calibration path creates it. The other order made the first poll
+    # of a cold database run a query against a table that did not exist yet and
+    # report `{}` -- the same first-call artefact as the schema snapshot below.
+    # (53.116 then made that `{}` two-valued: `predictions_available` says which
+    # zero it is, and the warning names the exception type rather than logging
+    # the reason and a traceback on every poll.)
+    calibration = calibration_summary()
+    prediction_counts, counts_readable = _prediction_counts()
     dangling_refs = _dangling_event_refs(events)
     actionable_refs = _actionable_dangling_event_refs(events)
-    orphan_count = _orphan_prediction_count(events)
-    calibration = calibration_summary()
+    orphan_count, orphans_readable = _orphan_prediction_count(events)
     review_queue = _review_queue_counts()
-    return {
+    # One switch per table (53.117): both numbers below are counted from the
+    # `predictions` table, so a failed read of either makes the single switch
+    # false. Deliberately conservative -- when only the orphan query breaks,
+    # `predictions` is still accurate and gets flagged with it; a consumer that
+    # reads false as "do not trust these numbers" loses nothing, while the other
+    # direction (true over a failed read) would be the 53.116 defect again.
+    predictions_available = counts_readable and orphans_readable
+    storage: dict[str, Any] = {
+        # E1 (scale debt): every mutating event_store call rewrites this
+        # whole file, so one write costs roughly these many bytes of
+        # serialize + replace. Reported next to the record count so an
+        # operator can see the two grow together and judge when the JSON
+        # store has to become a real database -- instead of first noticing
+        # it as a slow dashboard. len(events) reuses the load above rather
+        # than re-reading the file for a number already in hand.
+        "event_store_bytes": store_bytes(),
+        "event_store_records": len(events),
+    }
+    status: dict[str, Any] = {
         "scheduler": {"running": scheduler_running},
-        "storage": {
-            "loop_db_schema_versions": sqlite_db.schema_versions(),
-            # E1 (scale debt): every mutating event_store call rewrites this
-            # whole file, so one write costs roughly these many bytes of
-            # serialize + replace. Reported next to the record count so an
-            # operator can see the two grow together and judge when the JSON
-            # store has to become a real database -- instead of first noticing
-            # it as a slow dashboard. len(events) reuses the load above rather
-            # than re-reading the file for a number already in hand.
-            "event_store_bytes": store_bytes(),
-            "event_store_records": len(events),
-        },
+        "storage": storage,
         # Every job name the ledger holds, not a list typed out here. Three were
         # named, the live ledger holds fifteen, and the only one whose last run
         # had failed was among the twelve that nothing watched -- so /api/health
@@ -72,6 +86,10 @@ def loop_status(
             "resolved_events": len(resolved),
             "open_opportunities": len(list_open_opportunities(limit=1000)),
             "predictions": prediction_counts,
+            # §5: `{}` above means "no predictions" only when this is true. On a
+            # failed read the map is unknown, not empty, and the dashboard must
+            # be able to tell those apart instead of showing a confident zero.
+            "predictions_available": predictions_available,
             "pending_links": len(list_pending()),
             "pending_reviews": review_queue["pending_total"],
             "breached_reviews": review_queue["breached_total"],
@@ -102,6 +120,18 @@ def loop_status(
         "calibration": calibration,
         "review_queue": review_queue,
     }
+    # Snapshot the schema versions LAST, after every reader above has run
+    # (audit 53.114). Read first, this key reported what the database looked
+    # like *before* this very request created the tables: on a cold loop
+    # database the first poll answered `{"event_market_links": null,
+    # "loop_runs": null, ...}` and the second answered `1, 1`, because
+    # `list_pending()` and `latest_run_per_job()` run while the dict below is
+    # being built. Measured on a fresh sandbox: 1 256 bytes then 1 293, equal
+    # from the second poll on. A health payload polled by monitors must not
+    # depend on how many times it has been polled -- that is the same shape as
+    # a reading that is only correct after a warm-up.
+    storage["loop_db_schema_versions"] = sqlite_db.schema_versions()
+    return status
 
 
 def _review_queue_counts() -> dict[str, Any]:
@@ -111,18 +141,36 @@ def _review_queue_counts() -> dict[str, Any]:
     store — and used to be the only "pending" number here, so a human review
     backlog of any size was invisible from the status endpoint.
 
-    Failures degrade to zeros like ``_prediction_counts`` does: a status endpoint
-    that raises because the review queue is unreadable is worse than one
-    reporting an empty queue.
+    Failures degrade to zeros: a status endpoint that raises because the review
+    queue is unreadable is worse than one reporting an empty queue. Since audit
+    53.118 the block carries ``available`` (the §5 switch) and the failure logs
+    the exception *type* instead of a traceback -- this endpoint is polled and
+    ``logs/`` is a persistent surface (§53.107).
+
+    The switch leads the block because every number below derives from it -- and
+    ``counts.pending_reviews`` / ``counts.breached_reviews`` are copied straight
+    out of here, so one failed read used to turn four numbers into a confident
+    "nothing pending". A reader that sees ``available: false`` must treat those
+    four as unknown, whichever block it is reading.
+
+    ``enabled`` is the other non-numeric fact (audit 53.119): whether the
+    feature was ever on. ``event_intelligence_service`` only enqueues when it is
+    true, so a disabled queue answers zero forever -- and the 53.118 probe
+    measured that it serializes *byte for byte* like a drained one. It is not a
+    switch: ``enabled=false`` is a legitimate reason for those zeros, a failed
+    read is not.
     """
+    # A config fact, read once so both paths report the same thing.
+    enabled = settings.REVIEW_QUEUE_ENABLED
     try:
-        return review_queue_store.queue_sla_summary(sla_hours={
+        summary = review_queue_store.queue_sla_summary(sla_hours={
             "ERROR": settings.REVIEW_QUEUE_SLA_ERROR_HOURS,
             "WARN": settings.REVIEW_QUEUE_SLA_WARN_HOURS,
         })
-    except Exception:
-        logger.warning("review queue sla summary failed", exc_info=True)
-        return {
+        available = True
+    except Exception as exc:
+        logger.warning("review queue sla summary unavailable: %s", type(exc).__name__)
+        summary = {
             "pending_total": 0,
             "oldest_age_hours": None,
             "oldest_item_id": None,
@@ -132,6 +180,8 @@ def _review_queue_counts() -> dict[str, Any]:
             "by_severity": {},
             "by_trigger": {},
         }
+        available = False
+    return {"available": available, "enabled": enabled, **summary}
 
 
 def _visible_run(
@@ -150,7 +200,20 @@ def _visible_run(
     }
 
 
-def _prediction_counts() -> dict[str, int]:
+def _prediction_counts() -> tuple[dict[str, int], bool]:
+    """Status-grouped prediction counts, and whether that map could be read.
+
+    The second element is the §5 producer switch. ``{}`` came back both when the
+    table was empty and when the query failed, and the two need opposite
+    reactions: nothing to do, versus something is broken. A plain bool, not an
+    error string -- the payload is polled every few seconds and the reason
+    belongs in the log, where the *type* of the exception is the safe half of it
+    (§53.107: the message can carry the database path or a SQL fragment).
+
+    The failure path deliberately logs no traceback: ``/api/health`` and
+    ``/loop/status`` are polled, so ``exc_info=True`` would append five lines of
+    traceback to ``logs/`` on every poll that finds the database broken.
+    """
     path = sqlite_db.loop_db_path()
     try:
         with reading(path) as conn:
@@ -161,10 +224,10 @@ def _prediction_counts() -> dict[str, int]:
                 GROUP BY status
                 """
             ).fetchall()
-    except Exception:
-        logger.warning("prediction status counts query failed", exc_info=True)
-        return {}
-    return {str(row["status"]): int(row["n"] or 0) for row in rows}
+    except Exception as exc:
+        logger.warning("prediction status counts unavailable: %s", type(exc).__name__)
+        return {}, False
+    return {str(row["status"]): int(row["n"] or 0) for row in rows}, True
 
 
 def _dangling_event_refs(events: list[dict[str, Any]]) -> dict[str, int]:
@@ -191,13 +254,20 @@ def _actionable_dangling_event_refs(events: list[dict[str, Any]]) -> dict[str, i
     return event_ref_census.actionable_dangling_counts(event_ids)
 
 
-def _orphan_prediction_count(events: list[dict[str, Any]]) -> int:
-    """Resolved events whose prediction is still marked open.
+def _orphan_prediction_count(events: list[dict[str, Any]]) -> tuple[int, bool]:
+    """Resolved events whose prediction is still marked open, and whether that
+    count could be read.
 
     Reads every open prediction id in one query rather than calling
     get_prediction() per event: that opened a fresh connection and ran a
     lookup for each resolved event, so /api/health scaled linearly with the
     event store and measured over a second on a modest store.
+
+    The second element is the §5 switch (53.117), for the same reason
+    ``_prediction_counts`` has one: ``0`` meant both "no orphans" and "the
+    query failed", and the failure path wrote a traceback to ``logs/`` on a
+    payload that is polled every few seconds. No resolved events means no
+    query ran at all -- nothing can have failed, so that is readable.
     """
     resolved_ids = {
         str(entry["event_id"])
@@ -205,7 +275,7 @@ def _orphan_prediction_count(events: list[dict[str, Any]]) -> int:
         if entry.get("event_id") and (entry.get("record") or {}).get("outcome") is not None
     }
     if not resolved_ids:
-        return 0
+        return 0, True
 
     path = sqlite_db.loop_db_path()
     try:
@@ -217,8 +287,8 @@ def _orphan_prediction_count(events: list[dict[str, Any]]) -> int:
                 WHERE status='open' AND event_id IS NOT NULL AND event_id != ''
                 """
             ).fetchall()
-    except Exception:
-        logger.warning("orphan prediction count query failed", exc_info=True)
-        return 0
+    except Exception as exc:
+        logger.warning("orphan prediction count unavailable: %s", type(exc).__name__)
+        return 0, False
 
-    return sum(1 for row in rows if str(row["event_id"]) in resolved_ids)
+    return sum(1 for row in rows if str(row["event_id"]) in resolved_ids), True

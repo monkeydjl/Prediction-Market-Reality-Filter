@@ -2359,14 +2359,16 @@ class LoopStatusContractTests(unittest.TestCase):
         self.assertEqual(
             list(LoopStatusCounts.model_fields),
             ["events", "resolved_events", "open_opportunities",
-             "predictions", "pending_links", "pending_reviews",
-             "breached_reviews", "orphan_predictions",
+             "predictions", "predictions_available", "pending_links",
+             "pending_reviews", "breached_reviews", "orphan_predictions",
              "dangling_predictions", "dangling_links", "dangling_refs",
              "dangling_by_table", "actionable_dangling_refs",
              "actionable_dangling_by_table", "calibration_n"],
-            "LoopStatusCounts is no longer the fifteen-key block (the "
+            "LoopStatusCounts is no longer the sixteen-key block (the "
             "hand-written copy omitted the two review-queue depth keys; "
-            "audit 53.95 added the two actionable dangling keys)",
+            "audit 53.95 added the two actionable dangling keys; audit "
+            "53.116 added the switch that says which zero `predictions` "
+            "is, immediately after the map it qualifies)",
         )
         self.assertEqual(
             LoopStatusCounts.model_fields["events"].annotation, int,
@@ -2387,10 +2389,12 @@ class LoopStatusContractTests(unittest.TestCase):
         rq = ReviewQueueSummary.model_fields
         self.assertEqual(
             list(rq),
-            ["pending_total", "oldest_age_hours", "oldest_item_id",
-             "breached_total", "unknown_severity", "sla_hours",
-             "by_severity", "by_trigger"],
-            "ReviewQueueSummary is no longer the eight-key block",
+            ["available", "enabled", "pending_total", "oldest_age_hours",
+             "oldest_item_id", "breached_total", "unknown_severity",
+             "sla_hours", "by_severity", "by_trigger"],
+            "ReviewQueueSummary is no longer the ten-key block (53.118 put the "
+            "§5 switch first; 53.119 put the feature flag beside it, because a "
+            "disabled queue and a drained one serialize identically)",
         )
         self.assertEqual(
             rq["oldest_age_hours"].annotation,

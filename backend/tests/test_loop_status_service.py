@@ -9,6 +9,7 @@ store (measured at ~1.2s) while holding the event loop the whole time.
 wait and SLA breach counts, which the payload previously reported nowhere.
 """
 
+import sqlite3
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -89,11 +90,12 @@ class OrphanPredictionCountTests(unittest.TestCase):
         self._seed(n_resolved=3, n_unresolved=2)
 
         events = store.list_all_events()
-        count = loop_status_service._orphan_prediction_count(events)
+        count, readable = loop_status_service._orphan_prediction_count(events)
 
         # The 3 resolved events kept their predictions open; the 2 unresolved
         # ones are not orphans no matter what their prediction says.
         self.assertEqual(count, 3)
+        self.assertTrue(readable, "a successful read reported itself as unreadable")
 
     def test_no_resolved_events_short_circuits_without_querying(self):
         self._seed(n_resolved=0, n_unresolved=2)
@@ -102,9 +104,10 @@ class OrphanPredictionCountTests(unittest.TestCase):
         with patch.object(
             sqlite_db, "connect", side_effect=AssertionError("queried")
         ):
-            count = loop_status_service._orphan_prediction_count(events)
+            count, readable = loop_status_service._orphan_prediction_count(events)
 
         self.assertEqual(count, 0)
+        self.assertTrue(readable, "no query ran, so the answer cannot be unreadable")
 
     def test_query_count_does_not_grow_with_the_event_store(self):
         """The N+1 regression guard.
@@ -138,9 +141,10 @@ class OrphanPredictionCountTests(unittest.TestCase):
         with patch.object(
             sqlite_db, "connect", lambda path: _CountingConn(real_connect(path))
         ):
-            count = loop_status_service._orphan_prediction_count(events)
+            count, readable = loop_status_service._orphan_prediction_count(events)
 
         self.assertEqual(count, 12)
+        self.assertTrue(readable)
         self.assertLessEqual(
             len(selects),
             1,
@@ -235,15 +239,182 @@ class ReviewQueueCountsTests(unittest.TestCase):
         self.assertEqual(fallback["breached_total"], 0)
         self.assertEqual(payload["counts"]["pending_reviews"], 0)
         self.assertEqual(payload["counts"]["breached_reviews"], 0)
+        self.assertFalse(
+            fallback["available"],
+            "a failed read reported itself as an empty queue (53.118)",
+        )
+        self.assertFalse(
+            payload["review_queue"]["available"],
+            "the payload copy of the switch says those four zeros are real",
+        )
 
     def test_the_fallback_shape_matches_the_real_summary(self):
         """A key the fallback omits becomes a KeyError only on the failure path,
-        i.e. exactly when nothing is left to catch it."""
-        real = rq.queue_sla_summary()
+        i.e. exactly when nothing is left to catch it.
+
+        Compared against the *wrapper*, not against ``queue_sla_summary``:
+        since 53.118 the wrapper adds ``available``, so comparing to the store
+        would flag that key as drift on both paths.
+        """
+        live = loop_status_service._review_queue_counts()
         with patch.object(rq, "queue_sla_summary",
                           side_effect=RuntimeError("db gone")):
             fallback = loop_status_service._review_queue_counts()
-        self.assertEqual(set(fallback), set(real))
+        self.assertEqual(set(fallback), set(live))
+
+    def test_a_readable_queue_reports_itself_as_read(self):
+        payload = loop_status_service.loop_status()
+
+        self.assertTrue(payload["review_queue"]["available"])
+
+    def test_the_queue_failure_logs_the_type_and_no_traceback(self):
+        """Same rule as the predictions reads (53.107/53.118): the type is the
+        safe half, and a traceback in ``logs/`` on every poll is not free."""
+        with self.assertLogs("app.services.loop_status_service", level="WARNING") as logs:
+            with patch.object(rq, "queue_sla_summary",
+                              side_effect=RuntimeError("db gone")):
+                loop_status_service._review_queue_counts()
+
+        self.assertEqual(len(logs.records), 1)
+        record = logs.records[0]
+        self.assertIsNone(record.exc_info, "the failure put a traceback in the log")
+        self.assertIn("RuntimeError", record.getMessage(), "the safe half is missing")
+        self.assertNotIn("db gone", record.getMessage(), "the message leaked the reason")
+
+    def test_the_block_echoes_the_feature_flag(self):
+        """`enabled` separates a disabled queue from a drained one.
+
+        The 53.118 probe measured the two states as byte-identical, which is
+        why `GET /review-queue/sla` echoes the flag and this block did not.
+        """
+        with patch.object(settings, "REVIEW_QUEUE_ENABLED", False):
+            off = loop_status_service.loop_status()["review_queue"]
+        with patch.object(settings, "REVIEW_QUEUE_ENABLED", True):
+            on = loop_status_service.loop_status()["review_queue"]
+
+        self.assertFalse(off["enabled"])
+        self.assertTrue(on["enabled"])
+        self.assertEqual(
+            {k: v for k, v in off.items() if k != "enabled"},
+            {k: v for k, v in on.items() if k != "enabled"},
+            "the flag changed more than itself; only `enabled` may differ",
+        )
+
+    def test_available_and_enabled_answer_different_questions(self):
+        """A failed read is not a disabled feature, and vice versa."""
+        with patch.object(rq, "queue_sla_summary",
+                          side_effect=RuntimeError("db gone")), \
+                patch.object(settings, "REVIEW_QUEUE_ENABLED", True):
+            block = loop_status_service.loop_status()["review_queue"]
+
+        self.assertFalse(block["available"], "a failed read is not 'disabled'")
+        self.assertTrue(
+            block["enabled"],
+            "the flag was reported as off because the read failed",
+        )
+
+
+class PredictionCountsTests(unittest.TestCase):
+    """§5 at its narrowest: `{}` from an empty table vs `{}` from a broken query.
+
+    Measured before 53.116: both paths returned the same empty map, so anything
+    reading ``counts.predictions`` -- the dashboard badge included -- showed a
+    confident zero while the loop database was unreadable. The same handler also
+    logged its failure with ``exc_info=True``, and this endpoint is polled every
+    few seconds, so a broken database meant a five-line traceback per poll in
+    ``logs/`` (§53.107: a persistent surface).
+    """
+
+    UNREADABLE = sqlite3.OperationalError("no such table: predictions")
+
+    def test_a_readable_table_reports_itself_as_read(self):
+        """The consumer-visible value, not the helper in isolation.
+
+        ``loop_status()`` reads the calibration summary first, and that is what
+        creates the ``predictions`` table (53.114), so "readable" is the normal
+        case by the time the counts query runs. A bare ``_prediction_counts()``
+        against a database nothing has touched yet reports ``available: False``
+        -- honest ("unknown"), but not something a caller of ``loop_status()``
+        ever sees, so asserting on it here would pin the wrong observation point.
+        """
+        counts = loop_status_service.loop_status()["counts"]
+
+        self.assertTrue(counts["predictions_available"])
+
+    def test_a_broken_query_is_not_an_empty_table(self):
+        with patch.object(loop_status_service, "reading", side_effect=self.UNREADABLE):
+            counts, available = loop_status_service._prediction_counts()
+
+        self.assertEqual(counts, {}, "the fallback shape changed; callers expect a dict")
+        self.assertFalse(available, "a failed read reported itself as an empty table")
+
+    def test_the_failure_logs_the_type_and_no_traceback(self):
+        """The type name is the safe half of the exception; the message is not.
+
+        ``OperationalError``'s text here is ``no such table: predictions``, and
+        with a different failure it would carry the database path. ``exc_info``
+        would also print the traceback, which points at ``sqlite_db.reading``
+        and the absolute path of the store.
+        """
+        with self.assertLogs("app.services.loop_status_service", level="WARNING") as logs:
+            with patch.object(loop_status_service, "reading", side_effect=self.UNREADABLE):
+                loop_status_service._prediction_counts()
+
+        self.assertEqual(len(logs.records), 1)
+        record = logs.records[0]
+        self.assertIsNone(record.exc_info, "the failure put a traceback in the log")
+        self.assertIn("OperationalError", record.getMessage(), "the safe half is missing")
+        self.assertNotIn("no such table", record.getMessage(), "the message leaked the reason text")
+
+    def test_the_counts_block_has_the_same_keys_on_both_paths(self):
+        """A key written only on the success path is a KeyError waiting for the
+        failure path -- the same lesson as the review-queue fallback above."""
+        whole = loop_status_service.loop_status()["counts"]
+        with patch.object(loop_status_service, "reading", side_effect=self.UNREADABLE):
+            broken = loop_status_service.loop_status()["counts"]
+
+        self.assertEqual(set(broken), set(whole))
+        self.assertFalse(broken["predictions_available"])
+        self.assertTrue(whole["predictions_available"])
+
+    def test_a_failed_orphan_read_makes_the_switch_false(self):
+        """One switch per table (53.117): the orphan count rides it too.
+
+        Patched at the seam rather than through ``reading``: both queries go
+        through ``reading``, so breaking it cannot tell the two cases apart --
+        and what this test is about is exactly the combination ``loop_status``
+        performs.
+        """
+        with patch.object(
+            loop_status_service, "_orphan_prediction_count", return_value=(0, False)
+        ):
+            counts = loop_status_service.loop_status()["counts"]
+
+        self.assertEqual(counts["orphan_predictions"], 0)
+        self.assertFalse(
+            counts["predictions_available"],
+            "a failed orphan read left the switch true, so its 0 reads as 'no orphans'",
+        )
+
+    def test_the_orphan_count_reports_itself_unreadable(self):
+        events = [{"event_id": "evt-1", "record": {"outcome": "yes"}}]
+        with self.assertLogs("app.services.loop_status_service", level="WARNING") as logs:
+            with patch.object(loop_status_service, "reading", side_effect=self.UNREADABLE):
+                count, readable = loop_status_service._orphan_prediction_count(events)
+
+        self.assertEqual(count, 0, "the fallback shape changed")
+        self.assertFalse(readable, "a failed query reported itself as a clean zero")
+        record = logs.records[0]
+        self.assertIsNone(record.exc_info, "the failure put a traceback in the log")
+        self.assertIn("OperationalError", record.getMessage(), "the safe half is missing")
+        self.assertNotIn("no such table", record.getMessage(), "the message leaked the reason")
+
+    def test_nothing_resolved_means_nothing_to_read(self):
+        """No resolved events => no query ran => the answer cannot be unreadable."""
+        count, readable = loop_status_service._orphan_prediction_count([])
+
+        self.assertEqual(count, 0)
+        self.assertTrue(readable, "reported a failure for a query that never ran")
 
 
 class WatchedJobSetTests(unittest.TestCase):

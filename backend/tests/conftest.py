@@ -620,6 +620,10 @@ def minimal_loop_status_payload(**overrides) -> dict:
             resolved_events=0,
             open_opportunities=0,
             predictions={},
+            # §5 switch added in 53.116: `{}` means "none" only when this is
+            # true. The stub says "read succeeded, nothing there", which is the
+            # normal state of a fresh sandbox.
+            predictions_available=True,
             pending_links=0,
             pending_reviews=0,
             breached_reviews=0,
@@ -644,6 +648,10 @@ def minimal_loop_status_payload(**overrides) -> dict:
             segments={},
         ),
         review_queue=ReviewQueueSummary(
+            available=True,
+            # The shipped default (`REVIEW_QUEUE_ENABLED` defaults to
+            # false). This stub is a shape fixture, not a config mirror.
+            enabled=False,
             pending_total=0,
             oldest_age_hours=None,
             oldest_item_id=None,

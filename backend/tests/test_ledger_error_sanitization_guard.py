@@ -33,9 +33,13 @@ invariant, constants and tests further down.
 from __future__ import annotations
 
 import ast
+import functools
+import json
+import tempfile
 import unittest
 from pathlib import Path
-from typing import NamedTuple
+from typing import NamedTuple, get_args
+from unittest import mock
 
 from app.core import scheduler
 
@@ -106,32 +110,31 @@ _AUDIT_SINKS = frozenset({
     "_finish",
 })
 
-# The one site that inherits a sink key from a producer that can emit raw
-# exception text. Recorded, not exempted: the property is still evaluated below
-# and this tuple is compared exactly, so a *second* relay fails, and so does the
-# removal of this one.
+# Sites that inherit a sink key from a producer that can emit raw exception text.
+# Recorded, not exempted: the property is still evaluated below and this tuple is
+# compared exactly, so a *second* relay fails -- and so does the return of one.
 #
-# Why it is allowed to stand: `world_cup_post_match_backfill_service` relays the
-# sync failure reason into the ledger verbatim, and two behaviour tests pin that
-# text -- `test_sync_error_short_circuits_without_scoring` pins the ledger row,
-# `test_post_match_backfill_does_not_expose_or_persist_provider_error_body` pins
-# the row *and* that the provider's response body is excluded. The safety of the
-# relay is therefore exactly the safety of `sync_world_cup_fixtures`, whose
-# `except Exception` branch is where `str(e)` enters -- and that branch is pinned
-# in turn by `test_api_football_error_returns_error`.
+# §53.109 replaced the old entry with a narrower one. The old:
 #
-# Whether the ledger should keep carrying the producer's free-text reason is a
-# contract question (§53.32), not something this file decides. What it does
-# decide is that the coupling cannot grow unnoticed. The weight on the other
-# side is recorded there: five tests in `test_world_cup_analytics_routes.py`
-# (`..._failure_is_safe...` / `..._hides_and_does_not_persist...`, at :141, :187,
-# :912, :1013, :1070, :1173) require the column to hold a declared token, with
-# `f"...: {type(exc).__name__}"` as the repo's own idiom for the class name, and
-# they list a URL host (`"upstream.example"`) among the fragments that must not
-# reach the ledger or `/quality-metrics/anomalies`.
-_RECORDED_INHERITING_SITES = (
+#   ... (run_post_match_backfill): 'error' inherits 'error' from sync_world_cup_fixtures
+#
+# is gone: that key carried `str(e)`, i.e. whatever an HTTP client or SQLAlchemy
+# said. The job now writes its own sentence into `error` and takes the cause from
+# `reason`, a code from `world_cup_match_service.FIXTURE_SYNC_REASON_CODES`.
+#
+# The remaining entry is flagged because `fixture_sync_reason(exc)` *reads the
+# exception* -- the scan cannot see through a call, so it must assume the callee
+# may return the message. That assumption is what
+# `test_the_recorded_relay_turns_the_message_into_a_code` evaluates: the callee
+# returns a member of a closed set for arbitrary input, including a credential-
+# bearing one. So the exemption is on the *scan's* granularity, not on the
+# safety property, and the property has its own test instead of a comment.
+#
+# Do not re-record a third without answering the same question the first two did:
+# "what carries the cause, and can it carry text?"
+_RECORDED_INHERITING_SITES: tuple[str, ...] = (
     "services/world_cup_post_match_backfill_service.py (run_post_match_backfill): "
-    "'error' inherits 'error' from sync_world_cup_fixtures",
+    "'reason' inherits 'reason' from sync_world_cup_fixtures",
 )
 
 
@@ -309,7 +312,20 @@ def analyse_module(source: str, filename: str = "<scan>") -> Analysis:
     )
 
 
+@functools.lru_cache(maxsize=1)
 def analyse_app() -> dict[str, Analysis]:
+    """Scan every module under `app/` -- memoised.
+
+    Measured 2026-11-16: **2.9 s per call** over 334 files, and three tests in
+    this file each want the same answer (8.8 s of the file's 73 s).
+
+    The cache is safe because this is a pure function of the file *texts*, and
+    the one writer of those texts -- ``scripts/mutation_verify.py`` -- applies
+    its edit and then runs pytest in a **new process**, so a stale entry cannot
+    outlive a mutation. Nothing in the suite writes to `app/`. Callers treat the
+    result as read-only; it is shared between tests. A test that ever does need a
+    fresh read can call ``analyse_app.cache_clear()``.
+    """
     analysed: dict[str, Analysis] = {}
     for path in sorted(_APP_DIR.rglob("*.py")):
         # utf-8-sig, not utf-8: a BOM is legal Python source that `ast.parse`
@@ -693,7 +709,17 @@ def analyse_provenance(sources: dict[str, str]) -> ProvenanceAnalysis:
     )
 
 
+@functools.lru_cache(maxsize=1)
 def analyse_app_provenance() -> ProvenanceAnalysis:
+    """`analyse_provenance` over `app/` -- memoised.
+
+    Measured 2026-11-16: **14.0 s per call**, and ``LedgerErrorProvenanceTests``
+    asks for it three times (42 s of the file's 73 s). Same argument as
+    ``analyse_app``: pure function of the texts, and the only thing that edits
+    them re-runs pytest in a new process. The pure ``analyse_provenance(sources)``
+    stays undecorated -- the synthetic tests below must be able to feed it
+    snippets.
+    """
     return analyse_provenance({
         path.relative_to(_APP_DIR).as_posix(): path.read_text(encoding="utf-8-sig")
         for path in sorted(_APP_DIR.rglob("*.py"))
@@ -704,15 +730,22 @@ class LedgerErrorMessageScanTests(unittest.TestCase):
     """The invariant, read from the source of `app/`."""
 
     def test_the_scan_reaches_the_write_surface(self):
-        """Guard the guard: an empty or truncated scan passes everything below."""
+        """Guard the guard: an empty or truncated scan passes everything below.
+
+        The two floors exist so a scan that silently stopped reading files cannot
+        report "no offenders". Both dropped in §53.124, when `_finish_run` lost the
+        `error=` parameter: `calls_with_error` 29 -> 9, and `raw_exception_sites`
+        22 -> **0**. The invariant below therefore has an empty population on this
+        tree, which is why `TheScanIsNotVacuousTests` carries the weight instead --
+        and why `raw` is deliberately absent here: a floor of 0 would be satisfied
+        by a truncated scan.
+        """
         analysed = analyse_app()
         self.assertGreaterEqual(len(analysed), 300, len(analysed))
         writer_calls = sum(item.writer_calls for item in analysed.values())
         self.assertGreaterEqual(writer_calls, 55, writer_calls)
         with_error = sum(item.calls_with_error for item in analysed.values())
-        self.assertGreaterEqual(with_error, 35, with_error)
-        raw = sum(len(item.raw_exception_sites) for item in analysed.values())
-        self.assertGreaterEqual(raw, 20, raw)
+        self.assertGreaterEqual(with_error, 9, with_error)
 
     def test_no_call_reads_an_exception_message_without_forwarding_exc(self):
         offenders = [
@@ -819,10 +852,14 @@ class LedgerErrorProvenanceTests(unittest.TestCase):
     """
 
     def test_the_scan_reaches_the_writers_that_bind_a_sink_key(self):
-        """Guard the guard: a truncated scan passes everything below."""
+        """Guard the guard: a truncated scan passes everything below.
+
+        `sites` dropped 40+ -> 21 in §53.124 for the same reason as the count
+        above: the `error=` arguments that used to be recorded here are gone.
+        """
         result = analyse_app_provenance()
         self.assertGreaterEqual(result.writer_functions, 30, result.writer_functions)
-        self.assertGreaterEqual(len(result.sites), 40, len(result.sites))
+        self.assertGreaterEqual(len(result.sites), 20, len(result.sites))
         self.assertGreaterEqual(len(result.producers), 8, result.producers)
 
     def test_the_sink_keys_are_derived_and_not_widened_by_a_guard_condition(self):
@@ -844,6 +881,32 @@ class LedgerErrorProvenanceTests(unittest.TestCase):
         result = analyse_app_provenance()
         self.assertEqual(result.inheriting, _RECORDED_INHERITING_SITES)
         self.assertEqual(len(result.offenders), len(result.inheriting))
+
+    def test_the_recorded_relay_turns_the_message_into_a_code(self):
+        """What the scan cannot see through: the callee returns a closed-set code.
+
+        `'reason' inherits 'reason'` is flagged because `fixture_sync_reason(exc)`
+        reads the exception, and a source scan cannot know what the callee does
+        with it. The answer is not a comment -- it is this: arbitrary input,
+        including a message shaped like a leak, comes back as a member of
+        `FIXTURE_SYNC_REASON_CODES` with none of the input in it.
+        """
+        from app.services import world_cup_match_service
+
+        payload = (
+            "HTTP 401 for https://upstream.example/private?api_key=fake-api-key "
+            "Authorization: Bearer fake-token ticket=fake-ticket"
+        )
+        for value in (RuntimeError(payload), payload, None, ""):
+            code = world_cup_match_service.fixture_sync_reason(value)
+            self.assertIn(code, world_cup_match_service.FIXTURE_SYNC_REASON_CODES)
+            for fragment in (
+                "upstream.example",
+                "fake-api-key",
+                "fake-token",
+                "fake-ticket",
+            ):
+                self.assertNotIn(fragment, code)
 
 
 class TheProvenanceScanIsNotVacuousTests(unittest.TestCase):
@@ -972,6 +1035,376 @@ class TheProvenanceScanIsNotVacuousTests(unittest.TestCase):
         self.assertEqual(result.writer_functions, 1)
         self.assertEqual(result.sink_keys, ("error",))
         self.assertEqual(result.offenders, ())
+
+
+
+# ---------------------------------------------------------------------------
+# Third invariant: the failure slot is closed (§53.124).
+#
+# The two invariants above ask a question about an *expression*: which exception
+# names does this `error=` read, directly or by inheritance. That question has a
+# blind spot, and the blind spot is structural -- on a failure path with no
+# exception in scope there is nothing to read, so `error=` accepted any string at
+# all. Measured before §53.124: a URL interpolated with no handler, a store's own
+# error text, and a literal URL inside a handler that *does* bind `exc` were all
+# invisible to `analyse_module`.
+#
+# §53.124 removed the question rather than widening the scan. `_finish_run` no
+# longer has a parameter that accepts free text: a failed run explains itself with
+# `exc=` (the row gets the type name) or `reason=` (the row gets that code's
+# sentence, from a table next to the function). Measured effect on the first
+# invariant: `raw_exception_sites` went 22 -> 0 across `app/`, because the 22
+# `error=str(exc)` arguments it was watching were all dead -- `_finish_run`
+# overwrote every one of them with `f"Scheduler job failed: {exc_type}"`.
+#
+# What is left to guard is the shape of the contract, and that needs no knowledge
+# of exceptions at all:
+#
+#   * the signature declares exactly {result, exc, reason};
+#   * no call site passes a keyword the signature does not declare, so a stale
+#     `error=` cannot outlive the rename;
+#   * every call whose status is the literal "failed" fills one of the two slots;
+#   * every `reason=` argument is a member of the closed set, spelled as a literal
+#     -- a source scan cannot see through `reason=some_variable`.
+# ---------------------------------------------------------------------------
+
+_SCANNED_MODULE = "core/scheduler.py"
+
+# The keyword-only parameters `_finish_run` is allowed to have. Compared as a set,
+# so adding a fourth is a decision recorded here, not an accident.
+_ALLOWED_FINISH_KEYWORDS = frozenset({"result", "exc", "reason"})
+
+_FAILED_STATUS = repr("failed")
+
+
+def _read_scanned_module() -> str:
+    # utf-8-sig for the same reason `analyse_app` uses it: a BOM is legal Python
+    # source that `ast.parse` rejects, and a file that fails to parse reads as
+    # clean.
+    return Path(scheduler.__file__).read_text(encoding="utf-8-sig")
+
+
+class FinishRunCall(NamedTuple):
+    """One `_finish_run(...)` call, as the guard needs to see it."""
+
+    function: str
+    ordinal: int
+    status: str
+    keywords: tuple[str, ...]
+    reason: str | None
+    reason_codes: tuple[str, ...] | None
+    has_exc: bool
+
+
+def _reason_codes(node: ast.expr) -> tuple[str, ...] | None:
+    """Every code a `reason=` expression can evaluate to, or None if undecidable.
+
+    `None if updated else "code"` is how the two conditional jobs spell it. That
+    shape is understood rather than forbidden: what this scan cares about is that
+    no branch can produce a string outside the set, and which branch pairs with
+    which status is a behaviour question the job's own tests answer.
+
+    An empty tuple means "this argument cannot carry a code at all" (`None`), and
+    `None` means the scan cannot say -- a name, a call, an attribute.
+    """
+    if isinstance(node, ast.Constant):
+        if node.value is None:
+            return ()
+        if isinstance(node.value, str):
+            return (node.value,)
+        return None
+    if isinstance(node, ast.IfExp):
+        body = _reason_codes(node.body)
+        other = _reason_codes(node.orelse)
+        if body is None or other is None:
+            return None
+        return body + other
+    return None
+
+
+def finish_run_calls(
+    source: str, rel: str = _SCANNED_MODULE
+) -> tuple[FinishRunCall, ...]:
+    """Every `_finish_run` call, keyed by function name and ordinal in it.
+
+    Ordinals rather than line numbers: a line moves when anything above it is
+    edited, and a guard that goes red for a moved line teaches the next reader to
+    update a number without reading the call.
+    """
+    tree = ast.parse(source, filename=rel)
+    found: list[FinishRunCall] = []
+    for func in _functions(tree):
+        ordinal = 0
+        for node in _own_nodes(func):
+            if not isinstance(node, ast.Call) or _callee_name(node) != "_finish_run":
+                continue
+            ordinal += 1
+            # `_keyword` hands back the *value* node, not the `ast.keyword`.
+            reason = _keyword(node, "reason")
+            found.append(
+                FinishRunCall(
+                    function=func.name,
+                    ordinal=ordinal,
+                    status=_status_text(node),
+                    keywords=tuple(k.arg for k in node.keywords if k.arg),
+                    reason=ast.unparse(reason) if reason is not None else None,
+                    reason_codes=(
+                        _reason_codes(reason) if reason is not None else ()
+                    ),
+                    has_exc=_keyword(node, "exc") is not None,
+                )
+            )
+    return tuple(found)
+
+
+def _finish_run_definition(source: str | None = None) -> ast.FunctionDef:
+    tree = ast.parse(source if source is not None else _read_scanned_module())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "_finish_run":
+            return node
+    raise AssertionError(
+        "_finish_run is gone from the scanned module -- every guard below is "
+        "vacuous, and they must not pass silently"
+    )
+
+
+def undeclared_keyword_calls(calls: tuple[FinishRunCall, ...]) -> tuple[str, ...]:
+    """Calls passing a keyword the signature does not declare."""
+    return tuple(
+        f"{call.function}#{call.ordinal}: keywords={sorted(call.keywords)}"
+        for call in calls
+        if not set(call.keywords) <= _ALLOWED_FINISH_KEYWORDS
+    )
+
+
+def slotless_failed_calls(calls: tuple[FinishRunCall, ...]) -> tuple[str, ...]:
+    """Failed calls that fill neither slot.
+
+    A failed run with neither `exc=` nor `reason=` still writes a row -- the
+    fallback sentence -- so it is not a leak, it is a lost cause. The row says
+    "failed" and nothing else, which is the §5 problem in a different costume.
+    """
+    return tuple(
+        f"{call.function}#{call.ordinal}: status={call.status} fills neither slot"
+        for call in calls
+        if call.status == _FAILED_STATUS and not call.has_exc and call.reason is None
+    )
+
+
+def unknown_reason_calls(
+    calls: tuple[FinishRunCall, ...], known: frozenset[str] | set[str]
+) -> tuple[str, ...]:
+    """Calls whose `reason=` is not a literal member of the closed set.
+
+    `known` is passed in rather than imported so a synthetic source can be checked
+    against a synthetic vocabulary.
+    """
+    offenders: list[str] = []
+    for call in calls:
+        if call.reason is None:
+            continue
+        if call.reason_codes is None:
+            offenders.append(
+                f"{call.function}#{call.ordinal}: reason={call.reason} is not "
+                "decidable from literals"
+            )
+            continue
+        for code in call.reason_codes:
+            if code not in known:
+                offenders.append(f"{call.function}#{call.ordinal}: reason={code}")
+    return tuple(offenders)
+
+
+class FinishRunContractTests(unittest.TestCase):
+    """The failure slot, from the signature outward."""
+
+    def test_the_signature_declares_exactly_the_two_failure_slots(self):
+        """A fourth keyword-only parameter is a decision, and this is where it lands.
+
+        Asserted as a set rather than as "has no `error`": the old parameter was
+        removed because it accepted free text, and `free_text: str` would be the
+        same defect under a new name.
+        """
+        definition = _finish_run_definition()
+        declared = {argument.arg for argument in definition.args.kwonlyargs}
+        self.assertEqual(declared, set(_ALLOWED_FINISH_KEYWORDS))
+
+    def test_no_call_site_passes_a_keyword_the_signature_does_not_declare(self):
+        """The half a type checker cannot see: this file never imports the name."""
+        offenders = undeclared_keyword_calls(finish_run_calls(_read_scanned_module()))
+        self.assertEqual(offenders, ())
+
+    def test_every_literal_failed_call_fills_one_of_the_two_slots(self):
+        offenders = slotless_failed_calls(finish_run_calls(_read_scanned_module()))
+        self.assertEqual(offenders, ())
+
+    def test_every_reason_is_a_literal_member_of_the_closed_set(self):
+        """Membership, not shape: `reason=store_error` is not a code.
+
+        The closed set is read off the module (`_REASON_SENTENCES`) instead of
+        being restated here, so adding a code does not require touching this test
+        -- and a call site cannot invent one.
+        """
+        offenders = unknown_reason_calls(
+            finish_run_calls(_read_scanned_module()),
+            frozenset(scheduler._REASON_SENTENCES),
+        )
+        self.assertEqual(offenders, ())
+
+    def test_the_codes_and_their_sentences_cover_the_same_set(self):
+        """`FinishReason` is the type, the table is the wording. Neither may drift.
+
+        A code in the type but not the table is a `KeyError` at the moment of a
+        failure; a sentence with no code is text nobody can ask for.
+        """
+        declared = set(get_args(scheduler.FinishReason))
+        self.assertEqual(declared, set(scheduler._REASON_SENTENCES))
+        for sentence in scheduler._REASON_SENTENCES.values():
+            self.assertTrue(
+                sentence.strip(), "a reason with an empty sentence says nothing"
+            )
+
+    def test_a_failed_run_with_neither_slot_still_writes_a_fixed_sentence(self):
+        """The fallback branch, exercised rather than reasoned about.
+
+        No call site reaches it today, which is exactly why it needs a test: the
+        branch exists so a future call site that forgets both slots produces a row
+        that says "failed" instead of raising inside an exception handler.
+        """
+        with mock.patch.object(scheduler.loop_run_store, "finish_run") as store_finish:
+            scheduler._finish_run("run-1", "failed")
+        self.assertEqual(store_finish.call_args.kwargs["error"], "Scheduler job failed")
+
+    def test_the_ledger_row_gets_a_sentence_from_the_table_not_from_the_caller(self):
+        """The two slots, end to end, on the same call shape."""
+        with mock.patch.object(scheduler.loop_run_store, "finish_run") as store_finish:
+            scheduler._finish_run("run-1", "failed", reason="sqlite_integrity_failed")
+            scheduler._finish_run("run-1", "failed", exc=ValueError("secret url"))
+        written = [call.kwargs["error"] for call in store_finish.call_args_list]
+        self.assertEqual(
+            written,
+            [
+                scheduler._REASON_SENTENCES["sqlite_integrity_failed"],
+                "Scheduler job failed: ValueError",
+            ],
+        )
+
+    def test_the_interpolated_sentence_names_the_stores_it_was_given(self):
+        """One code carries a payload: ``error=`` went away, the information did not.
+
+        Deleting `error=` from this call site was almost an information loss --
+        "a store is corrupt" without "which store" is not actionable, and two
+        tests in `test_scheduler.py` read `run["error"]` expecting the name. The
+        interpolation moved into `_sentence_for` instead, where it reads the
+        payload `maintain_all()` already returned. This asserts the wiring; those
+        two assert the row that reaches `/api/health`.
+        """
+        with mock.patch.object(scheduler.loop_run_store, "finish_run") as store_finish:
+            scheduler._finish_run(
+                "run-1",
+                "failed",
+                reason="sqlite_integrity_failed",
+                result={"failed": ["KERNEL_DB_FILE", "DOMAIN_RELIABILITY_DB_PATH"]},
+            )
+        self.assertEqual(
+            store_finish.call_args.kwargs["error"],
+            "SQLite integrity failed for: KERNEL_DB_FILE, DOMAIN_RELIABILITY_DB_PATH",
+        )
+
+    def test_the_store_names_cannot_carry_a_path(self):
+        """Why that interpolation is not a leak: the payload is config *keys*.
+
+        `maintain_all()` appends the dict key it iterates, so `failed` holds
+        `KERNEL_DB_FILE` and never `/srv/pmrf/kernel.db`. Asserted on the
+        producer -- the sentence has no way to check that about itself, which is
+        exactly why the check lives one layer down.
+        """
+        from app.core import runtime_stores
+        from app.utils import sqlite_db
+
+        names = set(runtime_stores.sqlite_state_paths())
+        self.assertTrue(names, "no stores declared -- the property below is vacuous")
+        for name in names:
+            self.assertRegex(
+                name,
+                r"^[A-Z0-9_]+$",
+                "a store name with a path separator or a dot can carry a location "
+                "into an exported payload",
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            corrupt = Path(tmp) / "corrupt.db"
+            corrupt.write_bytes(b"this is not a sqlite database" * 8)
+            with mock.patch.object(
+                runtime_stores,
+                "sqlite_state_paths",
+                return_value={"CORRUPT_STORE": corrupt},
+            ):
+                report = sqlite_db.maintain_all()
+            self.assertFalse(report["ok"])
+            self.assertEqual(report["failed"], ["CORRUPT_STORE"])
+        self.assertNotIn(str(corrupt), json.dumps(report, default=str))
+
+
+class TheContractScanIsNotVacuousTests(unittest.TestCase):
+    """Each clause, on a synthetic source that isolates it."""
+
+    def _calls(self, body: str) -> tuple[FinishRunCall, ...]:
+        head = "def job(run_id):" + chr(10)
+        lines = body.strip().splitlines()
+        source = head + "".join("    " + line + chr(10) for line in lines)
+        return finish_run_calls(source, "synthetic.py")
+
+    def test_it_flags_a_stale_error_keyword(self):
+        """The parameter that was removed. A rename that misses a site looks like this."""
+        calls = self._calls(
+            '_finish_run(run_id, "failed", error="x", exc=ValueError())'
+        )
+        self.assertEqual(
+            undeclared_keyword_calls(calls),
+            ("job#1: keywords=['error', 'exc']",),
+        )
+
+    def test_it_flags_a_failed_call_with_neither_slot(self):
+        calls = self._calls('_finish_run(run_id, "failed", result={})')
+        self.assertEqual(len(slotless_failed_calls(calls)), 1)
+
+    def test_it_accepts_a_failed_call_with_either_slot(self):
+        calls = self._calls(
+            '_finish_run(run_id, "failed", exc=ValueError())' + chr(10)
+            + '_finish_run(run_id, "failed", reason="sqlite_integrity_failed")'
+        )
+        self.assertEqual(slotless_failed_calls(calls), ())
+
+    def test_it_does_not_require_a_slot_on_a_successful_call(self):
+        calls = self._calls('_finish_run(run_id, "success", result={})')
+        self.assertEqual(slotless_failed_calls(calls), ())
+
+    def test_it_flags_a_reason_bound_to_a_variable(self):
+        """`reason=store_error` is the regression this clause exists for."""
+        calls = self._calls('_finish_run(run_id, "failed", reason=store_error)')
+        self.assertEqual(
+            unknown_reason_calls(calls, {"sqlite_integrity_failed"}),
+            ("job#1: reason=store_error is not decidable from literals",),
+        )
+
+    def test_it_flags_a_reason_that_is_not_in_the_set(self):
+        calls = self._calls('_finish_run(run_id, "failed", reason="made_up")')
+        self.assertEqual(
+            unknown_reason_calls(calls, {"sqlite_integrity_failed"}),
+            ("job#1: reason=made_up",),
+        )
+
+    def test_it_accepts_a_member_of_the_set(self):
+        calls = self._calls(
+            '_finish_run(run_id, "failed", reason="sqlite_integrity_failed")'
+        )
+        self.assertEqual(unknown_reason_calls(calls, {"sqlite_integrity_failed"}), ())
+
+    def test_it_refuses_to_pass_when_the_function_is_gone(self):
+        """The guard-the-guard: every assertion above is vacuous without the def."""
+        with self.assertRaises(AssertionError):
+            _finish_run_definition("def something_else():" + chr(10) + "    pass")
 
 
 if __name__ == "__main__":  # pragma: no cover

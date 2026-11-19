@@ -354,8 +354,10 @@ def ledger(kernel_db, monkeypatch):
     monkeypatch.setattr(settings, "PHASE12_FUTURES_MARKETS_ENABLED", True)
     rows = []
 
-    def fake_finish(run_id, status, *, result=None, error=None, exc=None):
-        rows.append({"status": status, "result": result, "error": error})
+    def fake_finish(run_id, status, *, result=None, exc=None, reason=None):
+        rows.append(
+            {"status": status, "result": result, "exc": exc, "reason": reason}
+        )
 
     with patch("app.core.scheduler._start_run", return_value="run-1"), \
          patch("app.core.scheduler._finish_run", side_effect=fake_finish):
@@ -397,7 +399,15 @@ async def test_an_unreadable_links_table_fails_the_snapshot_run(ledger):
 
     final = ledger[-1]
     assert final["status"] == "failed"
-    assert "no such table" in (final["error"] or "")
+    # §53.124: `_finish_run` no longer accepts the message, so what this asserts
+    # is the cause travelling as the exception object -- and, implicitly, that the
+    # sqlite text has no slot left to travel in. The previous assertion here
+    # (`"no such table" in final["error"]`) was pinning the leak shape: it passed
+    # only because the same call also forwarded `exc=`, which made `_finish_run`
+    # discard the string it was checking.
+    assert final["exc"] is not None
+    assert type(final["exc"]).__name__ == "OperationalError"
+    assert set(final) <= {"status", "result", "exc", "reason"}
 
 
 @pytest.mark.asyncio
@@ -412,7 +422,7 @@ async def test_a_readable_empty_table_still_reports_a_healthy_idle_run(ledger):
     final = ledger[-1]
     assert final["status"] == "success"
     assert final["result"] == {"captured": 0, "errors": 0}
-    assert final["error"] is None
+    assert final["reason"] is None
 
 
 

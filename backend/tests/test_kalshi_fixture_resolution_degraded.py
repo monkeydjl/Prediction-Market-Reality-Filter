@@ -125,8 +125,8 @@ async def _ledger_row() -> dict:
 
     captured: dict = {}
 
-    def _finish(run_id, status, *, result=None, error=None, exc=None):
-        captured.update(status=status, result=result, error=error)
+    def _finish(run_id, status, *, result=None, exc=None, reason=None):
+        captured.update(status=status, result=result, exc=exc, reason=reason)
 
     with patch.object(scheduler, "_start_run", lambda job_name: "run-1"), \
             patch.object(scheduler, "_finish_run", _finish), \

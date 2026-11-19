@@ -872,17 +872,26 @@ async def test_settlement_job_records_a_failed_run_when_the_queue_cannot_be_read
 
     finished: list[dict] = []
     monkeypatch.setattr(scheduler, "_start_run", lambda job_name: "run-settlement")
+    # Mirrors `_finish_run`'s real keyword set. A hand-copied signature that
+    # still names `error=` would accept the call and record nothing useful;
+    # keeping the mirror exact means the next signature change fails here.
     monkeypatch.setattr(
         scheduler, "_finish_run",
-        lambda run_id, status, *, result=None, error=None, exc=None: finished.append(
-            {"status": status, "result": result, "error": error}
+        lambda run_id, status, *, result=None, exc=None, reason=None: finished.append(
+            {"status": status, "result": result, "exc": exc, "reason": reason}
         ),
     )
 
     await scheduler._job_process_market_settlements()
 
-    assert finished[-1]["status"] == "failed"
-    assert "disk I/O error" in finished[-1]["error"]
+    final = finished[-1]
+    assert final["status"] == "failed"
+    # The upstream text is still observable here, on the exception. `_finish_run`
+    # is what turns it into a bare type name; a fake that read `error=` was
+    # asserting the *pre-sanitisation* shape and would have gone red the moment
+    # the leak was closed.
+    assert "disk I/O error" in str(final["exc"])
+    assert set(final) <= {"status", "result", "exc", "reason"}
     assert broken.closed is True
 
 
@@ -906,14 +915,16 @@ async def test_settlement_job_reports_the_counts_it_actually_settled(
     monkeypatch.setattr(scheduler, "_start_run", lambda job_name: "run-settlement")
     monkeypatch.setattr(
         scheduler, "_finish_run",
-        lambda run_id, status, *, result=None, error=None, exc=None: finished.append(
-            {"status": status, "result": result, "error": error}
+        lambda run_id, status, *, result=None, exc=None, reason=None: finished.append(
+            {"status": status, "result": result, "exc": exc, "reason": reason}
         ),
     )
 
     await scheduler._job_process_market_settlements()
 
     assert finished[-1]["status"] == "success"
+    assert finished[-1]["exc"] is None
+    assert finished[-1]["reason"] is None
     assert finished[-1]["result"] == {
         "scanned": 1, "processed": 1, "skipped": 0,
         "already_processed": 0, "errors": 0,

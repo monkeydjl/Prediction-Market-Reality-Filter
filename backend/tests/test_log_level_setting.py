@@ -3,7 +3,7 @@
 Both overlay templates assign it:
 
     backend/.env.staging.example:31     LOG_LEVEL=INFO
-    backend/.env.production.example:43  LOG_LEVEL=WARNING
+    backend/.env.production.example:77  LOG_LEVEL=WARNING
 
 Nothing read it. `app/core/logging.py` hardcoded `root.setLevel(logging.INFO)`,
 and `LOG_LEVEL` appeared nowhere in `app/`, `scripts/` or `deploy/` -- so the
@@ -39,7 +39,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.core import logging as app_logging
-from app.core.config import settings
+from app.core.config import ENV_OVERLAYS, settings
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 TEMPLATES = (".env.example", ".env.staging.example", ".env.production.example")
@@ -65,7 +65,7 @@ class _RootLoggerRestored(unittest.TestCase):
         for handler in root.handlers:
             handler.filters = [
                 filter_ for filter_ in handler.filters
-                if not isinstance(filter_, app_logging._ProductionSafeFilter)
+                if not isinstance(filter_, app_logging._RedactingLogFilter)
             ]
 
 
@@ -469,6 +469,123 @@ class LogLevelTests(_RootLoggerRestored):
         self.assertNotIn("Traceback", output)
         self.assertNotIn(str(BACKEND_DIR), output)
         self.assertNotIn(str(BACKEND_DIR.resolve()), output)
+
+
+class RedactingEnvironmentTests(_RootLoggerRestored):
+    """§53.122: which environments redact, and which one is allowed not to.
+
+    The predicate used to be ``PMRF_ENV == "production"``. `staging` was the
+    wrong environment to leave out: its overlay sets ``LOG_LEVEL=INFO``
+    (production uses WARNING) and does not override ``LOG_FILE``, so it wrote
+    *more* lines than production into the same ``backend/logs/app.log`` while
+    redacting none of them -- against a documented invariant
+    (``docs/ops/RUNBOOK.md``: ``X-API-Key`` "must not be copied into ... logs").
+
+    `development` stays readable on purpose: the cost of redaction is "you
+    cannot see the URL you were debugging", and a local box would pay it for
+    nothing. That half is asserted too -- without it, "always install the
+    filter" would pass every test above.
+    """
+
+    SECRET = "upstream-query-secret"
+
+    def _render(self, env: str) -> str:
+        root = logging.getLogger()
+        root.handlers = []
+        stream = io.StringIO()
+        root.addHandler(logging.StreamHandler(stream))
+        with patch.object(settings, "PMRF_ENV", env), \
+                patch.object(settings, "LOG_LEVEL", "INFO"), \
+                patch.object(settings, "LOG_FILE", ""):
+            app_logging.setup_logging()
+        logging.getLogger("tests.env.redaction").warning(
+            "fetch failed for %s",
+            f"https://upstream.example/private?apiKey={self.SECRET}",
+        )
+        return stream.getvalue()
+
+    @staticmethod
+    def _messages(text: str) -> list[str]:
+        """Drop the timestamp, which no two runs share."""
+        return [
+            re.sub(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3} - ", "", line)
+            for line in text.splitlines()
+            if line.strip()
+        ]
+
+    def test_staging_redacts_the_url(self):
+        text = self._render("staging")
+        self.assertIn("fetch failed for <redacted>", text)
+        self.assertNotIn(self.SECRET, text)
+
+    def test_staging_and_production_render_the_same_line(self):
+        """Parity, not two separate expectations.
+
+        Two environments that both "look redacted" is not the property we want
+        -- the property is that the same record produces the same line on every
+        deployed environment, which is what an operator comparing them assumes.
+        """
+        staging = self._render("staging")
+        production = self._render("production")
+        self.assertEqual(
+            self._messages(staging),
+            self._messages(production),
+            f"staging={staging!r} production={production!r}",
+        )
+
+    def test_development_keeps_the_url_readable(self):
+        """The other side of the boundary: redaction is not unconditional."""
+        text = self._render("development")
+        self.assertIn(self.SECRET, text)
+        self.assertNotIn("<redacted>", text)
+
+    def test_every_deployed_overlay_redacts(self):
+        """A fourth environment must not join the readable side by default.
+
+        ``_REDACTED_ENVIRONMENTS`` and ``ENV_OVERLAYS`` are two lists of the same
+        vocabulary, and only one of them is consulted when a log line is written.
+        ``config.py`` rejects everything outside ``ENV_OVERLAYS`` at import, so
+        the way to add an environment is to add an overlay -- and then the
+        redaction set is silently one short, which is exactly how `staging`
+        shipped readable. Stated as a set difference, not as two literals: the
+        one environment allowed to stay readable has to be named.
+        """
+        self.assertEqual(
+            set(ENV_OVERLAYS) - app_logging._REDACTED_ENVIRONMENTS,
+            {"development"},
+            "every deployed overlay must redact; only development may not",
+        )
+
+    def test_the_handlers_it_builds_are_filtered_too(self):
+        """The second install call is the one production depends on.
+
+        ``setup_logging`` installs filters twice: once before ``if root.handlers:
+        return``, when a handler may already exist from somebody else, and again
+        after building its own console and file handlers. ``_render`` returns
+        early at that guard because it pre-attaches a handler, so it is blind to
+        the second call -- and a real boot starts with an empty root logger, i.e.
+        takes exactly the path ``_render`` skips. Asserting on the file the
+        created handler writes is the only way to see it.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            log_file = Path(tmp) / "app.log"
+            with patch.object(settings, "PMRF_ENV", "staging"), \
+                    patch.object(settings, "LOG_FILE", str(log_file)):
+                app_logging.setup_logging()
+                logging.getLogger("tests.env.created").warning(
+                    "fetch failed for %s",
+                    f"https://upstream.example/private?apiKey={self.SECRET}",
+                )
+                for handler in logging.getLogger().handlers:
+                    handler.flush()
+                # Windows keeps the file locked until the handler is closed, and
+                # the directory has to disappear at the end of this block --
+                # cleanup runs after it, which is too late.
+                for handler in list(logging.getLogger().handlers):
+                    handler.close()
+            written = log_file.read_text(encoding="utf-8")
+        self.assertIn("fetch failed for <redacted>", written)
+        self.assertNotIn(self.SECRET, written)
 
 
 class TemplateKeyReaderTests(unittest.TestCase):

@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -195,8 +196,100 @@ class WorldCupPostMatchBackfillServiceTests(unittest.TestCase):
         self.assertEqual(run["result"]["quality_samples"], 1)
 
     def test_sync_error_short_circuits_without_scoring(self):
+        """The row says what broke and why, without repeating the producer's text.
+
+        `error` is this job's own sentence; the cause is `sync_reason`, a code.
+        Until §53.109 `error` was the producer's message relayed verbatim -- that
+        was the one site `test_ledger_error_sanitization_guard` recorded, because
+        an upstream message can carry a URL or a token.
+        """
         self._add_finished_match_with_prediction()
 
+        with patch(
+            "app.services.world_cup_post_match_backfill_service.sync_world_cup_fixtures",
+            return_value={
+                "status": "error",
+                "source": "football-data",
+                "error": "source unavailable https://upstream.example/?api_key=abc123",
+                "reason": "request_failed",
+            },
+        ):
+            result = run_post_match_backfill(
+                session=self.session,
+                dry_run=False,
+                sync_first=True,
+            )
+
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["step"], "fixture_sync")
+        self.assertEqual(result["error"], "World Cup fixture sync failed")
+        self.assertEqual(result["reason"], "request_failed")
+        self.assertEqual(self.session.query(MatchResult).count(), 0)
+        self.assertIn("run_id", result)
+        run = loop_run_store.get_run(result["run_id"])
+        self.assertEqual(run["status"], "failed")
+        self.assertEqual(run["error"], "World Cup fixture sync failed")
+        self.assertEqual(run["result"]["sync_status"], "error")
+        self.assertEqual(run["result"]["sync_reason"], "request_failed")
+        # The projection keeps the identity of the attempt and drops the message:
+        # this dict is also the HTTP response body of the analytics route.
+        self.assertEqual(set(result["sync"]), {"status", "source", "reason"})
+        self.assertNotIn("abc123", json.dumps(run, default=str))
+        self.assertNotIn("upstream.example", json.dumps(run, default=str))
+        self.assertNotIn("abc123", json.dumps(result, default=str))
+
+        history = list_post_match_backfill_runs()
+        self.assertEqual(history["count"], 1)
+        self.assertEqual(history["runs"][0]["id"], result["run_id"])
+        self.assertEqual(history["runs"][0]["status"], "failed")
+        self.assertEqual(history["runs"][0]["sync_status"], "error")
+        self.assertEqual(history["runs"][0]["sync_reason"], "request_failed")
+        self.assertEqual(history["runs"][0]["error"], "World Cup fixture sync failed")
+
+    def test_neither_the_ledger_row_nor_the_response_carries_the_producer_message(self):
+        """Two carriers, two assertions — the pair §53.109 found by reading code.
+
+        The row (`loop_runs.error` + `result_json`) is durable and served by an
+        unauthenticated metrics route; the response is what
+        `/analytics/post-match-backfill` hands back. The `sync` mapping used to be
+        the whole producer dict, so the projection is asserted **by key set**: a
+        "we removed the one field we knew about" assertion would pass while the
+        next field leaked.
+        """
+        leaky = (
+            "HTTP 401 for https://upstream.example/x?api_key=abc123 "
+            "Authorization: Bearer sk-live-999"
+        )
+        with patch(
+            "app.services.world_cup_post_match_backfill_service.sync_world_cup_fixtures",
+            return_value={
+                "status": "error",
+                "source": "api-football",
+                "error": leaky,
+                "reason": "auth_failed",
+            },
+        ):
+            result = run_post_match_backfill(
+                session=self.session,
+                dry_run=False,
+                sync_first=True,
+            )
+
+        run = loop_run_store.get_run(result["run_id"])
+        self.assertEqual(run["error"], "World Cup fixture sync failed")
+        self.assertEqual(run["result"]["sync_reason"], "auth_failed")
+        self.assertEqual(set(result["sync"]), {"status", "source", "reason"})
+        for exported in (run, result):
+            text = json.dumps(exported, default=str)
+            for fragment in ("abc123", "sk-live-999", "upstream.example"):
+                self.assertNotIn(fragment, text)
+
+    def test_sync_error_without_a_code_still_records_a_sentence(self):
+        """No `reason` from the producer: the sentence stands, the code is null.
+
+        A null `sync_reason` is a producer that reported no code, not a row that
+        lost one -- which is why `error` is never null even on this path.
+        """
         with patch(
             "app.services.world_cup_post_match_backfill_service.sync_world_cup_fixtures",
             return_value={"status": "error", "error": "source unavailable"},
@@ -207,21 +300,10 @@ class WorldCupPostMatchBackfillServiceTests(unittest.TestCase):
                 sync_first=True,
             )
 
-        self.assertEqual(result["status"], "error")
-        self.assertEqual(result["step"], "fixture_sync")
-        self.assertEqual(self.session.query(MatchResult).count(), 0)
-        self.assertIn("run_id", result)
         run = loop_run_store.get_run(result["run_id"])
-        self.assertEqual(run["status"], "failed")
-        self.assertEqual(run["error"], "source unavailable")
-        self.assertEqual(run["result"]["sync_status"], "error")
-
-        history = list_post_match_backfill_runs()
-        self.assertEqual(history["count"], 1)
-        self.assertEqual(history["runs"][0]["id"], result["run_id"])
-        self.assertEqual(history["runs"][0]["status"], "failed")
-        self.assertEqual(history["runs"][0]["sync_status"], "error")
-        self.assertEqual(history["runs"][0]["error"], "source unavailable")
+        self.assertEqual(run["error"], "World Cup fixture sync failed")
+        self.assertIsNone(run["result"]["sync_reason"])
+        self.assertNotIn("reason", result)
 
     def test_sync_ok_but_stale_started_fixture_marks_run_degraded(self):
         kickoff = naive_now() - timedelta(hours=16)

@@ -27,6 +27,66 @@ def _clean(value: str | None) -> str:
     return str(value).strip()
 
 
+# --- fixture sync failure vocabulary ---------------------------------------
+#
+# `sync_world_cup_fixtures` returns a free-text `error`, and §53.32 documented why
+# that stands for its direct callers: the route turns it into an HTTP 500, and the
+# backfill relay is a *recorded* coupling in
+# `tests/test_ledger_error_sanitization_guard.py`. The scheduled job is a
+# different consumer: its `loop_runs.result_json` is durable, so it must not carry
+# upstream text at all (§53.107). What it can carry is a code.
+#
+# So the classification happens **here**, where the sentences are born, and only
+# once -- two classifiers over the same text are two places to drift apart. The
+# consumer validates (`reason in FIXTURE_SYNC_REASON_CODES`) instead of reading a
+# message it should not be reading at all.
+FIXTURE_SYNC_REASON_CODES = frozenset({
+    "configuration_missing",  # no API key / base URL / league id configured
+    "auth_failed",            # key present, upstream rejected it
+    "rate_limited",           # 429
+    "http_error",             # any other non-200
+    "timeout",
+    "request_failed",         # transport error, no status ever existed
+    "bad_payload",            # 200, but not the shape we expect
+    "save_failed",            # the fetch worked, persisting it did not
+    "sync_failed",            # unrecognised -- classification deliberately gives up
+})
+FIXTURE_SYNC_UNKNOWN = "sync_failed"
+
+# Ordered, first match wins. Prefixes rather than equality because half these
+# messages carry their own detail (`Request failed: <transport error>`,
+# `API error: 500 - <body>`); the specific ones come first so `Request timeout`
+# cannot be swallowed by a broader rule. Both sources' literals are listed: the
+# API-Football fetcher in this module raises its own two.
+FIXTURE_SYNC_REASON_RULES: tuple[tuple[str, str], ...] = (
+    ("FOOTBALL_DATA_API_KEY not configured", "configuration_missing"),
+    ("API-Football configuration missing", "configuration_missing"),
+    ("API key invalid or access forbidden", "auth_failed"),
+    ("Rate limit exceeded", "rate_limited"),
+    ("Request timeout", "timeout"),
+    ("Failed to fetch fixtures:", "request_failed"),
+    ("Request failed:", "request_failed"),
+    ("API error:", "http_error"),
+    ("Football-Data.org returned non-object JSON", "bad_payload"),
+    ("Failed to save fixtures:", "save_failed"),
+)
+
+
+def fixture_sync_reason(error: object) -> str:
+    """Classify a fixture-sync failure into a code.
+
+    Reads the text, never returns it: the value is always one of
+    `FIXTURE_SYNC_REASON_CODES`, so whatever the upstream said stays out of the
+    ledger. Unrecognised text (a SQLAlchemy error, a parser bug) collapses to
+    `sync_failed` rather than being passed through.
+    """
+    message = str(error or "")
+    for prefix, code in FIXTURE_SYNC_REASON_RULES:
+        if message.startswith(prefix):
+            return code
+    return FIXTURE_SYNC_UNKNOWN
+
+
 def fetch_world_cup_fixtures(
     season: str = "2026",
     league_id: str | None = None
@@ -312,15 +372,23 @@ def sync_world_cup_fixtures(source: str = "football-data") -> dict[str, Any]:
             "season": season
         }
 
-    except football_data_source.FootballDataAPIError:
+    except football_data_source.FootballDataAPIError as exc:
+        # `error` stays the single sentence §53.32 recorded; `reason` is the code
+        # the scheduled job reads. Eight distinct raises upstream used to arrive
+        # here as one string -- the code is where that distinction survives.
         return {
             "status": "error",
             "source": source,
             "error": "Football-Data.org API request failed",
+            "reason": fixture_sync_reason(exc),
         }
-    except Exception as e:
+    except Exception as exc:
+        # `str(exc)` is kept for the direct callers (route detail, backfill relay)
+        # and is documented as a coupling by §53.32. The scheduled job ignores it
+        # and takes `reason` instead.
         return {
             "status": "error",
             "source": source,
-            "error": str(e)
+            "error": str(exc),
+            "reason": fixture_sync_reason(exc),
         }

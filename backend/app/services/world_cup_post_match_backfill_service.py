@@ -21,6 +21,13 @@ logger = logging.getLogger(__name__)
 AUDIT_JOB_NAME = "world_cup_post_match_backfill"
 STALE_UNFINISHED_GRACE_HOURS = 4
 
+# What may be carried from a sync failure into a durable row, and into the HTTP
+# response body: the identity of the attempt plus the cause **as a code**. The
+# sync layer's `error` is free text (it stringifies exceptions, §53.32), so it is
+# not in this tuple -- `tests/test_ledger_error_sanitization_guard.py` fails if a
+# sink key inherits it (§53.109).
+_SYNC_IDENTITY_KEYS = ("status", "source", "reason")
+
 
 def _start_audit_run(enabled: bool) -> str | None:
     if not enabled:
@@ -41,6 +48,7 @@ def _audit_summary(result: dict[str, Any]) -> dict[str, Any]:
         "dry_run": result.get("dry_run"),
         "source": result.get("source"),
         "sync_status": sync.get("status"),
+        "sync_reason": sync.get("reason"),
         "candidate_count": result.get("candidate_count", 0),
         "scored": scoring.get("scored", 0),
         "skipped": scoring.get("skipped", 0),
@@ -80,6 +88,7 @@ def _audit_run_payload(run: dict[str, Any]) -> dict[str, Any]:
         "dry_run": result.get("dry_run"),
         "source": result.get("source"),
         "sync_status": result.get("sync_status"),
+        "sync_reason": result.get("sync_reason"),
         "candidate_count": result.get("candidate_count", 0),
         "scored": result.get("scored", 0),
         "skipped": result.get("skipped", 0),
@@ -203,22 +212,36 @@ def run_post_match_backfill(
         if sync_first and not dry_run:
             sync_result = sync_world_cup_fixtures(source=source)
             if sync_result.get("status") == "error":
-                return finish({
+                # Neither `error` nor the `sync` mapping relays the producer's
+                # text. Both surfaces are public in a way that matters: `error`
+                # is the `loop_runs.error` column (returned by an unauthenticated
+                # metrics route and used for the `/api/health` verdict), and this
+                # dict is the HTTP response body of
+                # `/analytics/post-match-backfill`.
+                #
+                # So `error` is this job's own sentence and the cause travels as
+                # `reason`, a code from
+                # `world_cup_match_service.FIXTURE_SYNC_REASON_CODES`. Before
+                # §53.109 this line inherited `sync_result["error"]` -- recorded,
+                # not hidden, as `_RECORDED_INHERITING_SITES` in
+                # `tests/test_ledger_error_sanitization_guard.py`; that tuple is
+                # empty now.
+                error_result: dict[str, Any] = {
                     "status": "error",
                     "step": "fixture_sync",
                     "source": source,
                     "dry_run": dry_run,
-                    "sync": sync_result,
-                    # Relayed verbatim on purpose. The ledger is this job's record
-                    # of why the sync failed, and two behaviour tests pin the text
-                    # (`test_sync_error_short_circuits_without_scoring`,
-                    # `test_post_match_backfill_does_not_expose_or_persist_provider_error_body`).
-                    # So the safety of this line *is* the safety of the producer
-                    # `sync_world_cup_fixtures`; `test_ledger_error_sanitization_guard`
-                    # tracks that coupling rather than hiding it behind a token.
-                    "error": sync_result.get("error"),
+                    "sync": {
+                        key: sync_result[key]
+                        for key in _SYNC_IDENTITY_KEYS
+                        if sync_result.get(key)
+                    },
+                    "error": "World Cup fixture sync failed",
                     "audit_metadata": audit_meta,
-                })
+                }
+                if sync_result.get("reason"):
+                    error_result["reason"] = sync_result["reason"]
+                return finish(error_result)
             session.expire_all()
 
         candidates = _finished_unscored_matches(session)

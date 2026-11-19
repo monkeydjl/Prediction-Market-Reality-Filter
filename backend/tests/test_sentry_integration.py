@@ -10,9 +10,12 @@ Covers:
 """
 from __future__ import annotations
 
+import json
+import logging
 import unittest
 from unittest.mock import MagicMock, patch
 
+from app.core import logging as app_logging
 from app.core.config import settings
 from app.utils import sentry
 
@@ -33,6 +36,101 @@ class TestSentryBeforeSendContract(unittest.TestCase):
             "Hint",
         )
         self.assertEqual(str(signature.return_annotation), "Event")
+
+class TestSanitizerScrubsEveryLogCarrier(unittest.TestCase):
+    """§53.120: ``logentry`` kept the URL the exception block had already lost.
+
+    ``before_send`` rewrote ``exception.values[].value`` and nothing else, but a
+    log record reaches Sentry with **three** more copies of its text: the
+    template, the rendered line, and the template arguments (where
+    ``...?apiKey=<key>`` actually sits). Production looked clean only by side
+    effect -- the handler filter mutates the record in place and sentry-sdk 2.x
+    reads it *after* ``callHandlers`` returns -- so every other ``PMRF_ENV``
+    uploaded the URL verbatim. Measured on the real SDK: staging and development
+    both produced ``logentry.formatted = "fetch failed for https://…?api_key=…"``.
+    """
+
+    TICKET = "SECRET-API-KEY-9f3a"
+    URL = (
+        "https://api.example.com/v4/quotes"
+        f"?api_key={TICKET}&market=abc"
+    )
+
+    def test_the_rendered_message_is_redacted_in_place(self):
+        event = sentry._sanitize_event(
+            {
+                "logentry": {
+                    "message": "fetch failed for %s",
+                    "formatted": f"fetch failed for {self.URL}",
+                    "params": [self.URL],
+                }
+            },
+            {},
+        )
+        self.assertEqual(
+            event["logentry"]["formatted"],
+            "fetch failed for <redacted>",
+            "the rendered line must look like the same line in logs/app.log",
+        )
+        self.assertNotIn(self.TICKET, json.dumps(event))
+
+    def test_the_template_arguments_are_replaced_wholesale(self):
+        event = sentry._sanitize_event(
+            {
+                "logentry": {
+                    "message": "fetch failed for %s after %s tries",
+                    "formatted": "fetch failed for https://api.example.com after 7 tries",
+                    "params": [self.URL, 7],
+                }
+            },
+            {},
+        )
+        self.assertEqual(event["logentry"]["params"], ["<redacted>", 7])
+        self.assertNotIn(self.TICKET, json.dumps(event))
+
+    def test_the_exception_value_is_still_replaced_with_a_constant(self):
+        event = sentry._sanitize_event(
+            {"exception": {"values": [{"value": f"500 Server Error for url: {self.URL}"}]}},
+            {},
+        )
+        self.assertEqual(event["exception"]["values"][0]["value"], "Application error")
+        self.assertNotIn(self.TICKET, json.dumps(event))
+
+    def test_the_two_surfaces_render_the_same_line(self):
+        """Parity rather than a fixed expectation table.
+
+        The log record is the shared input: the handler filter mutates it, the
+        SDK reads a copy of it. Comparing the two *outputs* catches a change on
+        either side; a hard-coded expected string would only pin today's answer
+        and would pass while the two surfaces drifted apart (section 53.111).
+        """
+        record = logging.LogRecord(
+            name="probe.parity",
+            level=logging.WARNING,
+            pathname=__file__,
+            lineno=1,
+            msg="fetch failed for %s",
+            args=(self.URL,),
+            exc_info=None,
+        )
+        event = {
+            "logentry": {
+                "message": record.msg,
+                "formatted": record.getMessage(),
+                "params": list(record.args),
+            }
+        }
+
+        app_logging._RedactingLogFilter().filter(record)
+        sentry._sanitize_event(event, {})
+
+        self.assertNotIn(self.TICKET, record.getMessage())
+        self.assertEqual(
+            record.getMessage(),
+            event["logentry"]["formatted"],
+            "the file log and the Sentry event disagree about the same record",
+        )
+
 
 class TestSentryConfigDefaults(unittest.TestCase):
     """Spec §1.2 — Sentry config fields exist with safe defaults."""
@@ -172,7 +270,6 @@ class TestSchedulerSentryForwarding(unittest.TestCase):
             scheduler._finish_run(
                 run_id,
                 "failed",
-                error="scheduler boom",
                 exc=test_exc,
             )
             mock_finish.assert_called_once()
@@ -212,7 +309,7 @@ class TestSchedulerSentryForwarding(unittest.TestCase):
         test_exc = ValueError("oops")
         with patch.object(loop_run_store, "finish_run") as mock_finish, \
              patch("app.utils.sentry.capture_message") as mock_capture:
-            scheduler._finish_run(None, "failed", error="oops", exc=test_exc)
+            scheduler._finish_run(None, "failed", exc=test_exc)
             mock_finish.assert_not_called()
             mock_capture.assert_called_once()
             call_args = mock_capture.call_args

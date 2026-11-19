@@ -67,8 +67,10 @@ def job_env(monkeypatch):
     monkeypatch.setattr(settings, "PHASE10_REALTIME_PUSH_ENABLED", False)
     calls = {"finish": []}
 
-    def fake_finish(run_id, status, *, result=None, error=None, exc=None):
-        calls["finish"].append({"status": status, "result": result, "error": error})
+    def fake_finish(run_id, status, *, result=None, exc=None, reason=None):
+        calls["finish"].append(
+            {"status": status, "result": result, "exc": exc, "reason": reason}
+        )
 
     with patch("app.core.scheduler._start_run", return_value="run-odds"), \
          patch("app.core.scheduler._finish_run", side_effect=fake_finish):

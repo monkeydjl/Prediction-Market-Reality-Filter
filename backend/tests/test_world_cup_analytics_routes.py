@@ -1268,15 +1268,22 @@ class WorldCupAnalyticsRouteAuthTests(unittest.TestCase):
 
         self.assertEqual(post_response.status_code, 200)
         self.assertEqual(post_response.json()["status"], "error")
+        # §53.109: the job's own sentence plus a code. Until then this field was
+        # the producer's message relayed verbatim, which is why the fragments
+        # below had to be checked at all.
         self.assertEqual(
             post_response.json()["error"],
-            "Football-Data.org API request failed",
+            "World Cup fixture sync failed",
         )
+        self.assertEqual(post_response.json()["reason"], "http_error")
         self.assertEqual(history_response.status_code, 200)
         self.assertEqual(history_response.json()["runs"][0]["status"], "failed")
         self.assertEqual(
             history_response.json()["runs"][0]["error"],
-            "Football-Data.org API request failed",
+            "World Cup fixture sync failed",
+        )
+        self.assertEqual(
+            history_response.json()["runs"][0]["sync_reason"], "http_error"
         )
         exported = post_response.text + history_response.text
         for fragment in (

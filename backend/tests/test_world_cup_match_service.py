@@ -5,8 +5,10 @@ and sync_world_cup_fixtures. All external dependencies (HTTP, database) are
 mocked so no network or real DB is touched.
 """
 
+import ast
 import unittest
 from datetime import datetime, timezone
+from pathlib import Path
 from unittest.mock import MagicMock, patch, PropertyMock
 from urllib.error import URLError
 
@@ -24,6 +26,32 @@ from app.services.world_cup_match_service import (
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _raise_messages(module) -> list[str]:
+    """The message of every `raise SomeError(...)` in a module's source.
+
+    For f-strings only the **leading literal** is returned (`f"Request failed:
+    {e}"` -> `"Request failed: "`), because that is the part the classifier can
+    key on. Every raise in `football_data_source` is reachable from
+    `sync_world_cup_fixtures`, so no filter by exception class is applied --
+    adding an unrelated raise there means it has to be classified too.
+    """
+    tree = ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
+    messages: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Raise) or not isinstance(node.exc, ast.Call):
+            continue
+        if not node.exc.args:
+            continue
+        argument = node.exc.args[0]
+        if isinstance(argument, ast.Constant) and isinstance(argument.value, str):
+            messages.append(argument.value)
+        elif isinstance(argument, ast.JoinedStr) and argument.values:
+            head = argument.values[0]
+            if isinstance(head, ast.Constant) and isinstance(head.value, str):
+                messages.append(head.value)
+    return messages
+
 
 def _make_fixture(
     fixture_id=12345,
@@ -564,6 +592,115 @@ class SyncWorldCupFixturesTests(unittest.TestCase):
         self.assertEqual(result["created"], 3)
         self.assertEqual(result["updated"], 2)
         self.assertEqual(result["skipped"], 5)
+
+
+# ===========================================================================
+# fixture_sync_reason classification (§53.108)
+# ===========================================================================
+
+class FixtureSyncReasonClassificationTests(unittest.TestCase):
+    """The failure code is derived here, next to the messages it reads.
+
+    The scheduled job is a durable consumer: `loop_runs.result_json` is returned
+    by an unauthenticated metrics route and drives the `/api/health` verdict, so
+    it may carry a code but never upstream text (§53.107). Deriving the code here
+    and validating it there keeps one classifier instead of two.
+    """
+
+    def test_the_rule_table_covers_the_declared_vocabulary_both_ways(self):
+        codes = world_cup_match_service.FIXTURE_SYNC_REASON_CODES
+        emitted = {code for _, code in world_cup_match_service.FIXTURE_SYNC_REASON_RULES}
+        self.assertEqual(emitted, set(codes) - {world_cup_match_service.FIXTURE_SYNC_UNKNOWN})
+
+    def test_representative_messages_classify_as_expected(self):
+        cases = {
+            "FOOTBALL_DATA_API_KEY not configured": "configuration_missing",
+            "API-Football configuration missing": "configuration_missing",
+            "API key invalid or access forbidden": "auth_failed",
+            "Rate limit exceeded (10 requests/minute)": "rate_limited",
+            "Request timeout": "timeout",
+            "Request failed: ConnectError('connection refused')": "request_failed",
+            "Failed to fetch fixtures: <urlopen error timed out>": "request_failed",
+            "API error: 500 - <html>": "http_error",
+            "Football-Data.org returned non-object JSON": "bad_payload",
+            "Failed to save fixtures: no such table: match_fixtures": "save_failed",
+        }
+        for message, expected in cases.items():
+            self.assertEqual(
+                world_cup_match_service.fixture_sync_reason(message), expected, message
+            )
+
+    def test_unrecognised_text_is_not_passed_through(self):
+        for value in (
+            None,
+            "",
+            "OperationalError: disk I/O error at D:/runtime/kernel.db",
+            "https://upstream.example/private?api_key=abc123",
+            RuntimeError("something new"),
+        ):
+            self.assertEqual(
+                world_cup_match_service.fixture_sync_reason(value),
+                world_cup_match_service.FIXTURE_SYNC_UNKNOWN,
+                value,
+            )
+
+    def test_every_football_data_raise_site_is_classified(self):
+        """A new `raise FootballDataAPIError(...)` must come with a rule.
+
+        Without this the vocabulary rots silently: the new cause would arrive at
+        the ledger as `sync_failed` and nobody would notice, which is the whole
+        defect §53.106 was about.
+        """
+        messages = _raise_messages(football_data_source)
+        self.assertGreaterEqual(len(messages), 10, messages)
+        for message in messages:
+            self.assertNotEqual(
+                world_cup_match_service.fixture_sync_reason(message),
+                world_cup_match_service.FIXTURE_SYNC_UNKNOWN,
+                f"unclassified raise message: {message!r}",
+            )
+
+    def test_every_sync_layer_raise_site_is_classified(self):
+        messages = _raise_messages(world_cup_match_service)
+        self.assertEqual(len(messages), 3, messages)
+        for message in messages:
+            self.assertNotEqual(
+                world_cup_match_service.fixture_sync_reason(message),
+                world_cup_match_service.FIXTURE_SYNC_UNKNOWN,
+                f"unclassified raise message: {message!r}",
+            )
+
+    @patch("app.services.football_data_source.fetch_world_cup_fixtures",
+           side_effect=football_data_source.FootballDataAPIError(
+               "Rate limit exceeded (10 requests/minute)"))
+    def test_the_football_data_error_carries_both_sentence_and_code(self, _fetch):
+        result = sync_world_cup_fixtures(source="football-data")
+
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["error"], "Football-Data.org API request failed")
+        self.assertEqual(result["reason"], "rate_limited")
+
+    @patch("app.services.world_cup_match_service.fetch_world_cup_fixtures",
+           side_effect=RuntimeError("API-Football configuration missing"))
+    def test_the_api_football_error_carries_both_sentence_and_code(self, _fetch):
+        result = sync_world_cup_fixtures(source="api-football")
+
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["error"], "API-Football configuration missing")
+        self.assertEqual(result["reason"], "configuration_missing")
+
+    @patch("app.services.world_cup_match_service.fetch_world_cup_fixtures",
+           side_effect=RuntimeError(
+               "HTTP 401 for https://v3.football.api-sports.io/fixtures?api_key=abc123"))
+    def test_an_unrecognised_exception_gets_a_code_and_keeps_its_text_off_the_code(
+        self, _fetch,
+    ):
+        """`error` keeps the text (direct callers need it, §53.32); `reason` does not."""
+        result = sync_world_cup_fixtures(source="api-football")
+
+        self.assertIn("abc123", result["error"])
+        self.assertEqual(result["reason"], "sync_failed")
+        self.assertNotIn("abc123", result["reason"])
 
 
 # ===========================================================================

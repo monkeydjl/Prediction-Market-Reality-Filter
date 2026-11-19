@@ -19,6 +19,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any, Literal
 
+from app.core.logging import redact_argument, redact_message
+
 logger = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from sentry_sdk.types import Event, Hint
@@ -37,7 +39,42 @@ except ImportError:  # pragma: no cover - env misconfig
     _SENTRY_AVAILABLE = False
 
 
+def _sanitize_logentry(event: Event) -> None:
+    """Scrub the message Sentry built from the log record (section 53.120).
+
+    The record reaches Sentry through ``Logger.callHandlers``, and the SDK puts
+    **three** copies of its text on the event: ``logentry.message`` (the
+    template), ``logentry.formatted`` (the rendered line) and ``logentry.params``
+    (the template arguments, which is where a URL such as
+    ``...?apiKey=<key>`` actually sits). ``before_send`` used to rewrite only
+    ``exception.values[].value``, so an event carrying a *log* line kept the
+    URL in all three.
+
+    Production looked clean only by side effect: the handler filter mutates the
+    record in place, and sentry-sdk 2.x calls its logging integration *after*
+    ``callHandlers`` returns, so it re-read the already-redacted record. Any
+    other ``PMRF_ENV`` has no filter installed, so the raw line was uploaded.
+    Redacting here means the same record produces the same message on both
+    surfaces instead of that ordering being load-bearing.
+
+    Both carriers go through the functions the handler filter uses, so the two
+    surfaces cannot drift; ``redact_argument`` is the harsher one on purpose --
+    a bare argument has no sentence around it to keep.
+    """
+    logentry = event.get("logentry")
+    if not isinstance(logentry, dict):
+        return
+    for key in ("message", "formatted"):
+        value = logentry.get(key)
+        if isinstance(value, str):
+            logentry[key] = redact_message(value)
+    params = logentry.get("params")
+    if isinstance(params, list):
+        logentry["params"] = [redact_argument(param) for param in params]
+
+
 def _sanitize_event(event: Event, _hint: Hint) -> Event:
+    _sanitize_logentry(event)
     exception = event.get("exception")
     if isinstance(exception, dict):
         values = exception.get("values")

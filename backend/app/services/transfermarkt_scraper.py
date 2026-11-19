@@ -4,9 +4,9 @@ Scrapes team squad market values from Transfermarkt to enhance team strength pre
 Market value is a strong proxy for team quality.
 """
 
+import asyncio
 import logging
 import re
-import time
 from typing import Any
 from datetime import datetime, timedelta, timezone
 
@@ -45,6 +45,19 @@ TRANSFERMARKT_TEAM_URLS = {
     "Ecuador": "https://www.transfermarkt.com/ecuador/startseite/verein/3359",
     "Colombia": "https://www.transfermarkt.com/kolumbien/startseite/verein/3816",
 }
+
+
+# The User-Agent this scraper presents. One named constant because it is a
+# *policy* line, not a detail: presenting a browser's identity to a site whose
+# terms do not obviously permit scraping is the part of this module a business
+# owner has to sign off on (audit §53.94 left that decision open). Nothing in
+# production calls the scrape path -- both call sites import
+# ``get_cached_market_value`` and only read the cache -- so changing this line
+# today affects manual runs (``tests/manual/``), not a live request stream.
+BROWSER_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
 
 
 def parse_market_value(value_str: str) -> float | None:
@@ -124,7 +137,7 @@ async def scrape_team_market_value(team_name: str, use_cache: bool = True) -> di
 
     # Headers to mimic browser
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": BROWSER_USER_AGENT,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.5",
         "Accept-Encoding": "gzip, deflate",
@@ -304,8 +317,10 @@ async def batch_scrape_world_cup_teams(delay_seconds: float = 2.0) -> dict[str, 
             })
             logger.warning("  ✗ %s: Failed", team_name)
 
-        # Rate limiting
+        # Rate limiting. `asyncio.sleep`, not `time.sleep`: this is an async
+        # function, so a blocking sleep freezes the event loop -- and with one
+        # entry per team the batch stalled it for 2s x 23 in a row (§53.105).
         if i < len(TRANSFERMARKT_TEAM_URLS) - 1:
-            time.sleep(delay_seconds)
+            await asyncio.sleep(delay_seconds)
 
     return results

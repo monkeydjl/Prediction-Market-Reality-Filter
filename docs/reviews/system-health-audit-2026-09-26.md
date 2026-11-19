@@ -18888,3 +18888,110 @@ import app.main                 195 routes
 **未 push**：`git push` 没有执行，你没说 push。分支状态 `main...monkeydjl/main [ahead 9]`。
 
 **本节行数**：正文 **+61/−0**，连本段共 **+65/−0**；审计档累计 **+3103/−0**。
+
+### §53.136 CI 红在一条本机永远绿的普查上：判据读的是「这个部署」，不是「这个应用」
+
+push 之后 CI 五个 job：`frontend-tests`（2m35s）、`docker-build`、`secret-scan`、`Type Sync Check` 全绿，
+**`backend-tests` 红**，红的只有一条：
+
+```
+FAILED tests/test_api_head_support.py::EndpointCensusTests::
+       test_the_list_outside_the_namespace_matches_the_route_table
+E  Items in the first set but not the second:
+E  '/' : an APIRoute outside /api is not covered by the HEAD rewrite
+```
+
+差集只有 `{'/'}` 一个元素。§53.134 那五道门里这一条是绿的，同一份字节。
+
+#### 根因：`/` 是**条件存在**的路由
+
+```
+app/main.py
+  if settings.BACKEND_SERVE_FRONTEND and _FRONTEND_OUT.is_dir():   # 有构建
+      app.mount("/", ApiAwareStaticFiles(..., html=True))
+  else:                                                            # 没有构建
+      @app.get("/", include_in_schema=False)                       # ← APIRoute
+      async def backend_root(): return RedirectResponse(...)
+```
+
+普查问的是「路由表里有多少 `APIRoute` 不在 `/api` 下」，于是：
+
+| 部署 | 路由表里的 `/` | 普查结论 |
+|---|---|---|
+| 本机（`frontend/out` 在，§53.130 刚构建过） | 是 `Mount`，不是 `APIRoute` | 绿 |
+| CI（干净检出，没有构建） | 是 `APIRoute` | **红** |
+
+所以 §53.134 的"五道门全绿"没有说错，但它说的是**这一个部署**。绿不是"没问题"，是"这个部署没问题"——
+这正是 §4.2 那条「观测点要挑无条件存在的」的镜像：这次不是观测点在干净检出上缺席，
+而是**缺陷只在另一个部署里出现**，而本机的 `out/` 把那个部署从视野里抹掉了。
+
+#### 修两层：产品侧与判据侧
+
+**产品侧**——`/` 加进 `EXTRA_HEAD_PATHS`（新增具名常量 `FALLBACK_ROOT_PATH`）。它是 `APIRoute`，
+`APIRoute` 从不给 GET 加 HEAD，所以没有构建的部署上 `HEAD /` 原本是 **405**；现在是跟着 GET 走的重定向。
+和 §53.113 修 `/metrics` 是同一件事，只是那个端点每个部署都在，这个只在一种部署里在。
+
+**判据侧**——普查**从路由表读部署**，而不是从 settings 复述条件：
+
+```python
+static_build_mounted = any(
+    isinstance(route, Mount) and route.path in ("", "/") for route in real_app.routes
+)
+expected = set(EXTRA_HEAD_PATHS)
+if static_build_mounted:
+    expected.discard(FALLBACK_ROOT_PATH)
+```
+
+读路由表而不是读 `settings`，是因为复述条件会在分支改动时**静默同步错误**：
+两个部署都绿，而预期集已经和代码没关系了。
+
+实测两个部署的 `HEAD /`（`follow_redirects=False`）：
+
+```
+有构建   200  text/html; charset=utf-8  content-length: 45935  body 0
+无构建   307  location: /docs                                  body 0   ← 无 content-type
+```
+
+#### 修的过程里自己踩了两个坑
+
+1. **`Mount("/")` 的 `path` 是 `""`**——Starlette 把尾斜杠剥掉了。第一版写成 `route.path == "/"`，
+   匹配不到任何东西 ⇒ 减法从不执行 ⇒ 本机直接红。**它先红了一次是好事**：如果它没红，
+   说明减法根本没生效而测试还在绿，那就是这一节要修的那个错误的第二次发生。
+2. **`TestClient` 默认 `follow_redirects=True`**——新加的 `HEAD /` 测试第一版"通过"了，
+   但无构建部署上 307 被跟随成了重定向后的 200，断言看的是另一件事。改 `follow_redirects=False`
+   之后两个部署才分别读到 200 与 307。§53.112 记过同一条：307→200 与 404 都像一次 200。
+
+#### harness 的针也跟着换了
+
+`mutation_verify.py` 的 N4 锚在旧常量上：`EXTRA_HEAD_PATHS = frozenset({"/metrics"})` ⇒ 改完命中 **0 次**。
+换针为 `{"/metrics", FALLBACK_ROOT_PATH}`，`note` 里那句"**唯一**一个"也不再成立，一并改掉
+（`/` 同样在命名空间外，只是条件存在）。`verify api-head-support --index 4` 重跑：
+**2 failed**（`test_metrics_answers_head_with_the_get_headers` + 普查），还原后逐字节一致。
+
+**没有为这次的减法登记新变异**，理由写在套的 `rationale` 里：环境依赖的判据做变异，
+在干净检出上会报 stayed GREEN，而那会被读成"守卫是空头"。改用两只手跑代替：
+
+| 变异（手跑） | 环境 | 结果 |
+|---|---|---|
+| MA 去掉"按部署减法" | 有构建 | **1 failed**（只红普查） |
+| MB 把 `/` 从 `EXTRA_HEAD_PATHS` 删掉 | `BACKEND_SERVE_FRONTEND=false` | **2 failed**（普查 + `HEAD /` 那条） |
+| N4（换针后，走 harness） | 有构建 | **2 failed** |
+
+两条手跑变异各自在**能暴露它的那个部署**里变红——这本身就是这一节的结论：同一个判据，两种部署，
+两个不同的红点。
+
+#### 门
+
+- `pytest tests/test_api_head_support.py`：**13 passed**（有构建）/ **13 passed**（`BACKEND_SERVE_FRONTEND=false`）
+- `pytest tests/test_api_head_support.py tests/test_static_api_boundary.py`：两环境各 **25 passed + 12 subtests**
+- `pytest tests/test_mutation_verify.py`：**64 passed + 410 subtests**
+- `ruff check app/ tests/… scripts/…`：`All checks passed!` · `mypy app/`：334 files，无问题
+- **全量、CI 等价环境**（`BACKEND_SERVE_FRONTEND=false pytest -q`）：**6 879 passed / 11 skipped /
+  2 584 subtests**，junit `tests=9474 failures=0 errors=0 skipped=11`，716.9 s。
+  比 §53.134 多 1 条 `<testcase>`，多出来的就是这次新加的 `HEAD /`。
+
+⚠️ 这一跑我杀错过一次：看到日志文件 mtime 停在几分钟前就判定它卡死，其实只跑了 **2m 22s**——
+重定向到文件时 pytest 的进度点是块缓冲的，日志落后于进度。**判据应该是任务已运行时长，不是文件时间戳**，
+跟我先前记的「固定 `sleep` 不是等待」是同一条。
+
+**本节行数**：正文 **+104/−0**，连本段共 **+107/−0**；审计档累计 **+3210/−0**。

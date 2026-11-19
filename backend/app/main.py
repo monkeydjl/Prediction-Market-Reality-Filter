@@ -9,12 +9,13 @@ from typing import Any
 from fastapi import FastAPI, Header, Request, Response, status as http_status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
-from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import RequestResponseEndpoint
 
 from app.api.router import api_router
 from app.api.security import is_write_key_valid
+from app.core import static_serving
 from app.core.config import settings
+from app.core.head_support import ApiHeadAsGetMiddleware
 from app.core.logging import setup_logging
 from app.core.preflight import (
     log_realtime_push_posture,
@@ -504,6 +505,11 @@ app.add_middleware(
     allow_headers=settings.CORS_ALLOWED_HEADERS,
 )
 app.add_middleware(InMemoryRateLimitMiddleware)
+# Registered last, so it is the outermost layer: HEAD is rewritten to GET before
+# the rate limiter and CORS look at the request (one bucket per path and method,
+# so HEAD cannot be used to double a client's budget), and the body is dropped
+# only after everything below has produced it. See app/core/head_support.py.
+app.add_middleware(ApiHeadAsGetMiddleware)
 
 # All JSON API routers live under /api so the single-page app can own the root
 # paths. Without this the frontend's /events page would collide with the events
@@ -649,9 +655,17 @@ async def prometheus_metrics() -> Response:
 # /api, /dashboard and /docs routes above win, and the SPA catch-all only serves
 # the frontend's own pages and assets. Mounted only if present so the API still
 # boots before the first frontend build.
+#
+# `ApiAwareStaticFiles` rather than `StaticFiles`: this mount matches *every*
+# path the router did not, so a mistyped /api/... used to be answered with the
+# 36 KB 404.html page (see app/core/static_serving.py).
 _FRONTEND_OUT = Path(__file__).parent.parent.parent / "frontend" / "out"
 if settings.BACKEND_SERVE_FRONTEND and _FRONTEND_OUT.is_dir():
-    app.mount("/", StaticFiles(directory=str(_FRONTEND_OUT), html=True), name="frontend")
+    app.mount(
+        "/",
+        static_serving.ApiAwareStaticFiles(directory=str(_FRONTEND_OUT), html=True),
+        name="frontend",
+    )
 else:
     @app.get("/", include_in_schema=False)
     async def backend_root() -> RedirectResponse:

@@ -52,14 +52,24 @@ STREAMING_PATHS = frozenset({
     "/api/world-cup/predictions/batch-switch-engine-stream",
 })
 
-#: Endpoints registered as ``APIRoute`` outside the ``/api`` namespace. They have
-#: the same defect -- ``APIRoute`` never adds HEAD -- but they are not API paths,
-#: so the fence's predicate does not reach them. There is exactly one, and the
-#: census test re-derives this set from the route table
-#: (``APIRoute`` whose path is not an API path), so a second one cannot appear
-#: without turning that test red. A hand-kept list nobody re-counts would rot
-#: silently (§53.105).
-EXTRA_HEAD_PATHS = frozenset({"/metrics"})
+#: `main.py` registers `GET /` only when the frontend build is absent; with a
+#: build, `frontend/out` is mounted at `/` instead. So `/` is an `APIRoute` in
+#: one deployment and a mount in the other -- which is why the census test reads
+#: that decision from the route table instead of re-deriving it (§53.136).
+FALLBACK_ROOT_PATH = "/"
+
+#: Endpoints registered outside the ``/api`` namespace that need HEAD answered
+#: from their GET. They have the same defect -- ``APIRoute`` never adds HEAD --
+#: but they are not API paths, so the fence's predicate does not reach them.
+#:
+#: ``/metrics`` is present in every deployment. ``/`` is present only when there
+#: is no frontend build (``FALLBACK_ROOT_PATH``); listing it unconditionally is
+#: what makes ``HEAD /`` answer like its GET in the pre-build deployment instead
+#: of a 405, and the census subtracts it when the static mount is present so both
+#: deployments agree. The census re-derives this set from the route table, so a
+#: third one cannot appear without turning that test red. A hand-kept list
+#: nobody re-counts would rot silently (§53.105).
+EXTRA_HEAD_PATHS = frozenset({"/metrics", FALLBACK_ROOT_PATH})
 
 
 def answers_head_as_get(route_path: str) -> bool:

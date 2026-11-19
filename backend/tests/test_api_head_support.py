@@ -40,6 +40,7 @@ from starlette.types import Message, Receive, Scope, Send  # noqa: E402
 
 from app.core.head_support import (  # noqa: E402
     EXTRA_HEAD_PATHS,
+    FALLBACK_ROOT_PATH,
     STREAMING_PATHS,
     ApiHeadAsGetMiddleware,
 )
@@ -198,10 +199,21 @@ class EndpointCensusTests(unittest.TestCase):
     registered directly on ``app`` (``@app.get`` instead of an ``APIRouter``)
     carries the same ``APIRoute`` defect while sitting outside the fence's
     predicate, so adding one has to be a decision rather than an oversight.
+
+    §53.136: the route table is not the same in every deployment. ``main.py``
+    registers ``GET /`` only when the frontend build is absent, and mounts
+    ``frontend/out`` at ``/`` when it is present. This test passed on the machine
+    where ``out/`` had just been built (§53.130) and turned CI red, which has no
+    build: a census that reads a deployment-dependent table has to say which
+    deployment it is looking at. It reads that from the route table itself -- a
+    mount at ``/`` means the build is being served, so the fallback route is not
+    registered -- instead of re-deriving the condition from settings, so a
+    changed branch fails here rather than silently shifting the expectation.
     """
 
     def test_the_list_outside_the_namespace_matches_the_route_table(self):
         from fastapi.routing import APIRoute
+        from starlette.routing import Mount
 
         from app.core.api_namespace import is_api_path
         from app.main import app as real_app
@@ -212,10 +224,21 @@ class EndpointCensusTests(unittest.TestCase):
             if isinstance(route, APIRoute) and not is_api_path(route.path)
         }
 
+        # ``Mount("/")`` keeps ``path == ""``: Starlette strips the trailing
+        # slash, so testing for ``"/"`` finds nothing and the expectation below
+        # would silently keep the fallback path in both deployments -- the same
+        # shape of mistake as the one this whole section is about.
+        static_build_mounted = any(
+            isinstance(route, Mount) and route.path in ("", "/") for route in real_app.routes
+        )
+        expected = set(EXTRA_HEAD_PATHS)
+        if static_build_mounted:
+            expected.discard(FALLBACK_ROOT_PATH)
+
         self.assertTrue(found, "the census found no APIRoute outside /api at all")
         self.assertEqual(
             found,
-            set(EXTRA_HEAD_PATHS),
+            expected,
             "an APIRoute outside /api is not covered by the HEAD rewrite",
         )
 
@@ -296,6 +319,41 @@ class ShippedHeadTests(unittest.TestCase):
 
         self.assertEqual(head.status_code, 405)
         self.assertEqual(head.headers["allow"], "GET")
+
+    def test_the_root_answers_head_in_whichever_deployment_this_is(self):
+        """``/`` is a mount with a build and an ``APIRoute`` without one; neither is a 405.
+
+        This assertion is deliberately deployment-blind, because the value of it
+        is the same in both: an ``APIRoute`` outside the namespace answers HEAD
+        with 405 until it is listed in ``EXTRA_HEAD_PATHS``, and ``/`` is the one
+        outside both predicates (``is_api_path`` says no, and before §53.136 the
+        extra list said no as well). Which status is correct depends on the
+        deployment -- 200 from ``index.html`` with a build, 307 to ``/api`` or
+        ``/docs`` without -- so only "answered, with no body" is pinned here.
+
+        ``follow_redirects=False`` is load-bearing: with the client's default the
+        307 is followed and the build-less deployment reports the redirected
+        GET's 200, which reads as "the mount answered" -- the opposite of what
+        happened (§53.112 made the same point about 307 -> 200 looking like one
+        200).
+        """
+        head = self.client.head(FALLBACK_ROOT_PATH, follow_redirects=False)
+
+        self.assertIn(
+            head.status_code,
+            {200, 307},
+            "HEAD / must be answered by its GET, not refused as a method",
+        )
+        self.assertEqual(head.content, b"")
+        if head.status_code == 307:
+            self.assertTrue(
+                head.headers.get("location"), "the fallback redirect lost its target"
+            )
+        else:
+            self.assertTrue(
+                (head.headers.get("content-type") or "").startswith("text/html"),
+                "the mount did not answer with the built page",
+            )
 
 
 if __name__ == "__main__":

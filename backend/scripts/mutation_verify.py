@@ -7185,6 +7185,11 @@ SETS: tuple[MutationSet, ...] = (
             "三个红点互不重叠，故不共用 group。"
             "⚠️ 流式例外的**名单**不在变异里：它由 `test_the_streaming_list_matches_the_route_table` "
             "对着路由表的返回注解重数，所以新增一个流式处理器会先红在那条用例上。"
+            "⚠️ §53.136 的那半条也不在变异里：普查现在按部署减去 `FALLBACK_ROOT_PATH`"
+            "（有构建时 `/` 是静态挂载，没有构建时它是 `APIRoute`），把减法去掉**只在有构建的机器上**变红，"
+            "干净检出上会报 stayed GREEN 并被读成空头——环境依赖的判据不适合做变异，"
+            "改为用 `BACKEND_SERVE_FRONTEND=false` 跑同一个文件证明两侧都绿、"
+            "再用「把 `/` 从名单删掉」证明第二条守卫承重（手跑，未登记）。"
         ),
         mutations=(
             Mutation(
@@ -7245,22 +7250,24 @@ SETS: tuple[MutationSet, ...] = (
                 ),
             ),
             Mutation(
-                label="N4 命名空间外的那一个端点从名单里掉了：/metrics 的 HEAD 回到 404",
+                label="N4 命名空间外的那个端点从名单里掉了：/metrics 的 HEAD 回到 404",
                 path=_HEAD_SUPPORT,
-                old=b'EXTRA_HEAD_PATHS = frozenset({"/metrics"})\n',
-                new=b"EXTRA_HEAD_PATHS = frozenset()\n",
+                old=b'EXTRA_HEAD_PATHS = frozenset({"/metrics", FALLBACK_ROOT_PATH})\n',
+                new=b"EXTRA_HEAD_PATHS = frozenset({FALLBACK_ROOT_PATH})\n",
                 guard_file=_HEAD_SUPPORT_TESTS,
                 guards=(
                     "test_metrics_answers_head_with_the_get_headers",
                     "test_the_list_outside_the_namespace_matches_the_route_table",
                 ),
                 note=(
-                    "§53.115：`/metrics` 是**唯一**一个不在 `/api` 命名空间里的 `APIRoute`（普查实测），"
+                    "§53.115：`/metrics` 是命名空间外那个**每个部署都存在**的 `APIRoute`（普查实测），"
                     "同一个 `APIRoute` 不给 GET 加 HEAD 的缺陷它也有，而栅栏的谓词够不着它。"
-                    "清空名单后 HEAD 回到 404 + `content-length: 36300`（那是 SPA 页面的长度，"
+                    "清空它的名单项后 HEAD 回到 404 + `content-length: 36300`（那是 SPA 页面的长度，"
                     "而这个端点只发 6 339 字节文本）。两条守卫从两侧夹住：行为测试说「答得不对」，"
                     "普查测试说「名单和路由表对不上」——后者在行为测试因故失效时仍然有效。"
                     "● 针单行、LF、命中 **1 次**；替换型编辑，删除数 0。"
+                    "⚠️ 名单里现在还有 `/`（§53.136，只在没有前端构建时才注册），所以 old/new 都把它留下来："
+                    "这一条只问 `/metrics`，不问部署。"
                 ),
             ),
         ),

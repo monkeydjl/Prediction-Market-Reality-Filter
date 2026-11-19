@@ -10,11 +10,36 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from app.services.world_cup_match_service import sync_world_cup_fixtures
+from app.services.world_cup_match_service import (
+    FIXTURE_SYNC_REASON_CODES,
+    FIXTURE_SYNC_UNKNOWN,
+    sync_world_cup_fixtures,
+)
 from app.services.world_cup_post_match_backfill_service import run_post_match_backfill
 from app.services.world_cup_prediction_pipeline import batch_predict_matches
 
 logger = logging.getLogger(__name__)
+
+# Why fixture sync failed, as a code -- and only a code.
+#
+# The classification itself lives in `world_cup_match_service.fixture_sync_reason`,
+# next to the messages it reads, because two classifiers over the same text are
+# two places to drift apart. This side only **validates**: accept a code if it is
+# in the producer's declared vocabulary, otherwise give up to `sync_failed`.
+#
+# Why validation is not paranoia: everything below is durable. `result_json` is
+# returned by `GET /quality-metrics/anomalies`, which carries no auth dependency,
+# and is what `/api/health` derives its 503 from; Sentry and the operator webhook
+# receive the same dict. `tests/test_scheduler_ledger_alarm_gate.py` pins that no
+# upstream error *text* reaches any of them. §53.106 answered "why did the run
+# fail" by transcribing that text -- four red tests said so, and §53.107/§53.108
+# replaced the sentence with this code path.
+def _fixture_sync_reason(result: dict[str, Any]) -> str:
+    """Take the producer's code if it is one we know; otherwise give up."""
+    reported = result.get("reason")
+    if isinstance(reported, str) and reported in FIXTURE_SYNC_REASON_CODES:
+        return reported
+    return FIXTURE_SYNC_UNKNOWN
 
 
 async def run_daily_prediction_update() -> dict[str, Any]:
@@ -34,12 +59,21 @@ async def run_daily_prediction_update() -> dict[str, Any]:
         sync_result = await asyncio.to_thread(sync_world_cup_fixtures)
 
         if sync_result.get("status") == "error":
-            logger.error("Fixture sync failed")
-            return {
+            # The sentence says *what* broke, `reason` says *why* -- one is
+            # prose this module owns, the other is a code from a closed set.
+            reason = _fixture_sync_reason(sync_result)
+            logger.error("Fixture sync failed: %s", reason)
+            error_result: dict[str, Any] = {
                 "status": "error",
                 "step": "fixture_sync",
-                "error": "World Cup fixture sync failed"
+                "error": "World Cup fixture sync failed",
+                "reason": reason,
             }
+            # Omitted rather than set to None: `source: null` in the ledger reads
+            # like a source was reported and went missing.
+            if sync_result.get("source"):
+                error_result["source"] = sync_result["source"]
+            return error_result
 
         logger.info("Synced %s fixtures, remaining matches: %s",
                      sync_result.get("fixtures_parsed", 0),
@@ -83,11 +117,13 @@ async def run_daily_prediction_update() -> dict[str, Any]:
         }
 
     except Exception as exc:
-        logger.error(
-            "World Cup daily update failed: %s",
-            type(exc).__name__,
-        )
+        # The **type**, not the message. Whatever raised was free text: an httpx
+        # `HTTPStatusError` stringifies with its URL, `sqlite3` errors carry the
+        # statement. The type narrows "something broke" to a layer without
+        # dragging any of that into durable storage -- same reason the branch
+        # above stores a code instead of the sync layer's sentence.
+        logger.error("World Cup daily update failed: %s", type(exc).__name__)
         return {
             "status": "error",
-            "error": "World Cup daily update failed",
+            "error": f"World Cup daily update failed: {type(exc).__name__}",
         }

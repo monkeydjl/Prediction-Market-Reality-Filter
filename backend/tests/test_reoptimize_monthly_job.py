@@ -40,8 +40,10 @@ def captured():
             "not_persisted_reason": None,
         }
 
-    def fake_finish(run_id, status, *, result=None, error=None, exc=None):
-        calls["finish"].append({"status": status, "result": result, "error": error})
+    def fake_finish(run_id, status, *, result=None, exc=None, reason=None):
+        calls["finish"].append(
+            {"status": status, "result": result, "exc": exc, "reason": reason}
+        )
 
     with patch("app.core.scheduler._start_run", return_value="run-1"), \
          patch("app.core.scheduler._finish_run", side_effect=fake_finish), \
@@ -187,7 +189,10 @@ async def test_all_failures_use_a_fixed_scheduler_error(captured):
 
     final = captured["finish"][-1]
     assert final["status"] == "failed"
-    assert final["error"] == "No sport re-optimized"
+    # A reason *code* (§53.124): the sentence the row gets is `_finish_run`'s, from
+    # `_REASON_SENTENCES`, and the failing detail stays in `result["skipped"]`
+    # (asserted two lines down).
+    assert final["reason"] == "no_sport_reoptimized"
     exported = json.dumps(final)
     assert sensitive not in exported
     assert set(final["result"]["skipped"].values()) == {"error:RuntimeError"}

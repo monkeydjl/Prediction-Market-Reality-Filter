@@ -20,8 +20,15 @@ from app.core.scheduler import _job_optimization_task_cleanup
 def captured():
     calls = {"finish": []}
 
-    def fake_finish(run_id, status, *, result=None, error=None, exc=None):
-        calls["finish"].append({"status": status, "result": result, "error": error})
+    # The signature is mirrored rather than absorbed by `**kwargs` on purpose
+    # (§53.124). When `_finish_run` traded `error=` for `reason=`, this fake
+    # raised a TypeError, the job's own `except Exception` caught it and recorded
+    # a second, failed call -- a test that keeps a hand-copied signature fails
+    # loudly at the contract instead of silently exercising the error path.
+    def fake_finish(run_id, status, *, result=None, exc=None, reason=None):
+        calls["finish"].append(
+            {"status": status, "result": result, "exc": exc, "reason": reason}
+        )
 
     with patch("app.core.scheduler._start_run", return_value="run-cleanup"), \
          patch("app.core.scheduler._finish_run", side_effect=fake_finish):
@@ -66,7 +73,11 @@ async def test_a_degraded_store_is_a_failed_run_not_a_clean_one(captured):
 
     final = captured["finish"][-1]
     assert final["status"] == "failed"
-    assert final["error"] == "Optimization task store cleanup failed"
+    # A reason *code*, not the store's own sentence (§53.124). The sentence the
+    # row ends up with is `_finish_run`'s, and the detail stays under
+    # `result["store_error"]` -- asserted on the next line, so the code is not
+    # hiding information.
+    assert final["reason"] == "optimization_store_cleanup_failed"
     # The in-memory pruning did happen, and saying so is the reason the manager
     # swallows the exception instead of re-raising it.
     assert final["result"]["memory_removed"] == 2

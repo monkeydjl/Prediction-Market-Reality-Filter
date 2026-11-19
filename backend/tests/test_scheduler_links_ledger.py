@@ -58,8 +58,8 @@ def ledger(kernel_db, monkeypatch):
     monkeypatch.setattr(settings, "PHASE10_REALTIME_PUSH_ENABLED", False)
     rows = []
 
-    def fake_finish(run_id, status, *, result=None, error=None, exc=None):
-        rows.append({"status": status, "result": result, "error": error})
+    def fake_finish(run_id, status, *, result=None, exc=None, reason=None):
+        rows.append({"status": status, "result": result, "exc": exc, "reason": reason})
 
     with patch("app.core.scheduler._start_run", return_value="run-1"), \
          patch("app.core.scheduler._finish_run", side_effect=fake_finish):
@@ -125,7 +125,13 @@ async def test_an_unreadable_links_table_fails_the_run(ledger, job):
 
     final = ledger[-1]
     assert final["status"] == "failed"
-    assert "no such table" in (final["error"] or "")
+    # The upstream text is observable on the exception only. `_finish_run` keeps
+    # `type(exc).__name__` for the ledger, and the contract has no `error=`
+    # keyword left to carry anything else -- `"error" not in final` is what says
+    # the slot is gone rather than merely unused by this call.
+    assert isinstance(final["exc"], Exception)
+    assert "no such table" in str(final["exc"])
+    assert "error" not in final
 
 
 @pytest.mark.asyncio
@@ -145,7 +151,8 @@ async def test_a_readable_empty_table_still_reports_a_healthy_idle_run(
     final = ledger[-1]
     assert final["status"] == "success"
     assert final["result"] == expected
-    assert final["error"] is None
+    assert final["exc"] is None
+    assert final["reason"] is None
 
 
 @pytest.mark.asyncio

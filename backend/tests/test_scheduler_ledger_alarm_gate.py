@@ -444,9 +444,15 @@ async def test_prediction_update_exception_result_is_failed_and_safe_at_every_bo
 
     assert row["status"] == "failed"
     assert row["error"] == "World Cup prediction update failed"
+    # The type name, not `str(exc)`: the message is free text from whatever
+    # raised and this row is durable. §53.106 briefly transcribed it here so a
+    # failed run would explain itself; the fragment assertions below are why
+    # that was reverted to a type (§53.107). `step: None` stays spelled out --
+    # "no step was reached" is information, and dropping the key would make it
+    # indistinguishable from a producer that never sends one.
     assert row["result"] == {
         "status": "error",
-        "error": "World Cup daily update failed",
+        "error": "World Cup daily update failed: RuntimeError",
         "step": None,
     }
     assert _counter(job_name) - failed_before == 1
@@ -508,10 +514,16 @@ async def test_prediction_update_returned_sync_error_is_safe_at_every_boundary(
     )
     assert row["status"] == "failed"
     assert row["error"] == "World Cup prediction update failed"
+    # `reason` is the cause and it is a **code**: the sync layer said
+    # `SENSITIVE_FAILURE`, which matches no literal in
+    # `world_cup_prediction_scheduler.FIXTURE_SYNC_REASONS`, so it collapses to
+    # `sync_failed`. A code carries "why" without carrying the sentence, which
+    # is what lets the run explain itself *and* keep the fragments out (§53.107).
     assert row["result"] == {
         "status": "error",
         "error": "World Cup fixture sync failed",
         "step": "fixture_sync",
+        "reason": "sync_failed",
     }
     assert [item["error"] for item in sentry_messages] == [
         "World Cup prediction update failed"
@@ -585,7 +597,7 @@ async def test_a_blocked_ledger_does_not_fabricate_an_unknown_success(loop_db):
 def test_finish_run_leaves_the_ledger_alone_when_there_is_no_run_id(loop_db):
     """The fix must not start calling the store with a None run_id."""
     with patch.object(loop_run_store, "finish_run") as store_finish:
-        scheduler._finish_run(None, "failed", error=BOOM, exc=RuntimeError(BOOM))
+        scheduler._finish_run(None, "failed", exc=RuntimeError(BOOM))
         scheduler._finish_run(None, "success", result={"ok": 1})
 
     assert store_finish.call_args_list == []

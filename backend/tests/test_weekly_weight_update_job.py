@@ -18,8 +18,10 @@ def captured(monkeypatch):
     monkeypatch.setattr(settings, "PHASE9_WEEKLY_WEIGHT_UPDATE_INTERVAL_MIN", 60)
     calls = {"finish": []}
 
-    def fake_finish(run_id, status, *, result=None, error=None, exc=None):
-        calls["finish"].append({"status": status, "result": result, "error": error})
+    def fake_finish(run_id, status, *, result=None, exc=None, reason=None):
+        calls["finish"].append(
+            {"status": status, "result": result, "exc": exc, "reason": reason}
+        )
 
     with patch("app.core.scheduler._start_run", return_value="run-weights"), \
          patch("app.core.scheduler._finish_run", side_effect=fake_finish):
@@ -72,7 +74,12 @@ async def test_job_with_no_rewrites_fails_instead_of_claiming_success(captured):
         "mlb": "insufficient_samples",
         "nhl": "insufficient_samples",
     }
-    assert final["error"] == "No competition weights updated"
+    # `_finish_run` now takes a closed-set code and derives the sentence itself
+    # (`_REASON_SENTENCES`), so the ledger's `error` column is not observable
+    # from a fake any more -- the code is.
+    assert final["reason"] == "no_competition_weights_updated"
+    assert final["exc"] is None
+    assert "error" not in final
 
 
 @pytest.mark.asyncio
@@ -153,7 +160,11 @@ async def test_all_failures_use_a_fixed_scheduler_error(captured):
 
     final = captured["finish"][-1]
     assert final["status"] == "failed"
-    assert final["error"] == "No competition weights updated"
+    # Three competitions raised the *same* sensitive RuntimeError and the record
+    # carries one fixed code: no competition name, no message, no exception.
+    assert final["reason"] == "no_competition_weights_updated"
+    assert final["exc"] is None
+    assert "error" not in final
     exported = json.dumps(final)
     assert sensitive not in exported
     assert set(final["result"]["skipped"].values()) == {"error:RuntimeError"}

@@ -15,7 +15,7 @@ import functools
 import logging
 import os
 import sys
-from typing import Any
+from typing import Any, Literal
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -155,13 +155,69 @@ def _start_run(job_name: str) -> str | None:
         return None
 
 
+# Every failure a scheduler job can report without holding an exception. The
+# caller passes a code and the row stores a sentence: the wording lives in one
+# place instead of at each call site, and the parameter that used to accept any
+# string is gone.
+#
+# Why it is gone (audit section 53.124): `_finish_run` took `error: str`, and 22
+# of its 23 forwarding call sites passed `error=str(exc), exc=exc`. The first
+# statement of the body overwrote that argument with
+# `f"Scheduler job failed: {exc_type}"`, so the text was computed and discarded
+# -- the parameter read as "the reason is forwarded here" while the guarantee
+# lived entirely in a neighbouring argument. Deleting `exc=` at any one of those
+# 22 sites turned the dead argument into a leak, and a source scan could only
+# ask "does this expression read a caught exception", so a failure path with no
+# exception in scope could write anything at all.
+FinishReason = Literal[
+    "sqlite_integrity_failed",
+    "optimization_store_cleanup_failed",
+    "world_cup_prediction_update_failed",
+    "unattributable_match_ids",
+    "no_competition_weights_updated",
+    "no_sport_reoptimized",
+]
+
+# The column is read by operators (`/quality-metrics/anomalies` returns it
+# verbatim), so it keeps a sentence rather than a token. A code with no sentence
+# here is a `KeyError` at the moment of failure -- loud, and caught by the test
+# that compares this table's keys with `get_args(FinishReason)`.
+_REASON_SENTENCES: dict[str, str] = {
+    "sqlite_integrity_failed": "SQLite integrity check failed",
+    "optimization_store_cleanup_failed": "Optimization task store cleanup failed",
+    "world_cup_prediction_update_failed": "World Cup prediction update failed",
+    "unattributable_match_ids": "No linked match id could be attributed",
+    "no_competition_weights_updated": "No competition weights updated",
+    "no_sport_reoptimized": "No sport re-optimized",
+}
+
+
+def _sentence_for(reason: str, result: dict[str, Any] | None) -> str:
+    """The ledger sentence for a reason code.
+
+    One code carries a payload. ``sqlite_integrity_failed`` names the stores
+    ``maintain_all()`` reported, because "a store is corrupt" without "which
+    store" is not actionable: the operator is holding the backup of one DB and
+    needs to know whether it is the right one. Those names are the keys of
+    ``runtime_stores.sqlite_state_paths()`` -- a closed set of config names, not
+    upstream text -- so this stays on the right side of the sanitisation line.
+    Every other code is a fixed sentence, which is why the table above is still
+    the only place a reason's wording is decided.
+    """
+    if reason == "sqlite_integrity_failed":
+        failed = [str(name) for name in (result or {}).get("failed") or ()]
+        if failed:
+            return f"SQLite integrity failed for: {', '.join(failed)}"
+    return _REASON_SENTENCES[reason]
+
+
 def _finish_run(
     run_id: str | None,
     status: str,
     *,
     result: dict[str, Any] | None = None,
-    error: str | None = None,
     exc: BaseException | None = None,
+    reason: FinishReason | None = None,
 ) -> None:
     """Close out a run: update the ledger row, then raise the job's alarms.
 
@@ -174,11 +230,25 @@ def _finish_run(
     null`` from ``loop_status``, **no ``SCHEDULER_FAILED_RUNS`` increment, no
     Sentry event and no operator webhook** -- leaving `_start_run`'s log line as
     the only trace of a failure that is supposed to page someone.
+
+    A failed run explains itself through exactly one of two slots: ``exc=`` when
+    something was raised (the row gets the type name, never the message), or
+    ``reason=`` when nothing was (the row gets that code's sentence, and for one
+    code the store names the payload already carried). There is no third slot
+    that accepts free text, so a call site cannot put an upstream string into
+    ``loop_runs.error`` even by accident.
     """
-    safe_error = error
+    safe_error: str | None = None
     exc_type = type(exc).__name__ if exc is not None else None
-    if status == "failed" and exc_type is not None:
-        safe_error = f"Scheduler job failed: {exc_type}"
+    if status == "failed":
+        if exc_type is not None:
+            safe_error = f"Scheduler job failed: {exc_type}"
+        elif reason is not None:
+            safe_error = _sentence_for(reason, result)
+        else:
+            # Neither was given. The row still has to say *something*, and it
+            # must not be a string the caller chose -- so it says only that.
+            safe_error = "Scheduler job failed"
 
     if run_id is not None:
         try:
@@ -312,7 +382,7 @@ async def _job_translate_titles() -> None:
             "[Scheduler] Title translation failed: %s",
             type(exc).__name__,
         )
-        _finish_run(run_id, "failed", error=str(exc), exc=exc)
+        _finish_run(run_id, "failed", exc=exc)
 
 
 async def _job_event_auto_resolve() -> None:
@@ -334,7 +404,7 @@ async def _job_event_auto_resolve() -> None:
             archived,
         )
     except Exception as exc:
-        _finish_run(run_id, "failed", error=str(exc), exc=exc)
+        _finish_run(run_id, "failed", exc=exc)
         logger.error(
             "[Scheduler] Event auto-resolve failed: %s",
             type(exc).__name__,
@@ -372,7 +442,7 @@ async def _job_event_discover() -> None:
             result.get("count", 0),
         )
     except Exception as exc:
-        _finish_run(run_id, "failed", error=str(exc), exc=exc)
+        _finish_run(run_id, "failed", exc=exc)
         logger.exception("[Scheduler] Event discover failed")
 
 
@@ -405,7 +475,7 @@ async def _job_event_discover_startup() -> None:
             result.get("count", 0),
         )
     except Exception as exc:
-        _finish_run(run_id, "failed", error=str(exc), exc=exc)
+        _finish_run(run_id, "failed", exc=exc)
         logger.exception("[Scheduler] Startup event discover failed")
 
 
@@ -436,10 +506,10 @@ async def _job_loop_db_maintenance() -> None:
         else:
             failed = result.get("failed") or []
             error = f"SQLite integrity failed for: {', '.join(failed)}"
-            _finish_run(run_id, "failed", error=error, result=result)
+            _finish_run(run_id, "failed", reason="sqlite_integrity_failed", result=result)
             logger.error("[Scheduler] SQLite maintenance failed: %s", error)
     except Exception as exc:
-        _finish_run(run_id, "failed", error=str(exc), exc=exc)
+        _finish_run(run_id, "failed", exc=exc)
         logger.exception("[Scheduler] SQLite maintenance failed")
 
 
@@ -495,7 +565,7 @@ async def _job_loop_run_ledger_maintenance() -> None:
             reconciled, deleted,
         )
     except Exception as exc:
-        _finish_run(run_id, "failed", error=str(exc), exc=exc)
+        _finish_run(run_id, "failed", exc=exc)
         logger.exception("[Scheduler] loop_runs ledger maintenance failed")
 
 
@@ -605,7 +675,7 @@ async def _job_drift_alert_check() -> None:
             "[Scheduler] drift alert check done: %d alert(s)", len(alerts)
         )
     except Exception as exc:
-        _finish_run(run_id, "failed", error=str(exc), exc=exc)
+        _finish_run(run_id, "failed", exc=exc)
         logger.exception("[Scheduler] drift alert check failed")
 
 
@@ -641,7 +711,7 @@ async def _job_optimization_task_cleanup() -> None:
             _finish_run(
                 run_id, "failed",
                 result=result,
-                error="Optimization task store cleanup failed",
+                reason="optimization_store_cleanup_failed",
             )
             logger.warning(
                 "[Scheduler] Optimization task cleanup: store prune failed; "
@@ -656,7 +726,7 @@ async def _job_optimization_task_cleanup() -> None:
             outcome.get("memory_removed"), outcome.get("store_deleted"),
         )
     except Exception as exc:
-        _finish_run(run_id, "failed", error="Optimization task cleanup failed", exc=exc)
+        _finish_run(run_id, "failed", exc=exc)
         logger.error(
             "[Scheduler] Optimization task cleanup failed: %s",
             type(exc).__name__,
@@ -695,7 +765,7 @@ async def _job_backup_stores() -> None:
             archive.name, size / 1e6,
         )
     except Exception as exc:
-        _finish_run(run_id, "failed", error=str(exc), exc=exc)
+        _finish_run(run_id, "failed", exc=exc)
         logger.exception("[Scheduler] Store backup failed")
 
 
@@ -761,7 +831,7 @@ async def _job_world_cup_source_bundle_import() -> None:
             mode,
         )
     except Exception as exc:
-        _finish_run(run_id, "failed", result={"mode": mode}, error=str(exc), exc=exc)
+        _finish_run(run_id, "failed", result={"mode": mode}, exc=exc)
         logger.exception("[Scheduler] World Cup source bundle import failed")
 
 
@@ -824,7 +894,7 @@ async def _job_world_cup_matchday_refresh() -> None:
             summary["post_match_backfill"].get("scored", 0),
         )
     except Exception as exc:
-        _finish_run(run_id, "failed", error=str(exc), exc=exc)
+        _finish_run(run_id, "failed", exc=exc)
         logger.exception("[Scheduler] Matchday refresh failed")
 
 
@@ -842,14 +912,14 @@ async def _job_world_cup_prediction_update() -> None:
                 run_id,
                 "failed",
                 result=summary,
-                error="World Cup prediction update failed",
+                reason="world_cup_prediction_update_failed",
             )
             logger.error("[Scheduler] World Cup prediction update failed")
             return
         _finish_run(run_id, "success", result=summary)
         logger.info("[Scheduler] World Cup prediction update completed")
     except Exception as exc:
-        _finish_run(run_id, "failed", error=str(exc), exc=exc)
+        _finish_run(run_id, "failed", exc=exc)
         logger.exception("[Scheduler] World Cup prediction update failed")
 
 
@@ -878,7 +948,7 @@ async def _job_world_cup_live_update() -> None:
                 result.get("newly_finished_scored", 0),
             )
     except Exception as exc:
-        _finish_run(run_id, "failed", error=str(exc), exc=exc)
+        _finish_run(run_id, "failed", exc=exc)
         logger.exception("[Scheduler] Live update failed: %s", exc)
 
 
@@ -939,7 +1009,7 @@ async def _job_sentiment_refresh() -> None:
             len(teams), fetched, errors,
         )
     except Exception as exc:
-        _finish_run(run_id, "failed", error=str(exc), exc=exc)
+        _finish_run(run_id, "failed", exc=exc)
         logger.exception("[Scheduler] Sentiment refresh failed")
 
 
@@ -992,7 +1062,7 @@ async def _job_discover_sport_markets() -> None:
         })
     except Exception as exc:
         logger.exception("[Scheduler] Sport market discovery failed")
-        _finish_run(run_id, "failed", error=str(exc), exc=exc)
+        _finish_run(run_id, "failed", exc=exc)
 
 
 async def _job_fetch_traditional_odds() -> None:
@@ -1037,11 +1107,7 @@ async def _job_fetch_traditional_odds() -> None:
                     "errors": 0,
                     "skipped_reason": "no_match_id_yields_team_tokens",
                 },
-                error=(
-                    f"none of {len(matches)} linked match id(s) can be matched to "
-                    "an Odds API fixture; ids carry no team tokens, so the fetch "
-                    "was skipped rather than spending quota for zero captures"
-                ),
+                reason="unattributable_match_ids",
             )
             logger.warning(
                 "[Scheduler] Traditional odds fetch skipped: 0 of %d linked "
@@ -1103,7 +1169,7 @@ async def _job_fetch_traditional_odds() -> None:
         })
     except Exception as exc:
         logger.exception("[Scheduler] Traditional odds fetch failed")
-        _finish_run(run_id, "failed", error=str(exc), exc=exc)
+        _finish_run(run_id, "failed", exc=exc)
 
 
 def _odds_lookup_key(match_id: str) -> str | None:
@@ -1284,7 +1350,7 @@ async def _job_capture_market_snapshots() -> None:
         })
     except Exception as exc:
         logger.exception("[Scheduler] Market snapshot capture failed")
-        _finish_run(run_id, "failed", error=str(exc), exc=exc)
+        _finish_run(run_id, "failed", exc=exc)
 
 
 async def _job_detect_sport_edges() -> None:
@@ -1323,7 +1389,7 @@ async def _job_detect_sport_edges() -> None:
         })
     except Exception as exc:
         logger.exception("[Scheduler] Sport edge detection failed")
-        _finish_run(run_id, "failed", error=str(exc), exc=exc)
+        _finish_run(run_id, "failed", exc=exc)
 
 
 async def _job_process_market_settlements() -> None:
@@ -1351,7 +1417,7 @@ async def _job_process_market_settlements() -> None:
         })
     except Exception as exc:
         logger.exception("[Scheduler] Market settlement job failed")
-        _finish_run(run_id, "failed", error=str(exc), exc=exc)
+        _finish_run(run_id, "failed", exc=exc)
 
 
 async def _job_update_weights_weekly() -> None:
@@ -1403,10 +1469,10 @@ async def _job_update_weights_weekly() -> None:
             run_id,
             "success" if updated else "failed",
             result={"competitions": updated, "skipped": skipped},
-            error=None if updated else "No competition weights updated",
+            reason=None if updated else "no_competition_weights_updated",
         )
     except Exception as exc:
-        _finish_run(run_id, "failed", error=str(exc), exc=exc)
+        _finish_run(run_id, "failed", exc=exc)
         logger.exception("[Scheduler] Weekly weight update failed")
 
 
@@ -1491,10 +1557,10 @@ async def _job_reoptimize_monthly() -> None:
             run_id,
             status,
             result={"sports": completed, "skipped": skipped},
-            error=None if completed else "No sport re-optimized",
+            reason=None if completed else "no_sport_reoptimized",
         )
     except Exception as exc:
-        _finish_run(run_id, "failed", error=str(exc), exc=exc)
+        _finish_run(run_id, "failed", exc=exc)
         logger.exception("[Scheduler] Monthly re-optimization failed")
 
 
@@ -1518,7 +1584,7 @@ async def _job_discover_futures_markets() -> None:
         )
     except Exception as exc:
         logger.exception("[Scheduler] Futures market discovery failed")
-        _finish_run(run_id, "failed", error=str(exc), exc=exc)
+        _finish_run(run_id, "failed", exc=exc)
 
 
 async def _job_capture_futures_snapshots() -> None:
@@ -1540,17 +1606,29 @@ async def _job_capture_futures_snapshots() -> None:
         )
     except Exception as exc:
         logger.exception("[Scheduler] Futures snapshot capture failed")
-        _finish_run(run_id, "failed", error=str(exc), exc=exc)
+        _finish_run(run_id, "failed", exc=exc)
 
 
 def _summarize_prediction_update(result: dict[str, Any]) -> dict[str, Any]:
     """Summarize prediction update result for scheduler run log."""
     if result.get("status") == "error":
-        return {
+        summary: dict[str, Any] = {
             "status": "error",
             "error": result.get("error"),
-            "step": result.get("step")
+            "step": result.get("step"),
         }
+        # `reason` and `source` are the answer to the second question after
+        # "did it fail", and both are safe to persist because both are closed
+        # vocabularies -- a code from `FIXTURE_SYNC_REASON_CODES`, and a literal
+        # the sync layer writes. Upstream error *text* is deliberately not
+        # carried: see `tests/test_scheduler_ledger_alarm_gate.py`, which pins
+        # that no URL/path/token reaches this row (§53.107).
+        # Omitted rather than None, so a run that never reached a source does
+        # not read like one that reported and lost it.
+        for key in ("reason", "source"):
+            if result.get(key):
+                summary[key] = result[key]
+        return summary
 
     summary = {
         "status": "ok",

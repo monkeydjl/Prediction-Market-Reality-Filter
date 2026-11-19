@@ -39,7 +39,7 @@ def _every_mutation():
 
 
 class InventoryTests(unittest.TestCase):
-    def test_the_fifteen_sets_are_present(self):
+    def test_the_twenty_four_sets_are_present(self):
         """Pins the inventory, so a whole set cannot be dropped silently.
 
         Deliberately exact and ordered: adding a set means editing this test,
@@ -57,7 +57,28 @@ class InventoryTests(unittest.TestCase):
         assertion behind it, and again for ``dangling-actionable`` (53.95),
         where the dashboard badge's reading had to stop counting history, and
         once more for ``health-stale-runs`` (53.99), where one failed run from
-        a previous boot kept ``/api/health`` at 503 for eight months.
+        a previous boot kept ``/api/health`` at 503 for eight months, and again
+        for ``backup-shape-gate`` (53.103), where the only archive in
+        ``backend/backups/`` turned out to be a 13-byte test fixture, and again
+        for ``readme-inventory`` (53.104), where the README's own counts had
+        drifted four at once and nothing noticed, and again for
+        ``deploy-posture`` (53.105), where the metered odds source was named in
+        no deploy file and an async batch slept the event loop with a blocking
+        call, and again for ``failed-run-diagnostics`` (53.106), where a failed
+        run recorded that it broke and not why, and again for
+        ``api-static-boundary`` (53.111), where the frontend mount answered
+        unknown ``/api`` paths with a 36 KB page, and again for
+        ``api-head-support`` (53.113), where ``HEAD`` was a 405 on every
+        FastAPI route while the same-shaped Starlette route answered it, and
+        again for ``health-payload-stability`` (53.114), where the health body
+        differed between the first poll and the second, and again for
+        ``sentry-event-sanitization`` (53.121), where a log record's URL survived
+        in ``logentry`` outside production because ``before_send`` only rewrote
+        the exception block, and again for ``log-redaction-environment``
+        (53.122), where ``staging`` wrote more lines than production into the
+        same file while redacting none of them -- and where the second
+        ``_install_filters()`` call, the one a real boot depends on, turned out
+        to have no guard at all.
         """
         self.assertEqual(
             [s.key for s in mutation_verify.SETS],
@@ -77,6 +98,15 @@ class InventoryTests(unittest.TestCase):
                 "odds-quota",
                 "dangling-actionable",
                 "health-stale-runs",
+                "backup-shape-gate",
+                "readme-inventory",
+                "deploy-posture",
+                "failed-run-diagnostics",
+                "api-static-boundary",
+                "api-head-support",
+                "health-payload-stability",
+                "sentry-event-sanitization",
+                "log-redaction-environment",
             ],
         )
 

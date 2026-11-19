@@ -278,6 +278,83 @@ _REF_CENSUS = "backend/app/memory/event_ref_census.py"
 _REF_CENSUS_TESTS = "tests/test_event_ref_census.py"
 _HEALTH_TESTS = "tests/test_loop_status_service.py"
 
+# §53.103 — the backup shape gate. `create_backup` refuses to archive a file that
+# is not the store it is configured as; the guard file is the dedicated suite.
+_BACKUP_STORES = "backend/scripts/backup_stores.py"
+_BACKUP_SHAPE_TESTS = "tests/test_backup_state_shape_gate.py"
+
+# §53.104 — the README's inventory numbers. Prose has no owner, so §53.103 found
+# four of them drifted at once and nothing failed. `tests/test_readme_inventory.py`
+# is now the owner: it recounts the tree each number describes. Note the split --
+# `_README` is repo-root-relative like every mutation `path`, `_README_TESTS` is
+# backend-relative like every `guard_file`.
+_README = "README.md"
+_README_TESTS = "tests/test_readme_inventory.py"
+
+# §53.105 — the deploy posture of the two optional external sources. The Odds API
+# half lives in the production template (documentation an operator reads before
+# switching a metered job on); the Transfermarkt half is a blocking sleep inside
+# an async function. `_PROD_TEMPLATE` / `_OVERLAY_TESTS` above already name the
+# template and its guard file, so only the scraper pair is new here.
+_TRANSFERMARKT = "backend/app/services/transfermarkt_scraper.py"
+_TRANSFERMARKT_TESTS = "tests/test_transfermarkt_scraper.py"
+
+# §53.106 — the daily World Cup update used to collapse every fixture-sync
+# failure into one sentence, so a `failed` run in the ledger said *that* it broke
+# and never *why*. §53.107 then found the other half: the ledger, Sentry event and
+# operator webhook are durable, so the answer has to be a **code** from a closed
+# set, not the upstream sentence. §53.108 pushed the classification down to
+# `world_cup_match_service` (where the messages are born) and left the scheduler
+# validating only -- so this set now watches two layers, one mutation each.
+# `_LEDGER_GATE_TESTS` is the file that pins the no-upstream-text rule for every
+# scheduler job (N3 guards on it).
+_WC_PRED_SCHEDULER = "backend/app/services/world_cup_prediction_scheduler.py"
+_WC_PRED_SCHEDULER_TESTS = "tests/test_world_cup_prediction_scheduler.py"
+_WC_MATCH_SERVICE = "backend/app/services/world_cup_match_service.py"
+_WC_MATCH_SERVICE_TESTS = "tests/test_world_cup_match_service.py"
+_WC_BACKFILL = "backend/app/services/world_cup_post_match_backfill_service.py"
+_WC_BACKFILL_TESTS = "tests/test_world_cup_post_match_backfill_service.py"
+# Two different files, two different questions. `_LEDGER_GATE_TESTS` is the
+# behaviour file that exports a failed job's four surfaces and checks the
+# fragments (N3). `_LEDGER_PROVENANCE_TESTS` is the *source* scan that decides
+# whether a sink key was inherited from a tainted producer (N5) -- it answers by
+# reading code, so it goes red without running the job at all.
+_LEDGER_GATE_TESTS = "tests/test_scheduler_ledger_alarm_gate.py"
+_LEDGER_PROVENANCE_TESTS = "tests/test_ledger_error_sanitization_guard.py"
+# §53.123 — the module that owns `_finish_run`. N7/N8/N9 all target it: N7 and N8
+# are the free-text census the source scan could not see, N9 registers the scan
+# the file already had (`_message_reads` + `missing_exc_forward`), which until
+# now had no mutation of its own.
+_SCHEDULER_CORE = "backend/app/core/scheduler.py"
+
+# §53.111 — the frontend mount at "/" is a catch-all, so it answers for every
+# path the router refused, `/api` typos included: a 36 300-byte page for a JSON
+# client, a 405 claiming a resource that does not exist, and (subtly) the
+# router's own 405 replaced by the mount's, `Allow` header and all. The fence
+# lives in its own module so both halves are mutable: N1 the fence, N2 the
+# wiring in `app/main.py` (`_MAIN_APP` above).
+_STATIC_FENCE = "backend/app/core/static_serving.py"
+_STATIC_FENCE_TESTS = "tests/test_static_api_boundary.py"
+
+# §53.113 — `HEAD` on an /api path was a 405: FastAPI's APIRoute never adds HEAD
+# to a GET route (Starlette's Route does). The fix is a middleware that runs the
+# GET and drops the body, plus one exception for handlers that stream. N1 kills
+# the rewrite, N2 the streaming exception, N3 the registration in `app/main.py`.
+_HEAD_SUPPORT = "backend/app/core/head_support.py"
+_HEAD_SUPPORT_TESTS = "tests/test_api_head_support.py"
+
+# §53.114 — the health payload was not a function of state alone: the schema
+# snapshot was read while the response dict was still being built (so the tables
+# the same request creates were reported as null on the first poll), and the
+# prediction counts ran before the only reader that creates their table (so the
+# first poll logged a traceback and reported `{}`). P1 restores the read order,
+# P2 the late snapshot. §53.116 then turned the counts read into a §5 producer
+# switch (`predictions_available`), so P1's needle was retargeted onto the new
+# assignment line, and P3/P4 cover the switch and the log's payload.
+_LOOP_STATUS_SERVICE = "backend/app/services/loop_status_service.py"
+_HEALTH_PAYLOAD_TESTS = "tests/test_health_payload_stability.py"
+_LOOP_STATUS_TESTS = "tests/test_loop_status_service.py"
+
 _PRED_STORE = "backend/app/memory/prediction_store.py"
 _TRADES_STORE = "backend/app/memory/simulated_trade_store.py"
 _PRED_STORE_TESTS = "tests/test_prediction_store.py"
@@ -470,6 +547,29 @@ _EVERY_FILE_RED_LOOSE = b"return bool(self." + b"red_files)"
 # that replaced one ``git show`` per file, where a mis-advanced cursor is silent.
 _EOL_AUDIT = "backend/scripts/eol_audit.py"
 _T_EOL_AUDIT = "tests/test_eol_audit.py"
+
+# sentry-event-sanitization -- `before_send` rewrote `exception.values[].value`
+# and nothing else, while a log record reaches Sentry with three more copies of
+# its text (template / rendered line / template arguments). Production only
+# looked clean because the handler filter mutates the record in place and
+# sentry-sdk 2.x reads it after ``callHandlers`` returns; every other
+# ``PMRF_ENV`` uploaded the URL with its API key verbatim. S1-S3 remove the
+# three redactions that closed it, one carrier each.
+_SENTRY_UTIL = "backend/app/utils/sentry.py"
+_T_SENTRY = "tests/test_sentry_integration.py"
+
+# log-redaction-environment -- the predicate used to be
+# ``PMRF_ENV == "production"``, so `staging` wrote *more* lines than production
+# (its overlay sets LOG_LEVEL=INFO; production uses WARNING) into the same
+# ``backend/logs/app.log``, redacting none of them. §53.122 moved the boundary
+# into ``_REDACTED_ENVIRONMENTS`` and pinned **both** sides, because "always
+# install the filter" is the silent over-correction: it costs development the
+# only thing redaction buys there, which is being able to read the URL you are
+# debugging. L3 is the one this section found rather than fixed: the second
+# ``_install_filters()`` call had no guard at all, because every existing test
+# pre-attached a handler and returned early at ``if root.handlers``.
+_LOG_CORE = "backend/app/core/logging.py"
+_T_LOG_REDACTION = "tests/test_log_level_setting.py"
 
 
 SETS: tuple[MutationSet, ...] = (
@@ -6550,6 +6650,994 @@ SETS: tuple[MutationSet, ...] = (
                     "§53.99：这就是被修掉的原始行为——一条上一代进程留下的失败行让健康检查"
                     "永久 503。这条变异专门钉「修复本身」而不是某一支。"
                     "● 针命中 **1 次**；替换型编辑，删除数 0。"
+                ),
+            ),
+        ),
+    ),
+    MutationSet(
+        key="backup-shape-gate",
+        title="备份形状闸：拒绝归档「不是那个 store」的文件（B1–B2）",
+        rationale=(
+            "§53.103 实测：backend/backups 里唯一的归档是 145 字节、唯一成员 13 字节的 "
+            '{"secret": 1}（测试夹具字节串），而线上 event store 有 208 条 / 3.7 MB——'
+            "「有 pmrf-backup-*.zip」被当成「备份跑过」的证据。规模判据当场证伪（空安装与"
+            "错指向都是几十字节），判据只能是形状：JSON 顶层必须是对象、event_store 的每个值"
+            "必须是条目对象。两条各钉一个方向：B1 拆掉调用（整族失守），B2 只拆条目检查"
+            "（顶层仍守，只有夹具形状漏过）。刻意不拒的两类（不可解析 JSON、`{}`）由同一"
+            "测试文件的另外两例钉住，所以这套变异的红点必须落在 B1/B2 各自那条上。"
+        ),
+        mutations=(
+            Mutation(
+                label="B1 去掉形状闸调用：任何文件都会被静默归档",
+                path=_BACKUP_STORES,
+                old=(b"    _assert_stores_look_like_themselves(paths)\r\n"),
+                new=(b"    pass\r\n"),
+                guard_file=_BACKUP_SHAPE_TESTS,
+                guards=(
+                    "test_a_fixture_shaped_event_store_is_refused",
+                    "test_a_non_object_top_level_is_refused",
+                ),
+                note=(
+                    "§53.103：这就是备份目录里那个 13 字节归档能写出来的原因。"
+                    "● 针单行、CRLF（backup_stores.py 纯 CRLF）、命中 **1 次**（已字节复核）；"
+                    "替换型编辑，删除数 0。"
+                ),
+            ),
+            Mutation(
+                label="B2 只去掉「条目必须是对象」：顶层仍是对象，夹具形状漏过",
+                path=_BACKUP_STORES,
+                old=(b"            if not isinstance(entry, dict):\r\n"),
+                new=(b"            if False:\r\n"),
+                guard_file=_BACKUP_SHAPE_TESTS,
+                guards=("test_a_fixture_shaped_event_store_is_refused",),
+                note=(
+                    "§53.103：`{\"secret\": 1}` 的顶层是对象，唯一破的是「值不是条目对象」——"
+                    "这一支独立承重，去掉后只剩夹具形状漏过、非对象顶层仍被拦。"
+                    "● 针命中 **1 次**；替换型编辑，删除数 0。"
+                ),
+            ),
+        ),
+    ),
+    MutationSet(
+        key="readme-inventory",
+        title="README 库存数字：散文里的数必须由树重新数出来（R1–R2）",
+        rationale=(
+            "§53.103 一次审计里四个数字同时漂了（README 写 17 个路由文件 / 157 个服务 / "
+            "127 个前端测试文件，实际 16 / 156 / 131），没有任何东西报警 —— 散文里的数字"
+            "没有主人：写下的那天是对的，之后静默腐烂。§53.104 给它找了主人（recount "
+            "那棵树），这套变异证明承重的是「重数」而不是那句话本身：R1 动的是文件系统"
+            "的计数，R2 动的是跨模块的计数——而变异库存正是历史上漂得最勤的那个数"
+            "（300+ → 304 → 306）。两条若都拆掉，只剩一句没人验的散文。"
+            "⚠️ R2 的针锚在**套数**（§53.105 从条数改过来，理由见该条 note）：加套时要"
+            "连带改 README 与本针，那是清单想要的提醒；加**变异**不再触碰它。"
+        ),
+        mutations=(
+            Mutation(
+                label="R1 路由文件数改大 1：散文与目录对不上",
+                path=_README,
+                old="16 个路由文件".encode("utf-8"),
+                new="17 个路由文件".encode("utf-8"),
+                guard_file=_README_TESTS,
+                guards=("test_route_file_count_matches_the_directory",),
+                note=(
+                    "§53.104：正是 §53.103 修掉的那个漂移——README 写 17，而 "
+                    "app/api/routes/ 下只有 16 个模块。散文侧单独改一格就该红。"
+                    "● 针单行（无换行，不受 checkout 行尾影响）、命中 **1 次**"
+                    "（已字节复核：`16 个路由文件` 全文件仅此一处）；替换型编辑，删除数 0。"
+                ),
+            ),
+            Mutation(
+                label="R2 变异套数改大 1：README 与 harness 的 SETS 不一致",
+                path=_README,
+                old="24 套".encode("utf-8"),
+                new="25 套".encode("utf-8"),
+                guard_file=_README_TESTS,
+                guards=("test_mutation_inventory_matches_the_harness",),
+                note=(
+                    "§53.104：这一半断言跨模块——README 的数要与 "
+                    "`sum(len(s.mutations) for s in SETS)` 相等，而不是与目录里的文件数。"
+                    "两个计数机制（glob vs 导入）各钉一条，否则「重数」这件事只证明了一半。"
+                    "⚠️ §53.105 换过锚：原先打在**条数**上（`308 条变异`），结果每加一条"
+                    "变异就让这根针命中 0 次，把「加变异」变成「必须同时改 README + 改针」"
+                    "的双重耦合（首次撞上见 §53.105 全量 4 红）。改锚到**套数**：套数只在"
+                    "加套时变，而加套本来就要改 README 与自护清单名，耦合点从「每次」"
+                    "降到「每次加套」，且仍红在同一条断言上。"
+                    "§53.111 加第 20 套时这根针如约变 0 命中（`api-static-boundary`），"
+                    "按约定改成 `20 套`→`21 套`——这正是设计里的那次提醒，不是又一处漂移。"
+                    "§53.113 加第 21 套（`api-head-support`）时同样如约变 0 命中，再改成"
+                    "`21 套`→`22 套`：连续两次撞上同一条规则，说明「套数」这个锚确实"
+                    "只在加套时触发，而不是又一次靠运气。"
+                    "§53.114 加第 22 套（`health-payload-stability`）第三次如约命中，"
+                    "改成 `22 套`→`23 套`；三次连撞已足以说明这不是偶发。"
+                    "§53.121 加第 23 套（`sentry-event-sanitization`）第四次如约命中，"
+                    "改成 `23 套`→`24 套` —— 这条提醒已经是流程的一部分，不是意外。"
+                    "§53.122 加第 24 套（`log-redaction-environment`）第五次如约命中，"
+                    "改成 `24 套`→`25 套`；五连撞之后这条针的价值已经从「提醒」变成"
+                    "「校准」——它每次都在同一个位置响，说明「加套」这件事本身有唯一入口。"
+                    "● 针单行、命中 **1 次**（已字节复核）；替换型编辑，删除数 0。"
+                ),
+            ),
+        ),
+    ),
+    MutationSet(
+        key="deploy-posture",
+        title="可选外部源的部署姿态：模板点名不钉值 + 异步不许阻塞（P1–P3）",
+        rationale=(
+            "§53.94 留的两条「上线动作」在 §53.105 收口。ODDS 那半不是代码 bug，而是"
+            "「没有任何一份部署文件告诉操作员：这个源按量计费、且由两个开关合取门控」"
+            "——判据只能是模板自己：四个键**都点名**、**一个都不赋值**（overlay 是 "
+            "override=True，赋值会压掉操作员在 base .env 里选的间隔）、并且点出配额读数 "
+            "x-requests-remaining。P1 让「点名」承重（键名拼错即红），P2 让「不赋值」"
+            "承重（取消注释即红）——两条是**同一段字节的相反改写**，故同 group；红点也"
+            "不同（P1 红在 names，P2 红在 pinned）。P3 是 Transfermarkt 的真 bug："
+            "async def 里调阻塞 sleep，批次会冻住事件循环 2s×23，去掉 await 即红。"
+            "⚠️ 源码守卫 test_the_module_does_not_reach_for_the_blocking_sleeper "
+            "**故意不单独登记变异**：能让它红的写法（time.sleep( / from time import）"
+            "同时会让 P3 那条行为用例红（await 计数变 0），即被 P3 包含，单列只会得到"
+            "一条不隔离的假独立变异（§4.2）。"
+        ),
+        mutations=(
+            Mutation(
+                label="P1 模板里键名拼错：ODDS_FETCH_INTERVAL_MIN 写成 ODDS_INTERVAL_MIN",
+                path=_PROD_TEMPLATE,
+                group="odds-interval-line",
+                old=b"# ODDS_FETCH_INTERVAL_MIN=1440",
+                new=b"# ODDS_INTERVAL_MIN=1440",
+                guard_file=_OVERLAY_TESTS,
+                guards=("test_the_production_overlay_states_the_odds_quota_posture",),
+                note=(
+                    "§53.105：操作员照着模板取消注释，得到的是一个**没人读**的键——"
+                    "作业按默认 10 分钟跑，配额在几天内耗尽，日志里只有 429/422。"
+                    "● 针单行、CRLF（模板纯 CRLF）、命中 **1 次**（已字节复核）；"
+                    "替换型编辑，删除数 0。"
+                ),
+            ),
+            Mutation(
+                label="P2 取消注释：把间隔钉进 overlay，压掉 base .env 的选择",
+                path=_PROD_TEMPLATE,
+                group="odds-interval-line",
+                old=b"# ODDS_FETCH_INTERVAL_MIN=1440",
+                new=b"ODDS_FETCH_INTERVAL_MIN=1440",
+                guard_file=_OVERLAY_TESTS,
+                guards=("test_the_production_overlay_states_the_odds_quota_posture",),
+                note=(
+                    "§53.105：这一行「看起来更有用」（真的设了值），实际是覆盖语义的坑："
+                    "overlay override=True ⇒ 操作员在 base .env 写 60 会被这里的 1440 "
+                    "静默改写。守卫的三条断言里，此变异只让第二条（pinned）红。"
+                    "● 与 P1 同字节段的相反改写，同 group（整集 apply 只会应用 P1）；"
+                    "针命中 **1 次**；替换型编辑，删除数 0。"
+                ),
+            ),
+            Mutation(
+                label="P3 去掉 await：批次的间隔不再让出事件循环",
+                path=_TRANSFERMARKT,
+                old=b"            await asyncio.sleep(delay_seconds)",
+                new=b"            pass",
+                guard_file=_TRANSFERMARKT_TESTS,
+                guards=("test_the_batch_awaits_the_delay_instead_of_blocking",),
+                note=(
+                    "§53.105：这是修之前的实况再往前一步——`pass` 连睡眠都没有，"
+                    "fake_asyncio.sleep 从未被 await（0 vs 23），用例当场红。"
+                    "● 针单行、CRLF（transfermarkt_scraper.py 纯 CRLF）、命中 **1 次**"
+                    "（已字节复核）；替换型编辑，删除数 0。"
+                ),
+            ),
+        ),
+    ),
+    MutationSet(
+        key="failed-run-diagnostics",
+        title="失败的 run 必须说出原因：原因不许在边界上被丢掉（N1–N11）",
+        rationale=(
+            "§5 的镜像问题：一个说不出含义的 0 和一个说不出原因的「失败」一样没用。"
+            "§53.106 的实况是活系统上 `world_cup_prediction_update` 报了 failed，"
+            "而 ledger 里只留下 `{\"error\": \"World Cup fixture sync failed\", \"step\": "
+            "\"fixture_sync\"}`——真实原因（`API-Football configuration missing`）在上一层被"
+            "**丢弃**了，要靠读源码才能还原。"
+            "⚠️ §53.107 的教训：第一版修法把上游句子**转抄**进 ledger，四道红——"
+            "`tests/test_scheduler_ledger_alarm_gate.py` 早就钉住「上游文本（URL/路径/"
+            "token/Traceback）不进任何持久面」。所以契约不是「抄原因」，而是「用闭集**码**说原因」。"
+            "§53.108 把分类下推到 `world_cup_match_service`（句子诞生的地方），调度器只做校验，"
+            "于是这套要看**两层**：N4 拆生产者的分类（全塌成 `sync_failed` 即红），"
+            "N1 拆消费者的校验（盲信上游给的字符串即红），N2 让「异常至少带类型」承重，"
+            "N3 让「不把 traceback 甩进日志」承重。§53.109 又收了 §53.32 记下的那个回填 relay"
+            "（`error` 直接吃生产者的自由文本）：N5 把它改回去即红。§53.110 补上**同一缺陷的另一个"
+            "载体**——`sync` 投影只进 HTTP 响应、不进 ledger，源码扫描对它无话可说，N6 由行为断言抓。"
+            "六条指向六个不同的丢弃/泄漏点，不共用 group。"
+            "⚠️ 这套还解释了一个常见形态：**测试会把缺陷写成期望值**——原有用例断言过那句丢原因的"
+            "话，也断言过转抄的那句；两次都是先读断言、再决定改代码还是改期望。"
+            "§53.123 补 N7–N9，因为 §53.106 的扫描有一个**结构性的盲区**：它的起点是「error= 读了"
+            "哪些被捕获的异常名」，于是在**没有异常在作用域里**的失败路径上它无话可说，`error=` "
+            "退回成一个能装任意字符串的槽（实测三种形状全透明）。N7 让「插值上游原文」承重、"
+            "N8 让「人口多出第 5 条」承重、N9 给**已经存在却从没红过**的 `missing_exc_forward` "
+            "补登记。三条各打一边，不共用 group。"
+            "§53.124 把那个槽**删掉**了（`error=` → `exc=` / `reason=` 闭集码），于是 §53.123 的 "
+            "N7/N8/N9 全部重写：`raw_exception_sites` 全仓 22 → **0**，那条不变量在真实树上已经"
+            "没有人，N9 只能改打「两个槽都不填」这个新形态。N8 现在打的是**签名**——"
+            "「我只是想多传一句话」是下一个最可能发生的回归，而它不改变任何行为，只有接口断言看得见。"
+        ),
+        mutations=(
+            Mutation(
+                label="N1 盲信上游：校验退化成「有值就收」",
+                path=_WC_PRED_SCHEDULER,
+                old=(
+                    b"    if isinstance(reported, str) and reported in FIXTURE_SYNC_REASON_CODES:\r\n"
+                ),
+                new=(b"    if reported:\r\n"),
+                guard_file=_WC_PRED_SCHEDULER_TESTS,
+                guards=(
+                    "test_a_credential_bearing_reason_is_rejected_not_copied",
+                    "test_anything_else_collapses_to_the_unknown_code",
+                ),
+                note=(
+                    "§53.108：校验是持久面之前的最后一道门。`if reported:` 看起来很合理"
+                    "（「生产者说了算」），实际把 `reason` 变回一个可以装任意字符串的槽——"
+                    "§53.106 就是从这个形状把 URL 和 Bearer token 写进 `loop_runs` 的。"
+                    "● 针单行、CRLF（目标文件纯 CRLF）、命中 **1 次**（已字节复核）；"
+                    "替换型编辑，删除数 0。"
+                ),
+            ),
+            Mutation(
+                label="N2 异常只剩泛化句子：连类型名都不进 ledger",
+                path=_WC_PRED_SCHEDULER,
+                old=(b'            "error": f"World Cup daily update failed: {type(exc).__name__}",\r\n'),
+                new=(b'            "error": "World Cup daily update failed",\r\n'),
+                guard_file=_WC_PRED_SCHEDULER_TESTS,
+                guards=(
+                    "test_fixture_sync_exception",
+                    "test_backfill_failure_error_return",
+                    "test_batch_predict_failure_included",
+                ),
+                note=(
+                    "§53.107：类型名是安全的那一半信息（`RuntimeError` vs `Exception` "
+                    "把「网络/编码」和「DB/逻辑」分开），消息是危险的那一半。"
+                    "退回裸句子等于两层都丢。"
+                    "● 针单行、CRLF、命中 **1 次**（已字节复核）；替换型编辑，删除数 0。"
+                ),
+            ),
+            Mutation(
+                label="N3 logger.exception：traceback 甩进日志渲染",
+                path=_WC_PRED_SCHEDULER,
+                old=(b'        logger.error("World Cup daily update failed: %s", type(exc).__name__)\r\n'),
+                new=(b'        logger.exception("World Cup daily update failed: %s", type(exc).__name__)\r\n'),
+                guard_file=_LEDGER_GATE_TESTS,
+                guards=("test_prediction_update_exception_result_is_failed_and_safe_at_every_boundary",),
+                note=(
+                    "§53.107：`logger.exception` 在多数场景是更好的实践，在这个作业不是——"
+                    "`Formatter.format()` 会把 `formatException()` 拼进渲染结果，而那行日志"
+                    "落的是同一个 `logs/` 目录。ledger 闸的用例钉住 `Traceback` 不出现在任何"
+                    "导出面，此变异让它红。"
+                    "● 针单行、CRLF、命中 **1 次**（已字节复核）；替换型编辑，删除数 0。"
+                ),
+            ),
+            Mutation(
+                label="N4 分类退化成兜底：每个原因都变成 sync_failed",
+                path=_WC_MATCH_SERVICE,
+                old=(b"            return code\r\n"),
+                new=(b"            return FIXTURE_SYNC_UNKNOWN\r\n"),
+                guard_file=_WC_MATCH_SERVICE_TESTS,
+                guards=(
+                    "test_representative_messages_classify_as_expected",
+                    "test_the_football_data_error_carries_both_sentence_and_code",
+                ),
+                note=(
+                    "§53.108：这是「码恒为同一取值」的实况——恒为 `sync_failed` 的码和恒为 0 的"
+                    "读数一样没有信息（§5 的反向）。分类器坏成兜底时下游一切照旧、类型也对，"
+                    "只有这两条守卫会红，所以它们是这套里最容易被误删的两条。"
+                    "● 针单行、CRLF（目标文件纯 CRLF）、命中 **1 次**（已字节复核）；"
+                    "替换型编辑，删除数 0。"
+                ),
+            ),
+            Mutation(
+                label="N5 回填改回继承：ledger 的 error 又变成上游文本",
+                path=_WC_BACKFILL,
+                old=(b'                    "error": "World Cup fixture sync failed",\r\n'),
+                new=(b'                    "error": sync_result.get("error"),\r\n'),
+                guard_file=_LEDGER_PROVENANCE_TESTS,
+                guards=("test_the_inheriting_sites_are_exactly_the_recorded_ones",),
+                note=(
+                    "§53.109：这就是 §53.32 到 §53.108 之间的实况——`loop_runs.error` 直接吃掉"
+                    "`sync_world_cup_fixtures` 的自由文本。守卫是**源码扫描**：它不跑作业，"
+                    "直接判定「这个 sink 键是继承来的」⇒ 记录集合从 `reason` 变成 `error`，当场红。"
+                    "● 针单行、CRLF（回填服务纯 CRLF）、命中 **1 次**（已字节复核）；"
+                    "替换型编辑，删除数 0。"
+                ),
+            ),
+            Mutation(
+                label="N6 投影把 error 收回来：响应体又带上游文本",
+                path=_WC_BACKFILL,
+                old=(b'_SYNC_IDENTITY_KEYS = ("status", "source", "reason")\r\n'),
+                new=(b'_SYNC_IDENTITY_KEYS = ("status", "source", "reason", "error")\r\n'),
+                guard_file=_WC_BACKFILL_TESTS,
+                guards=(
+                    "test_neither_the_ledger_row_nor_the_response_carries_the_producer_message",
+                    "test_sync_error_short_circuits_without_scoring",
+                ),
+                note=(
+                    "§53.110：这是**另一个载体**——`sync` 投影只进 HTTP 响应、不进 ledger，"
+                    "所以源码扫描（N5）对它无话可说，只有行为断言能抓。加这个键的动机很正当"
+                    "（「运维想直接从响应里看原因」），代价是把自由文本送回去。"
+                    "守卫断言的是**键集**而不只是「error 不在」，所以下一次加字段同样会红。"
+                    "● 针单行、CRLF、命中 **1 次**（已字节复核）；替换型编辑，删除数 0。"
+                ),
+            ),
+            Mutation(
+                label="N7 reason 变成变量：码不是从闭集里来的",
+                path=_SCHEDULER_CORE,
+                old=b'                reason="optimization_store_cleanup_failed",\r\n',
+                new=b"                reason=store_error,\r\n",
+                guard_file=_LEDGER_PROVENANCE_TESTS,
+                guards=("test_every_reason_is_a_literal_member_of_the_closed_set",),
+                note=(
+                    "§53.124：`store_error` 来自 `outcome.get(\"store_error\")`，是任务管理器自己的"
+                    "自由文本；它进 `loop_runs.error` 之后会经 `/quality-metrics/anomalies`"
+                    "（零认证）读出去。§53.123 的普查只能问「这个表达式是不是只有本文件的文本」，"
+                    "而现在连那一问都不需要了：`reason=` 只收闭集里的码，并且要求**写成字面量**"
+                    "（源码扫描看不穿 `reason=某个变量`）。这一条把码换成变量，红在成员校验上。"
+                    "⚠️ 它**不会**红人口或签名那两条：参数名对、槽也填了。三条断言各打一边。"
+                    "● 针单行、CRLF（scheduler.py 纯 CRLF）、命中 **1 次**（已字节复核）；"
+                    "替换型编辑，删除数 0。"
+                ),
+            ),
+            Mutation(
+                label="N8 签名长回一个自由文本参数：`error=` 又回来了",
+                path=_SCHEDULER_CORE,
+                old=(
+                    b"    reason: FinishReason | None = None,\r\n"
+                    b") -> None:\r\n"
+                ),
+                new=(
+                    b"    reason: FinishReason | None = None,\r\n"
+                    b"    error: str | None = None,\r\n"
+                    b") -> None:\r\n"
+                ),
+                guard_file=_LEDGER_PROVENANCE_TESTS,
+                guards=("test_the_signature_declares_exactly_the_two_failure_slots",),
+                note=(
+                    "§53.124：这是**下一个**最可能发生的形态——「我只是想给某个作业多传一句话」。"
+                    "签名断言比较的是**集合**（`{result, exc, reason}`），不是「没有 error」，"
+                    "所以 `free_text: str` 这种改个名字的回归一样会红。"
+                    "⚠️ 这条变异**不改变任何行为**（新参数没人传），只有签名断言看得见——"
+                    "正是它存在的理由：它拦的是接口而不是调用点。"
+                    "● 针两行（`reason` 形参与收尾的 `) -> None:`），CRLF、命中 **1 次**；"
+                    "插入 1 行、删除 0 行（`git diff --numstat` 复核）。"
+                ),
+            ),
+            Mutation(
+                label="N9 两个槽都不填：失败的 run 只剩一个 `failed`",
+                path=_SCHEDULER_CORE,
+                old=(
+                    b'        logger.info("[Scheduler] World Cup prediction update completed")\r\n'
+                    b"    except Exception as exc:\r\n"
+                    b'        _finish_run(run_id, "failed", exc=exc)\r\n'
+                ),
+                new=(
+                    b'        logger.info("[Scheduler] World Cup prediction update completed")\r\n'
+                    b"    except Exception as exc:\r\n"
+                    b'        _finish_run(run_id, "failed")\r\n'
+                ),
+                guard_file=_LEDGER_PROVENANCE_TESTS,
+                guards=("test_every_literal_failed_call_fills_one_of_the_two_slots",),
+                note=(
+                    "§53.123 的 N9（拔掉 `exc=` 让 `error=str(exc)` 变成泄漏）在 §53.124 之后"
+                    "**不可能再发生**：那个参数已经不存在，`raw_exception_sites` 在全仓是 **0**。"
+                    "所以这条改打它失败后的**新**形态——两个槽都不填，于是列里只剩 "
+                    "`Scheduler job failed`（`_finish_run` 的兜底句），失败原因整条丢掉，"
+                    "也就是 §5 那个「说不出含义的 0」的镜像。"
+                    "⚠️ 兜底句让**行为**仍然是安全的（不是泄漏），红的是「必须解释自己」那条断言。"
+                    "● 针三行（`error=str(exc), exc=exc` 这一行在文件里重复 22 次，单行针会被 "
+                    "`_apply_preflight` 拒掉）；跨行针，CRLF，命中 **1 次**；替换型编辑，删除数 0。"
+                ),
+            ),
+            Mutation(
+                label="N10 兜底句被清空：两个槽都没填时列里是空字符串",
+                path=_SCHEDULER_CORE,
+                old=b'            safe_error = "Scheduler job failed"\r\n',
+                new=b'            safe_error = ""\r\n',
+                guard_file=_LEDGER_PROVENANCE_TESTS,
+                guards=("test_a_failed_run_with_neither_slot_still_writes_a_fixed_sentence",),
+                note=(
+                    "§53.124：兜底分支今天**没有任何调用点会走到**（27 条失败调用全都填了槽），"
+                    "所以它只能被直接调用来测——这也是为什么值得给它一条变异：不可达的分支"
+                    "最容易在下一次重构里被删掉或改坏，而删掉之后没有任何东西会说话。"
+                    "清空成 `\"\"` 而不是删掉，因为它仍是一条「有值但是空」的行："
+                    "`/api/health` 判 503 时读的就是这一列的**存在性**。"
+                    "● 针单行、CRLF、命中 **1 次**（已字节复核）；替换型编辑，删除数 0。"
+                ),
+            ),
+            Mutation(
+                label="N11 句子退回成不带店名的固定句：列里只说「有库坏了」",
+                path=_SCHEDULER_CORE,
+                old=(
+                    b"            return f\"SQLite integrity failed for: "
+                    b"{', '.join(failed)}\"\r\n"
+                ),
+                new=b"            return _REASON_SENTENCES[reason]\r\n",
+                guard_file=_LEDGER_PROVENANCE_TESTS,
+                guards=(
+                    "test_the_interpolated_sentence_names_the_stores_it_was_given",
+                ),
+                note=(
+                    "§53.124 差点真的丢掉的东西。删 `error=` 时，这个调用点原本是 "
+                    "`error=f\"SQLite integrity failed for: {', '.join(failed)}\"`——**本文件拼的句子**，"
+                    "不是上游文本，所以它既不是泄漏也不能跟着参数一起消失："
+                    "「有个库坏了」不告诉运维是哪个库，而他手上正拿着其中一份备份。"
+                    "两个 `test_scheduler.py` 用例读的是真 ledger 行（`assertIn(\"KERNEL_DB_FILE\", "
+                    "run[\"error\"])`），它们现在绿，是因为插值被搬进了 `_sentence_for`，"
+                    "不是因为它还留在调用点上。⚠️ 这条变异**不改变安全性质**（退回去的仍是本文件的固定句），"
+                    "红的只是「信息还在不在」——这类回归最容易被下一次重构当成清理做掉。"
+                    "● 针单行、CRLF、命中 **1 次**（已字节复核）；替换型编辑，删除数 0。"
+                ),
+            ),
+        ),
+    ),
+    MutationSet(
+        key="api-static-boundary",
+        title="API 命名空间不归静态兜底回答：404 要是 JSON、405 要带 Allow、尾斜杠要 307（N1–N3）",
+        rationale=(
+            "§53.111 的实况：`app.mount(\"/\", StaticFiles(html=True))` 是**兜底**，"
+            "它匹配路由拒绝的一切，所以 `/api` 的漏配也归它答。实测四条：GET 未知 "
+            "`/api/*` 回 404 + 36 300 字节 `404.html`（`text/html`，客户端 "
+            "`res.json()` 直接炸）；POST 未知路径回 405，而那里根本没有资源；"
+            "`POST /api/health`（GET-only 路由）也是 405，但**没有** `Allow: GET`；"
+            "`GET /api/health/` 回 404，而同一套代码不建前端时是 307。"
+            "中间两条最隐蔽：Starlette 的 Router 把「路径匹配、方法不匹配」记成 partial，"
+            "只在**整张表扫完没有 FULL** 之后才用它抛 405，而 catch-all 的 Mount 就是 FULL "
+            "——路由自己的答案（状态**和**头）从没被用上；`redirect_slashes` 那一支在更下面，"
+            "同样被遮住。所以修法不能只是「问父类要 404」，那会把同一个吞掉再继承一遍；"
+            "要按路由的口径重问一次（partial → 405、反向路径 → 307），剩下的才回 JSON 404。"
+            "N1 让「围栏不存在」承重（退化成修前的父类行为），N2 让**接线**承重"
+            "（mount 用回 `StaticFiles`），N3 让「反向路径只认真路由」承重（把 Mount 也算进去 ⇒ "
+            "未知路径被重定向到它自己的去斜杠孪生）。三者红点不同：N1 红在行为矩阵与 parity，"
+            "N2 红在源码 AST 与真实 app，N3 只红在「不发明目标」那一条与 parity，故不共用 group。"
+        ),
+        mutations=(
+            Mutation(
+                label="N1 围栏失效：API 路径重新交给父类回答",
+                path=_STATIC_FENCE,
+                old=(
+                    b'        if scope.get("type") != "http" or not is_api_path(get_route_path(scope)):\n'
+                    b"            await super().__call__(scope, receive, send)\n"
+                    b"            return\n"
+                ),
+                new=(
+                    b"        if True:\n"
+                    b"            await super().__call__(scope, receive, send)\n"
+                    b"            return\n"
+                ),
+                guard_file=_STATIC_FENCE_TESTS,
+                guards=(
+                    "test_an_unrouted_api_path_is_a_json_404",
+                    "test_no_method_gets_the_page_back",
+                    "test_a_wrong_method_on_a_routed_path_keeps_its_allow_header",
+                    "test_a_wrong_method_on_an_unrouted_path_is_a_404",
+                    "test_a_trailing_slash_goes_where_the_router_would_have_sent_it",
+                    "test_the_mount_does_not_change_any_api_answer",
+                ),
+                note=(
+                    "§53.111：`if True:` 之后每条请求都走父类，等于修前的行为——"
+                    "`/api/typo` 又变回 36 300 字节页面，`POST /api/health` 又丢掉 Allow，"
+                    "`/api/health/` 又从 307 变回 404（parity 那条会同时报三处）。"
+                    "没选「把条件改成 `or False`」是因为那要留一个恒假的合取项，读起来像"
+                    "有意为之的开关；整块提前返回更清楚地表达「围栏没了」。"
+                    "● 针是 3 行块、LF（新模块纯 LF，0 CRLF —— 见字节复核）、命中 **1 次**；"
+                    "替换型编辑，删除数 0。"
+                ),
+            ),
+            Mutation(
+                label="N2 接线回退：mount 用回 StaticFiles",
+                path=_MAIN_APP,
+                old=b"static_serving.ApiAwareStaticFiles(",
+                new=b"static_serving.StaticFiles(",
+                guard_file=_STATIC_FENCE_TESTS,
+                guards=(
+                    "test_the_frontend_mount_is_the_api_aware_class",
+                    "test_an_unknown_api_path_is_json",
+                ),
+                note=(
+                    "§53.111：围栏写得再好，只要 mount 用的不是它就没有意义。"
+                    "`StaticFiles` 在 `static_serving` 的模块命名空间里可见（父类 import "
+                    "留下的名字），所以这条不产生 NameError —— §4.3 的「导入错误假红」"
+                    "这条针不踩。AST 用例无论 `frontend/out` 有没有构建都跑，"
+                    "真实 app 那条只在构建过时有效，两条一起才既恒定又贴近线上。"
+                    "● 针单行、不含行尾（CRLF 文件里也安全）、命中 **1 次**；"
+                    "替换型编辑，删除数 0。"
+                ),
+            ),
+            Mutation(
+                label="N3 反向路径也认兜底挂载：未知路径被重定向到自己的孪生",
+                path=_STATIC_FENCE,
+                old=b"        if isinstance(route, Mount):",
+                new=b"        if False:",
+                guard_file=_STATIC_FENCE_TESTS,
+                guards=(
+                    "test_the_redirect_never_invents_a_target",
+                    "test_the_mount_does_not_change_any_api_answer",
+                ),
+                note=(
+                    "§53.112：`redirect_slashes` 那一支要「试一次反向路径，有路由就 307」。"
+                    "照抄 Starlette 会连 `Mount` 一起算，而本 app 唯一的 Mount 就是这个 catch-all "
+                    "——它对**任何**反向路径都 FULL，于是 `/api/typo/` 会 307 到 `/api/typo` 再"
+                    "404：多一次往返、且为一个两边都没有东西的路径发了重定向。"
+                    "变异把跳过条件改成恒假，症状就是「重定向被发明出来」——"
+                    "注意 SQLite/sha 这类噪声都不在这里，红得干净。"
+                    "● 针单行、LF、命中 **1 次**（`isinstance` 全文件仅此一处）；"
+                    "替换型编辑，删除数 0。"
+                ),
+            ),
+        ),
+    ),
+    MutationSet(
+        key="api-head-support",
+        title="HEAD 在 /api 下要答成 GET（去掉 body），但流式处理器不许被探针点着（N1–N4）",
+        rationale=(
+            "§53.113 的实况：`HEAD /api`、`/api/health`、`/api/events/` 全是 405 `Allow: GET`，"
+            "而 `HEAD /nope-page` 是正常的 404 —— 同一形状的路由因为注册类不同而答不同："
+            "Starlette 的 `Route` 会 `if \"GET\" in methods: methods.add(\"HEAD\")`，"
+            "FastAPI 的 `APIRoute` 不会。代价正好落在最需要的那一侧：`/api/events/` 是 684 KB，"
+            "想知道大小/类型再决定要不要下载的客户端**没有**办法问；`/api/health` 这种最自然的"
+            "监控探针也 405。修法是中间件把 HEAD 改写成 GET、出站时丢掉 body —— "
+            "不走 `route_class` 是因为 `include_router` 保留每条路由自己的类（要改遍 "
+            "`app/api` 下每个 APIRouter），而且响应类也拦不住 body（`Response.__call__` 无论"
+            "方法都会发 `self.body`，只有 `FileResponse` 实现了 `send_header_only`）。"
+            "N1 让「改写」承重（改写成 HEAD ⇒ 全部退回 405），N2 让**流式例外**承重"
+            "（去掉例外 ⇒ 探针会把 `batch-switch-engine-stream` 那个 GET 点着，那是会跑批的），"
+            "N3 让**接线**承重（middleware 不注册 ⇒ 单测仍全绿、真实 app 全红）。"
+            "三个红点互不重叠，故不共用 group。"
+            "⚠️ 流式例外的**名单**不在变异里：它由 `test_the_streaming_list_matches_the_route_table` "
+            "对着路由表的返回注解重数，所以新增一个流式处理器会先红在那条用例上。"
+        ),
+        mutations=(
+            Mutation(
+                label="N1 改写失效：HEAD 原样往下一层送",
+                path=_HEAD_SUPPORT,
+                old=b'        rewritten["method"] = "GET"\n',
+                new=b'        rewritten["method"] = "HEAD"\n',
+                guard_file=_HEAD_SUPPORT_TESTS,
+                guards=(
+                    "test_head_is_rewritten_and_the_body_is_dropped",
+                    "test_the_overview_answers_head_with_the_get_headers",
+                    "test_health_reports_the_same_verdict_and_no_body",
+                    "test_an_unrouted_api_path_is_the_same_404",
+                ),
+                note=(
+                    "§53.113：`= \"HEAD\"` 看着像「保持原样」，实际把整个中间件变成空操作——"
+                    "下游仍是 405，与修前一致。选它而不是删掉整行，是因为删行会让 `rewritten` "
+                    "的用途消失、`dict(scope)` 成为可疑的死代码，读起来像另一次重构。"
+                    "● 针单行、LF（新模块纯 LF）、命中 **1 次**；替换型编辑，删除数 0。"
+                ),
+            ),
+            Mutation(
+                label="N2 流式例外失效：探针会把批处理 GET 点着",
+                path=_HEAD_SUPPORT,
+                old=b"        if not answers_head_as_get(route_path) or route_path in STREAMING_PATHS:\n",
+                new=b"        if not answers_head_as_get(route_path):\n",
+                guard_file=_HEAD_SUPPORT_TESTS,
+                guards=(
+                    "test_a_streaming_handler_is_left_alone",
+                    "test_the_streaming_job_is_not_started_by_a_probe",
+                ),
+                note=(
+                    "§53.113：`GET .../batch-switch-engine-stream` 会**先跑批再流式回报**，"
+                    "所以 HEAD 必须先挡在门外（保持既有 405）。去掉例外后它会真的开始干活，"
+                    "而 body 抑制只发一个空终止帧 —— 客户端拿到 200、服务端留下一个跑着的作业。"
+                    "单测那条用 RecordingApp 直接看「下游收到的方法」，不依赖真实作业。"
+                    "● 针单行、LF、命中 **1 次**；替换型编辑，删除数 0。"
+                ),
+            ),
+            Mutation(
+                label="N3 未接线：middleware 没注册到 app 上",
+                path=_MAIN_APP,
+                old=b"app.add_middleware(ApiHeadAsGetMiddleware)",
+                new=b"pass  # app.add_middleware(ApiHeadAsGetMiddleware)",
+                guard_file=_HEAD_SUPPORT_TESTS,
+                guards=(
+                    "test_the_overview_answers_head_with_the_get_headers",
+                    "test_health_reports_the_same_verdict_and_no_body",
+                    "test_an_unrouted_api_path_is_the_same_404",
+                    "test_the_streaming_job_is_not_started_by_a_probe",
+                ),
+                note=(
+                    "§53.113：中间件单测是直接实例化类的，**不经过** `app`，所以「写了但没接上」"
+                    "这种缺陷在它们眼里完全不可见（§4.2 空头的第 (d) 种）。这条变异只让真实 app "
+                    "那四条红，正好把两类守卫分开：类负责行为，接线负责生效。"
+                    "`pass` 让文件仍是合法 Python，不会产生「导入错误假红」。"
+                    "● 针单行、不含行尾、命中 **1 次**；替换型编辑，删除数 0。"
+                ),
+            ),
+            Mutation(
+                label="N4 命名空间外的那一个端点从名单里掉了：/metrics 的 HEAD 回到 404",
+                path=_HEAD_SUPPORT,
+                old=b'EXTRA_HEAD_PATHS = frozenset({"/metrics"})\n',
+                new=b"EXTRA_HEAD_PATHS = frozenset()\n",
+                guard_file=_HEAD_SUPPORT_TESTS,
+                guards=(
+                    "test_metrics_answers_head_with_the_get_headers",
+                    "test_the_list_outside_the_namespace_matches_the_route_table",
+                ),
+                note=(
+                    "§53.115：`/metrics` 是**唯一**一个不在 `/api` 命名空间里的 `APIRoute`（普查实测），"
+                    "同一个 `APIRoute` 不给 GET 加 HEAD 的缺陷它也有，而栅栏的谓词够不着它。"
+                    "清空名单后 HEAD 回到 404 + `content-length: 36300`（那是 SPA 页面的长度，"
+                    "而这个端点只发 6 339 字节文本）。两条守卫从两侧夹住：行为测试说「答得不对」，"
+                    "普查测试说「名单和路由表对不上」——后者在行为测试因故失效时仍然有效。"
+                    "● 针单行、LF、命中 **1 次**；替换型编辑，删除数 0。"
+                ),
+            ),
+        ),
+    ),
+    MutationSet(
+        key="health-payload-stability",
+        title="/api/health 的 body 必须是状态的函数，不随「被问了几次」变（P1–P10）",
+        rationale=(
+            "§53.113 想给 `HEAD /api/health` 断一句「与它代理的 GET 同长」，断不了：冷库上第一次"
+            "轮询 1 256 字节、之后每次 1 293（实测）。成因不是时间戳（第一版猜错了），而是读取顺序——"
+            "`storage.loop_db_schema_versions` 在拼响应 dict 的时候就被读走了，而创建那两张表的 "
+            "`list_pending()` / `latest_run_per_job()` 排在同一段字面量后面，于是第一次轮询描述的是"
+            "「这次请求创建之前」的库：两个键从 null 变 1。P2 把快照挪到读者之后；P1 让"
+            "`calibration_summary()`（唯一创建 predictions 表的那一个）先于 `_prediction_counts()`，"
+            "否则首次轮询会带着一整段 traceback 写进日志（`exc_info=True`）并报 `{}`。两条都是同一"
+            "形状：**只在热起来之后才正确的读数**。单独成套：既非类型闭合也非数据普查。"
+            "P3/P4 是同一句要求的另一半（§53.116）：「body 是状态的函数」不只是「同一个状态"
+            "问两次答案相同」，还包括「不同的状态不许答同一个数」——`{}` 在「表本来就是空的」"
+            "与「这次查询坏了」两种状态下字面相同，P3 就是把这个两义复原。P4 属于另一面："
+            "读失败的原因要留在日志里，但只能留**类型**（消息会带库路径与 SQL 片段，"
+            "§53.107 的持久面规则）。"
+            "P5–P7 是同一张表的第二个数（§53.117）：`orphan_predictions` 也从 `predictions` "
+            "表里数，所以它共用 `predictions_available` —— 一个表一个开关，不新增第 17 个键。"
+            "代价写在 P5 的 note 里：只坏了一个查询时，另一个数也会被一起标成不可信。"
+        ),
+        mutations=(
+            Mutation(
+                label="P1 读取顺序复原：先数 predictions，再跑 calibration",
+                path=_LOOP_STATUS_SERVICE,
+                old=(
+                    b"    calibration = calibration_summary()\r\n"
+                    b"    prediction_counts, counts_readable = _prediction_counts()\r\n"
+                ),
+                new=(
+                    b"    prediction_counts, counts_readable = _prediction_counts()\r\n"
+                    b"    calibration = calibration_summary()\r\n"
+                ),
+                guard_file=_HEALTH_PAYLOAD_TESTS,
+                guards=("test_the_first_poll_does_not_log_a_failed_query",),
+                note=(
+                    "§53.114：`_prediction_counts()` 兜住缺表（状态端点不该抛），代价是冷启动的"
+                    "第一次轮询往 `logs/` 里写一整段查询 traceback。payload 字节前后完全相同——"
+                    "只有 `assertNoLogs` 看得见这个差别，所以这条守卫是这套里最容易被当成冗余"
+                    "删掉的一条。§53.116 之后失败路径只落一行类型名、没有 traceback，顺序反了"
+                    "照样留一条 WARNING，守卫仍然红。"
+                    "● 针**在 §53.116 换过**：原针是不带第二个接收变量的赋值行，改名后命中 0 次"
+                    "（四阶段实测打印 `needle appears 0x`）——属于「判据还在、地址漂移」那一类，"
+                    "换锚即可，不换判据。§53.117 又把接收变量改成了 `counts_readable`（函数没变、"
+                    "名字变了），同一根针**第二次失效**——针锚在「会随语义改名的局部变量」上就会"
+                    "重复失效，这两次的记录本身就是那条规则的证据。针两行、CRLF、命中 **1 次**（已字节"
+                    "复核）；替换型编辑，删除数 0。"
+                ),
+            ),
+            Mutation(
+                label="P2 快照退回「报告空」：等价于在读者之前读",
+                path=_LOOP_STATUS_SERVICE,
+                old=b'    storage["loop_db_schema_versions"] = sqlite_db.schema_versions()\r\n',
+                new=b'    storage["loop_db_schema_versions"] = {}\r\n',
+                guard_file=_HEALTH_PAYLOAD_TESTS,
+                guards=("test_the_schema_snapshot_reports_what_the_request_created",),
+                note=(
+                    "§53.114：原缺陷是「在读者之前拍快照」，可观测结果就是这张表从报告里消失"
+                    "（第一次轮询 `{}` 或全 null）。这条变异用字面量 `{}` 复现同一个可观测量，"
+                    "而不是去搬那一行——搬行需要两个字节区间，一次替换做不到。"
+                    "⚠️「两次轮询相等」那条用例对它仍然绿（`{}` == `{}`），所以承重的是「快照非空"
+                    "且不含 null」那一条；两条合起来同时管住「太早」与「根本没有」。"
+                    "● 针单行、CRLF、命中 **1 次**；替换型编辑，删除数 0。"
+                ),
+            ),
+            Mutation(
+                label="P3 读失败报成「读到了、是空的」：`{}` 又变回两义",
+                path=_LOOP_STATUS_SERVICE,
+                old=b"        return {}, False\r\n",
+                new=b"        return {}, True\r\n",
+                guard_file=_LOOP_STATUS_TESTS,
+                guards=(
+                    "test_a_broken_query_is_not_an_empty_table",
+                    "test_the_counts_block_has_the_same_keys_on_both_paths",
+                ),
+                note=(
+                    "§53.116：失败路径返回 `({}, False)`，第二元素是 §5 的生产者开关；"
+                    "改成 `True` 之后 body 逐字节不变——`predictions` 仍是 `{}`、键集仍是"
+                    "十六个——所以钉固定形状的用例全绿，只有读这个开关的两条会红。"
+                    "这是「`{}` 有两义」的最小复现，也是为什么守卫必须读开关而不是读 map："
+                    "map 本身在两种状态下没有任何差别。「两次轮询相等」那一条同样是绿的。"
+                    "⚠️ 两条守卫都在 `tests/test_loop_status_service.py`。首次运行时 "
+                    "`guard_file` 指向 `test_health_payload_stability.py`，四条用例全被 "
+                    "deselect、pytest 以 rc=5 收场，被 harness 读成「变异前就红」"
+                    "（`guard already RED before mutation`）——空选择与真红在退出码上没有"
+                    "区别，所以 `guard_file` 写错时，报错方向恰好指向守卫而不是配置。"
+                    "● 针单行、CRLF、命中 **1 次**（已字节复核）；替换型编辑，删除数 0。"
+                ),
+            ),
+            Mutation(
+                label="P4 日志把「类型」换成「原文」：消息进持久面",
+                path=_LOOP_STATUS_SERVICE,
+                old=b'        logger.warning("prediction status counts unavailable: %s", type(exc).__name__)\r\n',
+                new=b'        logger.warning("prediction status counts unavailable: %s", str(exc))\r\n',
+                guard_file=_LOOP_STATUS_TESTS,
+                guards=("test_the_failure_logs_the_type_and_no_traceback",),
+                note=(
+                    "§53.116：`type(exc).__name__` 是异常里安全的那一半——`OperationalError`"
+                    "不指向任何东西，而 `str(exc)` 在别的成因下会带出库的绝对路径或一段 SQL。"
+                    "换成原文后 `assertNotIn('no such table', ...)` 先红（泄漏），"
+                    "`assertIn('OperationalError', ...)` 同时红（安全的那一半没了）。"
+                    "⚠️ 这条只管「日志写的内容」，`exc_info` 是另一条：它由同一用例的 "
+                    "`assertIsNone(record.exc_info)` 把着，但一次变异只证明它指向的那个方向，"
+                    "所以别把它当「traceback 也测过了」。"
+                    "● 针单行、CRLF、命中 **1 次**（已字节复核）；替换型编辑，删除数 0。"
+                ),
+            ),
+            Mutation(
+                label="P5 丢掉那个 AND：开关只反映第一个查询",
+                path=_LOOP_STATUS_SERVICE,
+                old=b"    predictions_available = counts_readable and orphans_readable\r\n",
+                new=b"    predictions_available = counts_readable\r\n",
+                guard_file=_LOOP_STATUS_TESTS,
+                guards=("test_a_failed_orphan_read_makes_the_switch_false",),
+                note=(
+                    "§53.117：把 `orphan_predictions` 并进同一个开关，靠的就是这个 `and`。"
+                    "去掉之后 body 逐字节不变（16 个键、两个数都在），"
+                    "`test_the_counts_block_has_the_same_keys_on_both_paths` 与 "
+                    "「两次轮询相等」都是绿的——**只有读到这个语义的守卫会红**。"
+                    "这就是 §4.2 的那句话：一条变异只证明它指向的那个方向。"
+                    "⚠️ 代价：只有孤儿查询坏掉时，`predictions` 明明读到了也被标 false。方向是"
+                    "保守的（false 只会让消费者多看两眼），反过来才是 §53.116 的缺陷。"
+                    "● 针单行、CRLF、命中 **1 次**（已字节复核）；替换型编辑，删除数 0。"
+                ),
+            ),
+            Mutation(
+                label="P6 孤儿计数读失败报成「读到了、是没有」",
+                path=_LOOP_STATUS_SERVICE,
+                old=b"        return 0, False\r\n",
+                new=b"        return 0, True\r\n",
+                guard_file=_LOOP_STATUS_TESTS,
+                guards=("test_the_orphan_count_reports_itself_unreadable",),
+                note=(
+                    "§53.117：这是 P3 在**另一个载体**上的同一件事（§53.110：N 个载体需要 N 条"
+                    "守卫）。`0` 在这里既是「没有孤儿」也是「查询坏了」，改成 `True` 之后"
+                    "payload 仍然是 16 键、仍然 `orphan_predictions: 0`，所以只有这条守卫会红。"
+                    "⚠️ 它**不会**让 P5 那条守卫红：那条在 `loop_status` 的接缝上打桩，"
+                    "根本不进这个函数——两个方向互不覆盖，所以两条都要有。"
+                    "● 针单行、CRLF、命中 **1 次**（`return 0, True` 那处是提前退出的正常路径，"
+                    "不同行）；替换型编辑，删除数 0。"
+                ),
+            ),
+            Mutation(
+                label="P7 孤儿计数的日志加回 traceback",
+                path=_LOOP_STATUS_SERVICE,
+                old=b'        logger.warning("orphan prediction count unavailable: %s", type(exc).__name__)\r\n',
+                new=b'        logger.warning("orphan prediction count unavailable: %s", type(exc).__name__, exc_info=True)\r\n',
+                guard_file=_LOOP_STATUS_TESTS,
+                guards=("test_the_orphan_count_reports_itself_unreadable",),
+                note=(
+                    "§53.117：`exc_info` 是**另一个方向**，P4 只覆盖了 `_prediction_counts` "
+                    "那一个载体。这里保留消息内容、只加 `exc_info=True`，所以"
+                    "`assertIn('OperationalError')` 仍然是绿的，红的只有 "
+                    "`assertIsNone(record.exc_info)`——这正好说明为什么那条断言不是摆设："
+                    "把消息改回原文（P4）和把 traceback 加回来（P7）是两件事。"
+                    "实测探针：修前这个失败一次往 `logs/` 写 24 行 traceback，而这个端点"
+                    "每几秒被轮询一次。"
+                    "● 针单行、CRLF、命中 **1 次**；替换型编辑，删除数 0。"
+                ),
+            ),
+            Mutation(
+                label="P8 队列读失败报成「读到了、队列是空的」",
+                path=_LOOP_STATUS_SERVICE,
+                old=b"        available = False\r\n",
+                new=b"        available = True\r\n",
+                guard_file=_LOOP_STATUS_TESTS,
+                guards=("test_an_unreadable_queue_degrades_instead_of_raising",),
+                note=(
+                    "§53.118：P3（`predictions`）/ P6（`orphan_predictions`）在**第三个载体**上的同一"
+                    "件事——§53.110 说 N 个载体需要 N 条守卫，这里就是 N=3。改完 payload 仍是 9 键、"
+                    "`pending_total` 仍是 0、`counts.pending_reviews` 仍是 0（它是从这里抄出去的），"
+                    "所以固定形状的用例全绿，只有读这个开关的那条会红。"
+                    "⚠️ 探针实测：`REVIEW_QUEUE_ENABLED=false` 与「队列真的空」的 body **逐字节相同**"
+                    "（两种状态只差 label）——功能没开的那个零**依然没有开关**，那是另一个决定。"
+                    "● 针**在 §53.119 换过**：原来锚的是失败路径字面量里的 `\"available\": False`，"
+                    "重构后两个事实各只写一次（`available = False` 在 `except` 里），旧针命中 0 次"
+                    "（`needle appears 0x`）——第四次「针跟着代码走」，前三次在 P1 上。"
+                    "新针单行、CRLF、命中 **1 次**；替换型编辑，删除数 0。"
+                ),
+            ),
+            Mutation(
+                label="P9 队列失败日志加回 traceback",
+                path=_LOOP_STATUS_SERVICE,
+                old=b'        logger.warning("review queue sla summary unavailable: %s", type(exc).__name__)\r\n',
+                new=b'        logger.warning("review queue sla summary unavailable: %s", type(exc).__name__, exc_info=True)\r\n',
+                guard_file=_LOOP_STATUS_TESTS,
+                guards=("test_the_queue_failure_logs_the_type_and_no_traceback",),
+                note=(
+                    "§53.118：`exc_info` 的第三个载体（P7 是孤儿，P4 是 predictions）。消息一字不动，"
+                    "只加 `exc_info=True`，所以 `assertIn('RuntimeError')` 仍绿、红的只有"
+                    "`assertIsNone(record.exc_info)`。⚠️ 守卫**同名**于 P4 用到的那条方法名，但它们在"
+                    "不同的类里（`PredictionCountsTests` vs `ReviewQueueCountsTests`）——harness 按"
+                    "方法名 `-k` 去选（harness 按名字选，不按类），所以它叫 "                    "`test_the_queue_failure_logs_the_type_and_no_traceback`，与 P4 那条不重名。"
+                    "⚠️ 第一次就忘了改：`-k` 选中 `PredictionCountsTests` 里的同名方法，变异对它毫无"
+                    "影响 ⇒ 报 **stayed GREEN**。方向是对的（harness 说的是「没变红」，不是「红错地方」），"
+                    "但「守卫名写错」与「守卫是空头」在这条读数上长得一模一样。"
+                    "● 针单行、CRLF、命中 **1 次**；替换型编辑，删除数 0。"
+                ),
+            ),
+            Mutation(
+                label="P10 功能开关写死成 true：三种零塌回两种",
+                path=_LOOP_STATUS_SERVICE,
+                old=b"    enabled = settings.REVIEW_QUEUE_ENABLED\r\n",
+                new=b"    enabled = True\r\n",
+                guard_file=_LOOP_STATUS_TESTS,
+                guards=("test_the_block_echoes_the_feature_flag",),
+                note=(
+                    "§53.119：`available` 与 `enabled` 是两个问题，P8 管前者、这条管后者。"
+                    "写死成 `True` 之后 body 仍是 10 键、`pending_total` 仍是 0，"
+                    "而「功能关」与「功能开、队列空」又变成**逐字节相同**——正是 §53.118 探针"
+                    "测到的那两个状态（`A and C identical apart from the label: True`）。"
+                    "所以这条变异的红，等价于「三种零塌回两种」。"
+                    "⚠️ 它**不会**让 P8 那条守卫红：那一条在 `queue_sla_summary` 上打桩，"
+                    "与功能开关无关——两个方向互不覆盖。"
+                    "● 针单行、CRLF、命中 **1 次**（已字节复核）；替换型编辑，删除数 0。"
+                ),
+            ),
+        ),
+    ),
+    MutationSet(
+        key="sentry-event-sanitization",
+        title="Sentry 的 `logentry` 也要脱敏：同一份记录、两个面、同一句话（S1–S3）",
+        rationale=(
+            "§53.120 把 119 个 `exc_info=` 记录点按「面 × 环境」分诊后，站点一个都不用改，"
+            "要改的是面。`before_send` 原本只重写 `exception.values[].value`，而一条日志进 "
+            "Sentry 时同时带着三份文本：模板、渲染行、模板参数（URL 与 `api_key` 真正待的地方"
+            "是第三份）。生产看起来是干净的，但那只是副作用：handler 上的 filter 就地改写了 "
+            "record，而 sentry-sdk 2.x 的日志集成在 `callHandlers` 返回**之后**才读它。换个 "
+            "`PMRF_ENV`（staging / development 都没有 filter）就变成整条 URL 上传。"
+            "S1-S3 各拔掉一个载体的脱敏，任何一个漏掉都能让那条 URL 重新出现在事件里。"
+        ),
+        mutations=(
+            Mutation(
+                label="S1 渲染行不脱敏：`logentry.formatted` 原样上传",
+                path=_SENTRY_UTIL,
+                old=b"            logentry[key] = redact_message(value)\r\n",
+                new=b"            logentry[key] = value\r\n",
+                guard_file=_T_SENTRY,
+                guards=(
+                    "test_the_rendered_message_is_redacted_in_place",
+                    "test_the_two_surfaces_render_the_same_line",
+                ),
+                note=(
+                    "§53.121：这是三份文本里 Sentry UI 直接显示的那一份。S1 生效时 "
+                    "`test_the_rendered_message_is_redacted_in_place` 红（formatted 里仍是完整 "
+                    "URL）；parity 那条也红——它比对「文件日志渲染出来的句子」与「事件里的 "
+                    "formatted」，两边只有一边失效就会不等。"
+                    "● 针单行、CRLF、命中 1 次（已字节复核）；替换型编辑，删除数 0。"
+                ),
+            ),
+            Mutation(
+                label="S2 模板参数不脱敏：`logentry.params` 留着原始 URL",
+                path=_SENTRY_UTIL,
+                old=b'        logentry["params"] = [redact_argument(param) for param in params]\r\n',
+                new=b'        logentry["params"] = list(params)\r\n',
+                guard_file=_T_SENTRY,
+                guards=("test_the_template_arguments_are_replaced_wholesale",),
+                note=(
+                    "§53.121：S2 是三种载体里最容易漏的一个——`formatted` 已经改成 "
+                    "`fetch failed for <redacted>`，看起来干净，而 `params[0]` 仍是那条带 "
+                    "`api_key` 的 URL（探针在真 SDK 上抓到的形状就是这样）。"
+                    "只断言 formatted 的守卫抓不到它，所以这里单列一条守卫。"
+                    "● 针单行、CRLF、命中 1 次（已字节复核）；替换型编辑，删除数 0。"
+                ),
+            ),
+            Mutation(
+                label="S3 异常值退回原值：`Application error` 变成原样透传",
+                path=_SENTRY_UTIL,
+                old=b'                    value["value"] = "Application error"\r\n',
+                new=(
+                    b'                    value["value"] = value.get(\r\n'
+                    b'                        "value", "Application error"\r\n'
+                    b"                    )\r\n"
+                ),
+                guard_file=_T_SENTRY,
+                guards=("test_the_exception_value_is_still_replaced_with_a_constant",),
+                note=(
+                    "§53.121：这一条在 §53.120 之前就存在，却**一条守卫都没有**——只有一条"
+                    "检查 `_sanitize_event` 签名的测试。把它写进变异集是因为「异常值换成常量」"
+                    "与「logentry 脱敏」是同一张承诺的两半：只保住一半，另一半静默回退没人看得见。"
+                    "● 三行针（整条赋值拆成三行才与变异后的形状对齐），CRLF、命中 1 次；"
+                    "替换型编辑，删除数 0。"
+                ),
+            ),
+        ),
+    ),
+    MutationSet(
+        key="log-redaction-environment",
+        title="日志脱敏的环境边界：部署环境都脱敏，development 保留可读（L1–L3）",
+        rationale=(
+            "§53.122。谓词原本是 `PMRF_ENV == \"production\"`，于是 `staging` 是**最不该漏**的"
+            "那一档：它的 overlay 把 `LOG_LEVEL` 设成 INFO（生产是 WARNING）、又不覆盖 "
+            "`LOG_FILE`，所以它往同一个 `backend/logs/app.log` 里写的行**比生产多**，且一行"
+            "都没脱敏——而 `docs/ops/RUNBOOK.md` 早就写明 `X-API-Key` 不得进日志。用户选定"
+            "的边界是「部署环境都脱敏、development 保留可读」，所以 L1 与 L2 是**同一条"
+            "承诺的两侧**：只锁 staging 承重的话，「永远装上 filter」这种过度修正会让 "
+            "development 也失掉唯一被它换来的东西（能看见自己在调的那条 URL），而全部用例"
+            "仍然绿。L3 是这一节**查出来**的问题而不是修出来的：`setup_logging` 里第二次 "
+            "`_install_filters()` 调用此前**一条守卫都没有**——所有既有用例都先挂好自己的 "
+            "handler，于是在 `if root.handlers: return` 那一行就返回了，而真实启动路径"
+            "（root 一开始是空的）恰好是它们跳过的那条。实测：删掉第二次调用，文件日志里出现"
+            "完整 URL，而改动前**只有** `test_the_handlers_it_builds_are_filtered_too` 一条会红"
+            "（`1 failed, 4 passed`）——补这条用例之前它是彻底的空头。"
+        ),
+        mutations=(
+            Mutation(
+                label="L1 环境集合少了 staging：回到 `PMRF_ENV == \"production\"`",
+                path=_LOG_CORE,
+                old=b'_REDACTED_ENVIRONMENTS = frozenset({"staging", "production"})\r\n',
+                new=b'_REDACTED_ENVIRONMENTS = frozenset({"production"})\r\n',
+                guard_file=_T_LOG_REDACTION,
+                guards=(
+                    "test_staging_redacts_the_url",
+                    "test_staging_and_production_render_the_same_line",
+                    "test_every_deployed_overlay_redacts",
+                ),
+                note=(
+                    "§53.122：三条守卫各自看一眼 L1。① `test_staging_redacts_the_url` 直接读"
+                    "渲染出来的那一行（变红时是完整 URL）；② parity 那条比对 staging 与 "
+                    "production 渲染出的**同一句话**——它不钉任何固定期望，只要求两个部署环境"
+                    "对一个 `LogRecord` 给同一句话，所以边界漏一档就必红；"
+                    "③ `test_every_deployed_overlay_redacts` 是集合差："
+                    "`set(ENV_OVERLAYS) - _REDACTED_ENVIRONMENTS == {\"development\"}`，"
+                    "它锁的是**下一个**环境（`config.py` 里加一个 overlay、忘了加进脱敏集合，"
+                    "就会静默继承 development 的可读）——正是 staging 当初的形态。"
+                    "● 针单行、CRLF、命中 1 次（已字节复核）；替换型编辑，删除数 0。"
+                ),
+            ),
+            Mutation(
+                label="L2 边界扩成「永远脱敏」：development 看不见自己调的 URL",
+                path=_LOG_CORE,
+                old=b"    return str(settings.PMRF_ENV).strip().lower() in _REDACTED_ENVIRONMENTS\r\n",
+                new=b"    return True  # mutated: every environment redacts\r\n",
+                guard_file=_T_LOG_REDACTION,
+                guards=("test_development_keeps_the_url_readable",),
+                note=(
+                    "§53.122：L2 是过度修正那一侧。它让所有部署断言照样绿（生产/预发本来就"
+                    "该脱敏），唯一红的是 `test_development_keeps_the_url_readable`——那条"
+                    "断言里同时要求 SECRET **在**、`<redacted>` **不在**，所以「脱敏生效了但"
+                    "脱错了地方」与「压根没脱敏」不会互相冒充。"
+                    "⚠️ 这条守卫是「取值为 false 也必须有人说出来」的一例："
+                    "把谓词改成恒真是最像修好的错法。"
+                    "● 针单行、CRLF、命中 1 次（已字节复核）；替换型编辑，删除数 0。"
+                ),
+            ),
+            Mutation(
+                label="L3 第二次安装被删：新建的 console/file handler 没有 filter",
+                path=_LOG_CORE,
+                old=(
+                    b"    if redact:\r\n"
+                    b"        # Again on purpose: the two handlers above did not exist during the\r\n"
+                    b"        # first install, and a handler without the filter is a handler that\r\n"
+                    b"        # writes the URL.\r\n"
+                    b"        _install_filters()\r\n"
+                ),
+                new=(
+                    b"    if redact:\r\n"
+                    b"        pass  # mutated: the handlers built above stay unfiltered\r\n"
+                ),
+                guard_file=_T_LOG_REDACTION,
+                guards=("test_the_handlers_it_builds_are_filtered_too",),
+                note=(
+                    "§53.122：这条变异是**补完用例才登记**的（与 W19/W24 同款）。初版四条"
+                    "守卫全绿，因为它们都先 `root.handlers = [...]` 再调 `setup_logging()`，"
+                    "于是停在 `if root.handlers: return`，**从没走到新建 handler 那一段**——"
+                    "而生产启动时 root 是空的，走的正是那一段。补的守卫不看 handler.filters，"
+                    "而是让 `LOG_FILE` 指向临时文件、真写一行、再读文件：断言文件里是 "
+                    "`fetch failed for <redacted>` 且不含 SECRET。"
+                    "⚠️ Windows 上 RotatingFileHandler 不关就一直占着文件，临时目录清理会 "
+                    "`WinError 32`——所以守卫里显式 close 一遍再读（不是排版，是必需）。"
+                    "● 针五行（`        _install_filters()` 单独一行命中 2 次，必须带上前面的"
+                    "注释与 `if redact:` 才唯一）；跨行针，CRLF，命中 1 次（已字节复核）；"
+                    "替换型编辑，删除数 0。"
                 ),
             ),
         ),

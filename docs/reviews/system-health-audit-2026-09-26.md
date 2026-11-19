@@ -19020,3 +19020,40 @@ if static_build_mounted:
 （§53.136 的浏览器证据是在本机、有构建的部署上取的）。
 
 **本节行数**：正文 **+22/−0**，连本段共 **+25/−0**；审计档累计 **+3235/−0**。
+
+### §53.138 把「本机 ≠ CI」写进 RUNBOOK：三处差异各有一条可执行的检查
+
+§53.137 收尾时留的 A 项。§53.136 的教训当时只活在审计档里，而下一个人不会去翻审计档找
+「为什么本机绿 CI 红」。所以写进 `docs/ops/RUNBOOK.md`，新增一节
+**`## Local gates vs CI: two environments, one verdict`**（+59/−0）。
+
+#### 三处差异，每条都配了动作
+
+| 差异 | 后果 | RUNBOOK 给的动作 |
+|---|---|---|
+| `frontend/out` 本机在、runner 上不在 | 路由表是两张表（`/` 是 `Mount` 还是 `APIRoute`） | 同一文件跑两遍：默认 + `BACKEND_SERVE_FRONTEND=false` |
+| 外部凭据本机在、runner 上不在 | 本地 11 skip、CI 18 skip，计数不同结论相同 | 比结论不比计数；说不清来源的计数差才要查 |
+| `pytest` 收尾被 `safe-delete` 拦 | 退出码 1、测试全过 | 判据读 junit 的 `failures`/`errors`，附可复制的两行命令 |
+
+第一条写的是**方法**不是结论：`BACKEND_SERVE_FRONTEND=false` 能在不删 `out/` 的前提下复现 runner 的路由表，
+这比"记得去改代码"可执行。还补了一句边界——只有**读 `app.routes`** 的测试受此影响，
+自己搭 app 的测试不受影响，否则下一个人会把整仓都跑两遍。
+
+第三条顺带把 `tests` 属性与 `<testcase>` 元素数的差额（9 473 vs 6 889）写进去了，
+因为这两个数看起来像解析 bug，实际是 subtest。
+
+#### 为什么放 RUNBOOK 而不是 README
+
+README 是"怎么跑"，RUNBOOK 是"出事时看哪里"。这三条都是**判据**而不是命令：
+它们回答的是"这个绿算不算绿"。README 那边已经有指向沙箱构建小节的一行注释，够了。
+
+#### 门
+
+- 引用 RUNBOOK 的 8 个测试文件：**109 passed + 34 subtests**（`test_runbook_restore_contract`、
+  `test_readme_inventory`、`test_alert_channel_posture`、`test_deploy_bind_address`、
+  `test_deploy_units`、`test_log_level_setting`、`test_review_queue_cli`、`test_review_queue_endpoint`）
+- `docs/ops/RUNBOOK.md`：96 483 B，1 815 CRLF / 0 bare LF，`git diff --numstat` **+59/−0**
+
+**未提交**：本节与 RUNBOOK 都还在工作树里，没有「提交」指令。
+
+**本节行数**：正文 **+33/−0**，连本段共 **+37/−0**；审计档累计 **+3272/−0**。

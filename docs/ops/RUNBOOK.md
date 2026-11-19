@@ -1754,3 +1754,62 @@ CI is unaffected (no shim on the runners): this is local to the agent shell.
 The gate that actually proves the frontend compiles on this machine is
 `npx tsc --noEmit` plus `npx vitest run`; `next build` adds the export step,
 which is exactly the part the guard blocks.
+
+## Local gates vs CI: two environments, one verdict
+
+A green local run is not the CI run. Three differences make it mean something
+narrower than it looks: two have already produced a red build that the local tree
+could not reproduce, and the third changes the counts quietly. Check them before
+calling a gate green -- or before wondering why CI disagrees.
+
+### `frontend/out` exists here and not on the runner
+
+`app/main.py` registers `GET /` only when the frontend build is **absent**, and
+mounts `frontend/out` at `/` when it is present. Any test that reads the route
+table therefore sees a different table in the two places. Measured: a census of
+`APIRoute`s outside `/api` was `{/metrics}` on a machine with a build (it had
+just run `next build`) and `{/metrics, /}` on the runner, which is exactly one
+red test (`test_the_list_outside_the_namespace_matches_the_route_table`).
+
+Reproduce the runner's table without deleting `out/`:
+
+```bash
+cd backend
+python -m pytest tests/test_api_head_support.py -q
+BACKEND_SERVE_FRONTEND=false python -m pytest tests/test_api_head_support.py -q
+```
+
+The tests to check this way are the ones that read `app.routes`; tests that build
+their own app are unaffected. The same reasoning applies to anything else the
+deployment provides -- a built bundle, a mounted directory, a credentials file.
+
+### Credentials exist here and not on the runner
+
+Full suite, same code, both places: **6 879 passed / 11 skipped** locally in the
+CI-equivalent deployment, **6 872 passed / 18 skipped** on the runner. Same
+verdict, seven more skips -- the live tests that need `EIA_API_KEY` (and the other
+external keys) skip instead of pass there. Compare conclusions, not counts; a
+count difference you cannot name is the one worth chasing.
+
+### `pytest` exits 1 after passing everything
+
+The shim described in "Local builds in the agent sandbox" also blocks pytest's own
+temp-directory cleanup, after the last test:
+
+```text
+[100%][safe-delete][SAFE_DELETE_BULK_CONFIRM_REQUIRED] {"count":637,"threshold":50,
+        "targets":["...\\pytest-of-<user>\\garbage-..."],"targetCount":1}
+```
+
+The exit code is 1 and every test passed. Judge by the report:
+
+```bash
+cd backend
+python -m pytest -q -p no:cacheprovider --junitxml=junit.xml
+python -c "import xml.etree.ElementTree as ET; s=ET.parse('junit.xml').getroot().findall('testsuite')[0]; print('tests', s.get('tests'), 'failures', s.get('failures'), 'errors', s.get('errors'))"
+```
+
+`tests` counts subtests that never appear as `<testcase>` elements (measured:
+9 473 against 6 889 elements on one run), so the element count is **not** the
+test count. `failures` and `errors` are correct under both readings, which is why
+they are the two fields to read.

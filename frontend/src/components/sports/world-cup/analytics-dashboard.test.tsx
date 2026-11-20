@@ -471,7 +471,13 @@ describe("AnalyticsDashboard", () => {
     vi.unstubAllGlobals();
   });
 
-  it("renders quality trend charts from the quality-loop response", async () => {
+  // 这条用例一个人覆盖 2383 行组件的五个流程、约 70 条 DOM 断言，是全量里最重的一条。
+  // 隔离跑 1646 ms（首屏 254 ms、静态断言 530 ms、五个流程合计 745 ms、其余为零散查询）；
+  // 全量并发跑 3325 ms（2.0x），实测最差一次 5119 ms（3.1x）撞过 5000 ms 默认上限。
+  // 组件里没有定时器、挂载 effect 依赖为空、mock 按 URL 同步返回 —— 没有「慢路径」可查，
+  // 所以抬的是这一条的预算，不是全文件的（另外三条隔离跑 372 / 83 / 85 ms）。
+  // 真实性能回归要看隔离跑的 1646 ms，不要看这个受并发影响的阈值（§53.140）。
+  it("renders quality trend charts from the quality-loop response", { timeout: 15_000 }, async () => {
     vi.stubGlobal(
       "ResizeObserver",
       class {

@@ -47,6 +47,8 @@ def _market_record(event_id, *, estimated=70.0, baseline=50.0):
 class OrphanPredictionCountTests(unittest.TestCase):
     """Resolved events whose prediction is still open."""
 
+    UNREADABLE = sqlite3.OperationalError("no such table: predictions")
+
     def setUp(self):
         self.tmpdir = tempfile.TemporaryDirectory()
         base = Path(self.tmpdir.name)
@@ -150,6 +152,41 @@ class OrphanPredictionCountTests(unittest.TestCase):
             1,
             f"orphan count issued {len(selects)} SELECTs for 12 events; it must "
             "not scale with the event store",
+        )
+
+    def test_the_switch_does_not_say_which_query_broke(self):
+        """One switch per table (53.117) buys an honest boolean and loses a name.
+
+        Both queries read the same table, so ``predictions_available`` goes false
+        whichever one failed, and the operator cannot tell from it which query to
+        look at. **The log sentence is the only carrier of that fact**, so each
+        query owns its own sentence and a test has to hold them apart: before this
+        one existed, replacing the orphan sentence with the counts sentence left
+        the whole file green (measured: 10 passed, junit failures 0), so a
+        collapsed pair would name the wrong query (53.124: a local fact lost is an
+        incident, not a simplification).
+
+        A resolved event has to be seeded first -- ``_orphan_prediction_count``
+        short-circuits before querying when there is nothing resolved, and a test
+        that skips the seeding passes on an orphan warning that was never written
+        (measured: the first version of this test read only one message).
+        """
+        self._seed(n_resolved=1)
+
+        with self.assertLogs("app.services.loop_status_service", level="WARNING") as logs:
+            with patch.object(loop_status_service, "reading", side_effect=self.UNREADABLE):
+                payload = loop_status_service.loop_status()
+
+        messages = [record.getMessage() for record in logs.records]
+        orphans = [m for m in messages if "orphan prediction" in m]
+        counts = [m for m in messages if "prediction status counts" in m]
+
+        self.assertEqual(len(orphans), 1, f"the orphan query's failure is unnamed: {messages}")
+        self.assertEqual(len(counts), 1, f"the counts query's failure is unnamed: {messages}")
+        self.assertNotEqual(orphans[0], counts[0], "one sentence for two different queries")
+        self.assertFalse(
+            payload["counts"]["predictions_available"],
+            "a real failed read did not reach the switch",
         )
 
 

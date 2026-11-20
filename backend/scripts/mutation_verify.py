@@ -7274,7 +7274,7 @@ SETS: tuple[MutationSet, ...] = (
     ),
     MutationSet(
         key="health-payload-stability",
-        title="/api/health 的 body 必须是状态的函数，不随「被问了几次」变（P1–P10）",
+        title="/api/health 的 body 必须是状态的函数，不随「被问了几次」变（P1–P11）",
         rationale=(
             "§53.113 想给 `HEAD /api/health` 断一句「与它代理的 GET 同长」，断不了：冷库上第一次"
             "轮询 1 256 字节、之后每次 1 293（实测）。成因不是时间戳（第一版猜错了），而是读取顺序——"
@@ -7487,6 +7487,28 @@ SETS: tuple[MutationSet, ...] = (
                     "⚠️ 它**不会**让 P8 那条守卫红：那一条在 `queue_sla_summary` 上打桩，"
                     "与功能开关无关——两个方向互不覆盖。"
                     "● 针单行、CRLF、命中 **1 次**（已字节复核）；替换型编辑，删除数 0。"
+                ),
+            ),
+            Mutation(
+                label="P11 两个查询共用一句失败日志：说不清是谁坏了",
+                path=_LOOP_STATUS_SERVICE,
+                old=b'"orphan prediction count unavailable: %s"',
+                new=b'"prediction status counts unavailable: %s"',
+                guard_file=_LOOP_STATUS_TESTS,
+                guards=("test_the_switch_does_not_say_which_query_broke",),
+                note=(
+                    "§53.142：P5 已经说明「一个开关管两个查询」的代价——只坏一个时两个数一起"
+                    "被标 false。开关给不出名字，**日志是唯一说出「谁坏了」的载体**（§53.124："
+                    "本地事实丢了是事故）。把孤儿那句换成计数那句之后：payload 逐字节不变、"
+                    "`predictions_available` 照样 false、"
+                    "`test_the_orphan_count_reports_itself_unreadable` 也照样绿（它只钉"
+                    "「类型 + 不带原因文本」，不钉主语），红的只有读到主语的那条。"
+                    "⚠️ 这一条**必须**先种一个已结算事件才能观察：孤儿查询在「没有已结算事件」"
+                    "时提前返回、根本不打日志——第一版守卫就栽在这里（只收到一条消息）。"
+                    "● 针是**行内片段**（不带 `logger.warning(` 前缀、不带行尾），故意的："
+                    "P7 在同一行上追加 `exc_info=True`，整行针会在全量套用模式下被 P7 先吃掉"
+                    "（实测 `test_a_whole_set_apply_can_place_every_mutation_it_selects` 红）；"
+                    "片段针在 P7 之后仍然命中 **1 次**（已字节复核）。替换型编辑，删除数 0。"
                 ),
             ),
         ),

@@ -19314,3 +19314,190 @@ CI 本身就是这一次的门。
 **未提交**：四处改动都在工作树里，连 §53.141。
 
 **本节行数**：正文 **+60/−0**，连本段共 **+64/−0**；审计档累计 **+3529/−0**。
+
+### §53.143 两个提交推上去：五绿；后端计数 +1，前端计数一个没动
+按 §0 的口径拆两个：测试+harness+README 是一侧（"测试与它锁住的实现同一批"），`docs/reviews/*` 是另一侧。
+
+| commit | 内容 | stat |
+|---|---|---|
+| `90b496d` `test(loop-status): hold the two failure sentences apart, and register the mutation` | 测试 / harness / README | 3 files / **+61/−2** |
+| `a43e8aa` `docs(audit): §53.141–§53.142 -- two commits shipped, and a correction` | 审计档 | 1 file / **+118/−0** |
+
+推送 `96eb252..a43e8aa`，工作树干净。61 = 37（测试）+ 23（harness）+ 1（README），2 = 两处被替换的行，
+与分离暂存时 `git diff --cached --numstat` 的三行逐一对得上。
+
+#### CI `44749774974`：五绿，425 s（7m05s）
+
+| job | 结论 | 时段 |
+|---|---|---|
+| backend-tests | ✓ | 7m01s |
+| frontend-tests | ✓ | 1m56s |
+| docker-build | ✓ | 1m01s |
+| Type Sync Check | ✓ | 27s |
+| secret-scan | ✓ | 8s |
+
+#### 读数变了 1，而且只变了 1
+
+| 读数 | 上一轮 | 这一轮 |
+|---|---|---|
+| 后端 | 6872 passed / 18 skipped | **6873 passed** / 18 skipped / 359.01 s |
+| 前端 | 131 files / 801 tests | 131 files / 801 tests / 55.70 s |
+
+后端 **+1** 就是新加的那条守卫——它不是"CI 绿了"就算数，而是"这条测试真的在 CI 上跑过、而且只多了一条"。
+前端一个数都没动，与"本次没有碰前端"一致。这两个方向的读数一起看，才排得掉"新增测试其实没被收集"这种情形。
+
+#### 上一节的配方这次用对了
+
+`gh run watch 44749774974 --exit-status >/dev/null 2>err.txt`：**6m54s 走完，`WATCH_EXIT=0`，`err.txt` 空**。
+对比 §53.141 那次 43 秒就 `WATCH_EXIT=1`（把 stderr 也一起丢了，只能再查一次 `status` 才敢下结论）。
+差别不在运气，在于**判据留了退路**：rc 说"这次成功"，stderr 说"没有 API 异常"，`gh run view` 说
+"status=completed conclusion=success"——三个说法一致才叫绿。
+
+⚠️ 暂存时 `git` 又对 `backend/tests/test_loop_status_service.py` 打了 `LF will be replaced by CRLF`。
+第二次确认：该文件 0 CRLF / 1 008 bare LF，本来就是 LF（同目录 349 `w/crlf` + 118 `w/lf`），
+`i/lf w/lf` 与 autocrlf 的承诺不冲突，没有动作。
+
+**未做**：没有在这两个提交之间插跑本地门——测试与 harness 的门在 §53.142 已经跑过（42 / 68+411 / 62 passed，
+整套 11/11），文档侧不需要门；CI 是这两侧共同的最后一道。
+
+**未提交**：本节。
+
+**本节行数**：正文 **+45/−0**，连本段共 **+49/−0**；审计档累计 **+3578/−0**。
+
+### §53.144 镜像起来了、也答了 —— 但必须先回答一个问题（`API_WRITE_KEY`）
+§53.137 起挂着的空白：`docker-build` 只证明镜像能构建，没证明它起来之后答什么。这一节在本地把它答了。
+
+**前提**：本机 Docker Desktop 一开始没起（`pipe\dockerDesktopLinuxEngine` 不存在），而沙箱把
+`sc.exe` / `wsl.exe` 列进黑名单，起服务这条路走不通，所以等用户手动启动。引擎：**29.2.1 / linux /
+x86_64 / 24 CPU**。
+
+#### 构建：11m47s，709 MB
+
+上下文用干净副本（`D:\pmrf-build`），因为本轮 `rg` 已经撞过 `backend/.pytest_cache 拒绝访问`——
+正是 RUNBOOK 里记的 `error from sender: Access is denied` 那个模式。
+
+⚠️ 副本这一步 `robocopy` **rc=11**（置位 8 = 有失败），日志因 `/NDL` 没列明细。逐项核对了
+`deploy/Dockerfile` 真正需要的 7 个路径（Dockerfile、package.json、package-lock.json、next.config.ts、
+requirements.txt、world_cup_team_ids.json、app/main.py）**全部在**，共 2 355 文件 / 110 MB，未深究那 36 个目录。
+
+镜像里的前端确实是镜像自己 build 的：`npm ci` → `added 655 packages in 5m`，
+`✓ Compiled successfully in 8.8s`，`✓ Generating static pages (40/40)`——与 §53.130 本机构建的 40 页同数。
+
+#### 第一次裸跑：exit 3，一句话说清原因
+
+```
+RuntimeError: API_WRITE_KEY is empty. Set API_WRITE_KEY to protect write endpoints,
+or set ALLOW_OPEN_WRITES=true to explicitly run with public writes (local dev only).
+```
+
+来自 `app/main.py:260` 的 lifespan 门。⇒ **镜像不是自启动的**：`docker run -p 8000:8000 pmrf:local`
+会立刻退出（exit 3，`OOMKilled=false`，日志干净，只有一个 RuntimeError）。Dockerfile 顶部注释那条
+`docker run --env-file backend/.env pmrf:0.3.0` 之所以能跑，是因为本机 `backend/.env` 里有
+`ALLOW_OPEN_WRITES=true`——**不是因为它比裸跑"多点东西"，而是因为它回答了这唯一一个问题**。
+
+#### 起来之后的答案
+
+| 探针 | 结果 |
+|---|---|
+| `HEAD /` | **200 `text/html; charset=utf-8`，content-length 45 935** |
+| `GET /` | 200，body 45 935 B |
+| `HEAD /api/health` | 200，`content-length: 2510` |
+| `GET /api/health` | 200，body 2 510 B（20 次取样：min 17 ms / median 27 ms / max 29 ms） |
+| `/decisions` | 307 → `/decisions/` → 200，37 184 B |
+| `/definitely-not-a-page` | 404 |
+| 容器自身 `HEALTHCHECK` | `Up (healthy)` |
+
+`HEAD /` 的 45 935 与 §53.136 在本机测到的那个数**同长**——同一份 `index.html`，说明镜像里的
+`/frontend/out` 接对了（`Path(__file__).parent.parent.parent` 在 `/app/app/main.py` 上算到 `/frontend/out`，
+与仓库布局 `backend/app/main.py` 同深度，这是它一开始就该对的原因，但"该对"和"对了"是两件事）。
+`HEAD /api/health` 的 `content-length` 与 GET body 一致 ⇒ head 中间件那条路径在容器里也成立。
+`id` = `uid=999(app)`，非 root ✓。
+
+#### 顺手在容器里复验了两条旧结论（冷库是最严的场景）
+
+- **§53.114**：两次 `/api/health` 逐字节相同（2 510 = 2 510），`loop_db_schema_versions` 全非空
+  （`predictions: 4`）——"body 是状态的函数"在镜像里成立。
+- **§5**：`predictions: {}` 配 `predictions_available: true`——空表与读失败在镜像里也分得开。
+  `counts` 16 键齐全。
+
+#### 一次没复现的超时，只记数
+
+某一次 `GET /api/health` 在 `--max-time 5` 下报 `0 out of 2510 bytes received` 并超时；随后立刻
+三次 17–21 ms、再 20 次 17–29 ms。**没有复现，也不解释成因**——只把分布留在这里，供下一次撞见时对照。
+
+#### 要不要写进 CI：要，但必须带一句话
+
+不做这一步的代价刚刚见过了：镜像构建绿、启动即死，而 CI 从 2026-09 起一直绿着。步骤形状：
+
+```yaml
+# docker-build job 内，构建那一步加 load: true（push: false 不落本地）
+run: docker run -d --name pmrf-smoke -p 127.0.0.1:8000:8000 -e ALLOW_OPEN_WRITES=true -e SCHEDULER_ENABLED=false <image>
+run: |  # 轮询 /api/health 至 200（上限 ~60s），再断言 HEAD / 是 200 且 text/html
+```
+
+**`-e ALLOW_OPEN_WRITES=true` 不能省**，否则 CI 会红在与裸跑同一个门上——那不是发现了新缺陷，是忘了回答
+那个必需的问题。`SCHEDULER_ENABLED=false` 让容器在探针期间只读（§53.132 用过的同一招）。
+这一节**没有落盘** ci.yml：改它要动 CI 形状（`load: true` 会把镜像拉进 runner，约 +40 s/次），留给下一轮拍板。
+
+**未做**：没改任何产品代码与配置；没在 CI 里跑这条（只本地）；没深究 `robocopy` 那 36 个"失败"目录。
+
+**未提交**：本节。
+
+**本节行数**：正文 **+77/−0**，连本段共 **+81/−0**；审计档累计 **+3659/−0**。
+
+### §53.145 把冒烟写进 CI：先在本地跑三反例，把「第一次验证」从 CI 手上拿回来
+§53.144 结尾写的那句"要写，但必须带一句话"，这一节落盘。
+
+#### 为什么不把 curl 塞进 YAML
+
+抽成 `deploy/smoke-test.sh`，`ci.yml` 只留一行 `bash deploy/smoke-test.sh pmrf:ci`。理由有两条：
+YAML 里的内联 shell **只能靠 push 去验**（一次 7 分钟），而脚本能拿本地真镜像跑；
+RUNBOOK 里那条 `docker run` 也就此有了唯一出处。`.gitattributes` 早就把 `*.sh` 钉成 `text eol=lf`。
+
+`ci.yml` 改两处：构建步骤加 `load: true` + `tags: pmrf:ci`（`push: false` 时镜像留在 buildx 缓存里，
+runner 的 daemon 根本看不到它），然后新增 `Smoke-test the image` 一步。
+
+#### 脚本的判据
+
+- `/api/health` 轮询到 **200**（30 次 × 2 s，覆盖冷启动建表）
+- `HEAD /` 必须 **200 + `text/html`**：307 意味着镜像里没有前端构建，落到了 API 兜底路由
+- 用 `-I` 而不是 `-X HEAD`：后者让 curl 把一个 HEAD 当自定义方法发出去，然后等一个永远不会来的 body
+
+#### 四条路径，本地证了三条
+
+**在 push 之前**，拿本地那份 `pmrf:local`（§53.144 构建的同一镜像）把脚本的每条分支都跑了一遍：
+
+| 情形 | 结果 |
+|---|---|
+| 正常 | **rc=0**，`api/health -> 200`、`HEAD / -> 200 (text/html; charset=utf-8)`，全程 **6.9 s** |
+| 镜像不存在 | rc=**125**（docker 自己的码原样透出） |
+| 起来就死（去掉 `ALLOW_OPEN_WRITES`） | rc=1，`::error::/api/health never answered 200 (last: 000)`，且 `docker logs` 里就带着 `API_WRITE_KEY is empty` —— 看 CI 日志的人直接看到病因，不是只有一个超时 |
+| 关掉静态服务（`-e BACKEND_SERVE_FRONTEND=false`） | rc=1，`HEAD / -> 307`，消息点名"没挂前端构建" |
+
+**没证的第四条**：200 但不是 `text/html`。要构造它得有一个在 `/` 上返 JSON 的镜像，本地没有，没去造。
+所以那条 `case` 分支是"写了但没被走过"——这一点得说清楚，否则它和空头守卫长得一样。
+
+⚠️ **自查**：第一次跑反例写成 `bash deploy/smoke-test.sh pmrf:nope | tail -3; echo rc=$?`，
+拿到的是 **`tail` 的 0**——和 §53.140 那个 `npx tsc | tail` 一模一样，第三次踩同一个坑。
+改成落盘再读 `$?` 才拿到 125。**管道后面的 `$?` 永远不是被测程序的。**
+
+#### 门
+
+- `test_deploy_units.py` + `test_readme_inventory.py`：**24 passed**（`deploy/` 新增一个 `.sh` 不影响
+  那两个"不能落后于 deploy/"的扫描——它们只 glob `*.service`）
+- `deploy/smoke-test.sh`：**79 bare LF / 0 CRLF**（`.gitattributes` 要求）
+- `.github/workflows/ci.yml`：用 `js-yaml`（frontend 的 node_modules 里现成的）解析后核对
+  job / step 顺序与 `with` 字段，`load: true`、`tags: pmrf:ci`、`run: bash deploy/smoke-test.sh pmrf:ci` 都在
+
+#### 代价
+
+`load: true` 把镜像从 buildx 缓存导进 runner 的 daemon。本地"起容器 + 探针"6.9 s，
+CI 上预计 +20–40 s（导出层 + 冷启动），相对整轮 7 分钟可以忽略；换来的是"镜像能不能服务"这条
+从 2026-09 起一直没人问的问题，以后每次都会有人问。
+
+**未做**：没在 CI 里加"探 `/decisions`"之类的深层断言（一条 `HEAD /` 足以区分两个部署分支）；
+没动 `docker-build` 的 cache 配置。
+
+**未提交**：本节与 `ci.yml`、`deploy/smoke-test.sh` 一起在工作树里。
+
+**本节行数**：正文 **+53/−0**，连本段共 **+57/−0**；审计档累计 **+3716/−0**。

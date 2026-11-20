@@ -19196,3 +19196,121 @@ it("renders quality trend charts from the quality-loop response", { timeout: 15_
 **未提交**：本节与那份测试改动都在工作树里，连 §53.139 一起，没有「提交」指令。
 
 **本节行数**：正文 **+80/−0**，连本段共 **+84/−0**；审计档累计 **+3411/−0**。
+
+### §53.141 拆两个提交推上去：五绿；「不落 watch 日志」这个技巧第一次用就咬了一口
+用户选的是"拆两个提交推上去"。按 §0 的口径，代码+测试与 `docs/reviews/*` 分开提交——这里"代码"侧
+其实只有一份测试文件，所以是两个单文件提交。
+
+| commit | 内容 | stat |
+|---|---|---|
+| `bf22627` `test(world-cup): give the heaviest dashboard test its own timeout budget` | 测试 | 1 file / **+7/−1** |
+| `96eb252` `docs(audit): §53.139–§53.140 …` | 审计档 | 1 file / **+139/−0** |
+
+推送 `11157b3..96eb252`，提交后工作树干净。
+
+#### CI `44650224312`：五绿，358 s（5m58s）
+
+| job | 结论 | 时段 |
+|---|---|---|
+| backend-tests | ✓ | 5m54s |
+| frontend-tests | ✓ | 1m57s |
+| docker-build | ✓ | 1m32s |
+| Type Sync Check | ✓ | 26s |
+| secret-scan | ✓ | 10s |
+
+读数：前端 **131 files / 801 tests**（与上一轮相同）；后端 **6872 passed / 18 skipped in 291.85s**
+（上一轮同一串、272.18 s，慢了 19.7 s）。`docker-build` 这次 1m32s，上一轮 20s——缓存命中与否不知道，
+不解释，只记数。
+
+#### 上一节写的技巧，第一次用就咬了一口
+
+§53.139 刚记下"`gh run watch` 重定向到文件会长成 O(n²)，141 KB，要读的只有末尾"。这一轮就直接不落它：
+
+```sh
+gh run watch <id> --exit-status >/dev/null 2>&1; echo "WATCH_EXIT=$?" > rc.txt
+```
+
+结果：**43 秒后 `WATCH_EXIT=1`**，而 run 其实还在跑（`status=in_progress`，四个 job 绿、`backend-tests`
+正在跑）。`/dev/null` 把 stdout 的噪声和 **stderr 的诊断**一起丢掉了——我拿不到"是撞了 API EOF 还是真失败"
+的任何线索，只能再打一次查询才定性。
+
+⇒ 正确的配方是**只丢 stdout，留 stderr**：
+
+```sh
+gh run watch <id> --exit-status >/dev/null 2>err.txt; echo "WATCH_EXIT=$?" > rc.txt
+```
+
+第二次按这个跑：1m32s 收尾、`WATCH2_EXIT=0`、`err.txt` 是空的。**省日志不能省判据**——这和
+§0 里"外壳 rc 恒 0 所以读落盘文件"是同一族：真正的判据要能区分"没跑完 / 撞 EOF / 真失败"三种状态，
+而 `rc` 一个数给不出来，`status=in_progress` 那一次查询才给出来。
+
+**未做**：这次没有跑本地门——提交的是已经跑过的测试改动（单文件 4 passed、全量 801 绿）与纯文档，
+CI 本身就是这一次的门。
+
+**未提交**：本节。
+
+**本节行数**：正文 **+50/−0**，连本段共 **+54/−0**；审计档累计 **+3465/−0**。
+
+### §53.142 `orphan_predictions` 的读失败路径：守卫本来就在，缺的是「哪句话属于哪个查询」
+**先更正自己**：上一轮我把这条列成"读失败路径没有独立测试"，那是错的。翻文件就看见两条——
+`test_the_orphan_count_reports_itself_unreadable`（失败分支：`(0, False)` + 只记类型 + 无 traceback）与
+`test_a_failed_orphan_read_makes_the_switch_false`（接缝打桩验那个 `and`）。正向也在：
+`OrphanPredictionCountTests` 三条（3 已结算 + 2 未结算 → 3）、无已结算不查询的短路、N+1 守卫。
+所以先用变异问它一句，而不是先写测试。
+
+#### 变异先问：把孤儿那句日志换成计数那句
+
+`-k "Orphan or PredictionCounts or orphan"` → **10 passed，junit `tests=10 failures=0`**。
+
+一个开关管两个查询（§53.117 的取舍）本身没问题：开关只说得清"这些数不可信"。但**说不清是谁坏了**，
+而唯一说得清的东西——那两句失败日志——没有任何测试把它们分开钉住。§53.110 那句在这里反着用：
+载体有 N 个，守卫只有 N−1 条。
+
+#### 补的守卫
+
+`test_the_switch_does_not_say_which_query_broke`，放进 `OrphanPredictionCountTests`（它需要真库）：
+种 1 条已结算事件 → 打断 `reading` → 读 `loop_status()` → 断言两条消息各出现 1 次、互不相同、
+且 `predictions_available` 为 false。
+
+**第一版写错在哪**（已写进 docstring）：我把这条先放进了 `PredictionCountsTests`，那个类不种事件；
+`_orphan_prediction_count` 在"没有已结算事件"时**提前返回、根本不打日志**，
+于是 `assertEqual(len(orphans), 1)` 立刻红，日志里只有一条计数句子。这是"守着空"的活样本——
+如果没有那条计数断言，这条测试会以"收到了一条消息"的姿态绿着过去。
+
+#### 登记为 P11（`health-payload-stability` → P1–P11）
+
+针是**行内片段** `"orphan prediction count unavailable: %s"`，不是整行。原因是实测的，不是猜的：
+整行针会被同套 P7（在同一行追加 `exc_info=True`）在全量套用模式下先吃掉，
+`test_a_whole_set_apply_can_place_every_mutation_it_selects` 报
+`needle not found: b'        logger.warning("orphan prediction count unavailable:'; an earlier mutation in this set already rewrote those bytes`。
+换成片段针后，P7 之后仍命中 **1 次**。
+
+- `verify health-payload-stability --index 11` → 修前绿 / 变后 1 文件红 / 还原后绿 / 字节一致
+- 整套 11 条一起跑 → **11/11 OK**（4m09s）
+- README `345 → 346` 条；`test_mutation_inventory_matches_the_harness` 会核对，已绿
+
+#### 门
+
+- `test_loop_status_service.py`：**42 passed**（原 41）
+- `test_mutation_verify.py` + `test_readme_inventory.py`：**68 passed + 411 subtests**（junit `tests=480`），failures/errors 均 0
+- 三文件门（loop_status / health_payload_stability / api_head_support）：**62 passed**
+- `ruff check app/` rc=0；本轮改的两个 py 文件 `ruff check` rc=0；`mypy app/` rc=0（334 files）
+
+#### 字节
+
+| 文件 | 画像 |
+|---|---|
+| `backend/tests/test_loop_status_service.py` | 45 074 B / **0 CRLF / 1 008 bare LF**（本来就是 LF：同目录 349 个 `w/crlf` 与 118 个 `w/lf` 混杂，§1） |
+| `backend/scripts/mutation_verify.py` | 8 217 CRLF / 0 bare |
+| `README.md` | 199 CRLF / 0 bare |
+
+⚠️ `git` 对第一个文件打了 `LF will be replaced by CRLF`——那不是损坏（§1），是 autocrlf 在陈述
+它 checkout 时会怎么做；该文件整体是 LF（0 个 CRLF），本轮两处编辑没有把任何 CRLF 洗掉。
+
+**未做**：没改产品代码（缺的是守卫不是缺陷）；没给 `orphan_predictions` 加第二个开关
+（§53.117 明确选了"一表一开关"，加键要重开那个决定）；没顺手修 `ruff check tests/ scripts/` 的
+**343** 条既有问题（CI 只跑 `app/`，不是本轮引入）。
+
+**未提交**：四处改动都在工作树里，连 §53.141。
+
+**本节行数**：正文 **+60/−0**，连本段共 **+64/−0**；审计档累计 **+3529/−0**。

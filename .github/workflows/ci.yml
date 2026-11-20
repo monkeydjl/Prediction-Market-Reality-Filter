@@ -151,6 +151,10 @@ jobs:
   # credentials — so the deploy path is exercised on every change. GHA layer
   # caching keeps the repeat cost near the frontend suite's; the first run
   # after a cache miss pays the full pip/npm build.
+  #
+  # `load: true` exists for the smoke step below: with `push: false` alone the
+  # image stays inside the buildx cache and no daemon ever sees it. Tag it so
+  # the step can name it without parsing build output.
   docker-build:
     runs-on: ubuntu-latest
     steps:
@@ -162,8 +166,19 @@ jobs:
           context: .
           file: deploy/Dockerfile
           push: false
+          load: true
+          tags: pmrf:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      # Building is not serving. On 2026-11-20 the same image this job had been
+      # building green since September exited 3 within seconds of `docker run`
+      # (`API_WRITE_KEY is empty ... or set ALLOW_OPEN_WRITES=true`), so no
+      # request, not even `GET /`, had ever been answered by a container built
+      # here (§53.144). The script starts it, waits for /api/health, and asserts
+      # that `HEAD /` is the static export (200 text/html) rather than the
+      # API-only fallback (307 to /docs).
+      - name: Smoke-test the image
+        run: bash deploy/smoke-test.sh pmrf:ci
 
   secret-scan:
     runs-on: ubuntu-latest

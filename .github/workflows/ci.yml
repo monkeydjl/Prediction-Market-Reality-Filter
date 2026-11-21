@@ -78,7 +78,10 @@ jobs:
       - name: Type-check backend (mypy)
         run: mypy app/ --config-file mypy.ini
       - name: Run backend tests with coverage
-        run: pytest tests/ --cov=app --cov-report=term-missing --cov-report=xml
+        # -rs prints every skipped test with its reason. Without it the log says
+        # only "6873 passed, 18 skipped" and the difference between the runner
+        # and a developer machine has to be deduced rather than read (§53.151).
+        run: pytest -rs tests/ --cov=app --cov-report=term-missing --cov-report=xml
 
   frontend-tests:
     runs-on: ubuntu-latest

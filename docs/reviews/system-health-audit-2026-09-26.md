@@ -20062,3 +20062,67 @@ FAILED tests/test_generate_types.py::TestGenerateTypesScript::test_check_mode_ex
 
 **本节行数**：正文 **+53/−0**，连本段共 **+56/−0**（含与上一节之间的空行）；审计文档已入库
 **+19973/−13**，加工作树（§53.154 +48、本节 +56）**+20077/−13**。
+
+### §53.156 补上了那个空洞，但第一次推上去是红的
+§53.155 说 `type-sync-check` 只覆盖 6 条里的 1 条。补的动作是让那个 job 直接跑这个类——它已经装了 node
+和 `npm ci`，缺的只是那 6 条被跳过的前提。
+
+#### 第一次：红，而且红得有信息
+
+`4158530` 加了一行
+
+```
+run: cd backend && python -m pytest tests/test_generate_types.py::TestGenerateTypesScript -q
+```
+
+CI `44917149459` 五个 job 里 **Type Sync Check 红**，新步骤 1 s 就退出：
+
+```
+ImportError while loading conftest .../backend/tests/conftest.py
+tests/conftest.py:31: in <module>
+    import dotenv as _dotenv_module
+E   ModuleNotFoundError: No module named 'dotenv'
+```
+
+原因很干脆：这个 job 一直只装 `requirements-dev.txt`。那套足够跑 `generate_types --check`（它要的是
+`pydantic-to-typescript`），**不够把测试夹具加载起来**。换句话说，这个 job 绿了几个月，一部分原因是它做的事少
+——`--check` 不需要 conftest，一旦真跑测试，夹具自己的依赖缺口立刻露出来。这不是回归，是**范围扩大后才可见的
+既有缺口**。
+
+#### 修法：装运行时依赖，而不是绕开夹具
+
+`7cd1ba4`：在 dev 依赖之前加一步 `pip install -r backend/requirements.txt`，并把 `requirements.txt` 加进
+`setup-python` 的 `cache-dependency-path`（否则缓存键不变，白装一遍）。顺序与 backend-tests 一致：运行时先、
+dev 后，避免共享包的版本被后装的覆盖。
+
+**没有用 `--noconftest`**：那个 conftest 就是沙箱（import 时建临时数据目录）**和环境 bandit**（每个用例前后
+快照/还原 `os.environ`）。关掉它跑出来的结果，不能当作「这些用例在 CI 里跑过了」的证据。
+
+#### 第二次：绿，而且看得见
+
+CI `44917885252` 五绿，`Type Sync Check` 1m32s（上一轮 1m16s）。这个 job 的关键两行：
+
+| 步骤 | 结果 | 耗时 |
+|---|---|---|
+| `Check type sync` | `[INFO] generated-types.ts is up to date.` | 0.0 s |
+| `Check the generator's own tests` | **`6 passed, 1 warning, 17 subtests passed`** | 11 s |
+
+`Install backend dependencies` 11 s（有 pip 缓存）。所以 6 条在 CI 里从「被跳过」变成「跑过」，代价约 16 s
+（+11 s 安装、+11 s 用例、其余是缓存后的净差）。同一条用例在 Linux 上是 **11 s**，本机 25 s——子进程启动
+成本不同，与 §53.150 那条「job 时长不能当性能判据」同理。
+
+#### §53.155 那张表的结果
+
+| # | 断言的属性 | 补之前 | 现在 |
+|---|---|---|---|
+| 1 | allowlist 名字全在 | ✗ | ✓ |
+| 2 | do-not-edit 头 | ✗ | ✓ |
+| 3 | `--check` 最新时返回 0 | ✓ | ✓ |
+| 4 | `--check` 过期时返回 **1**（门控的负向控制） | ✗ | **✓** |
+| 5 | 两次输出一致 | ✗ | ✓ |
+| 6 | overlay 无尾巴 | ✗ | ✓ |
+
+**6/6**。第 4 条那个变异（`return 1 → return 0`）现在在 CI 上会红，而不是全绿——这是这次改动唯一要买的东西。
+
+**本节行数**：正文 **+61/−0**，连本段共 **+64/−0**（含与上一节之间的空行）；审计文档已入库
+**+20077/−13**，加本节工作树 **+20141/−13**。

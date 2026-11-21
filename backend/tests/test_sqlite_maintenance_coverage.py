@@ -24,8 +24,9 @@ without the healthy baseline — a change that made health degrade unconditional
 would satisfy all of them — so `test_a_healthy_install_is_not_degraded` runs first
 in spirit and is the one to check when this file goes red as a group.
 """
-import json
+import os
 import sqlite3
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -347,6 +348,19 @@ class MaintainAllCoverageTests(_StoresInTempDir):
         )
 
 
+def _open_fd_count() -> "int | None":
+    """How many descriptors this process holds, or None where the OS will not say.
+
+    Linux publishes them under ``/proc/self/fd``; macOS does not, and neither does
+    Windows. The listing's own descriptor is counted both times, so a difference
+    between two calls is still exact -- which is all the caller uses.
+    """
+    try:
+        return len(os.listdir("/proc/self/fd"))
+    except OSError:
+        return None
+
+
 class ConnectLeakTests(unittest.TestCase):
     """`connect()` must not leave a handle open when its pragmas raise.
 
@@ -368,36 +382,88 @@ class ConnectLeakTests(unittest.TestCase):
             path = Path(tmp) / "corrupt.db"
             _make_db(path, rows=5)
             _corrupt(path)
+            before = _open_fd_count()
             with self.assertRaises(sqlite3.DatabaseError):
                 sqlite_db.connect(str(path))
-            # On Windows an open handle makes unlink fail with WinError 32; on
-            # POSIX unlink succeeds regardless, so assert on the handle count
-            # there instead of trusting a platform-specific side effect.
+            after = _open_fd_count()
+            if before is not None and after is not None:
+                # POSIX: the descriptor count is the observation. `unlink` cannot
+                # carry this assertion there -- POSIX removes the name while the
+                # handle stays open, so a leak is invisible to it. Before this
+                # branch existed the test asserted only that unlink worked, which
+                # is true whether or not `connect()` leaked.
+                self.assertEqual(
+                    after,
+                    before,
+                    "connect() leaked a descriptor: it raised after opening the "
+                    "file and nothing closed what it had already opened",
+                )
+                return
+            # Windows: no /proc, but an open handle blocks unlink (WinError 32).
             try:
                 path.unlink()
-            except PermissionError as exc:  # pragma: no cover - Windows only
+            except PermissionError as exc:
                 self.fail(f"connect() leaked a handle: {exc}")
+
+    @staticmethod
+    def _unlink_blocked_by_an_open_handle(path: Path) -> bool:
+        """Windows' only signal: the name cannot be removed while it is held."""
+        try:
+            path.unlink()
+        except PermissionError:
+            return True
+        return False
 
     def test_the_probe_would_notice_a_leak(self):
         """Guard the instrument: deliberately leak, and confirm it is detectable.
 
         Without this, `test_a_failed_connect_leaves_no_open_handle` would pass on
-        any platform where an open handle does not block unlink — which is most
-        of them — and would be testing nothing at all there.
-        """
-        import sys
+        any platform whose signal never fires -- and an assertion about a counter
+        that cannot move is worth the same as no assertion. So each platform is
+        held to the signal it actually has: the descriptor count on POSIX,
+        unlink-while-open on Windows. When the count is available this also checks
+        that it goes back down, because a counter that only ever rises would make
+        the equality in the guarded test prove nothing.
 
-        if not sys.platform.startswith("win"):
-            self.skipTest("unlink-while-open only fails on Windows")
+        A platform with neither signal skips with that sentence -- which is a
+        different claim from the old "unlink only fails on Windows", and skips a
+        platform nobody ships to rather than the one CI runs on.
+        """
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "held.db"
             _make_db(path, rows=2)
+            before = _open_fd_count()
             conn = sqlite3.connect(str(path))
             try:
-                with self.assertRaises(PermissionError):
-                    path.unlink()
+                if before is not None:
+                    self.assertGreater(
+                        _open_fd_count(),
+                        before,
+                        "/proc/self/fd did not see the leaked descriptor - the "
+                        "count cannot fail, so the test it guards cannot either",
+                    )
+                elif self._unlink_blocked_by_an_open_handle(path):
+                    pass  # Windows: the portable signal is live here
+                elif sys.platform.startswith("win"):
+                    self.fail(
+                        "unlink succeeded while a connection held the file: the "
+                        "Windows branch of the guarded test is vacuous"
+                    )
+                else:
+                    self.skipTest(
+                        "no /proc/self/fd and unlink does not observe open "
+                        "handles - neither signal is live on this platform"
+                    )
             finally:
                 conn.close()
+            if before is not None:
+                self.assertEqual(
+                    _open_fd_count(),
+                    before,
+                    "closing the connection did not restore the count - the "
+                    "counter drifts, so equality in the guarded test proves "
+                    "nothing",
+                )
 
 
 class DeclaredSetTests(unittest.TestCase):

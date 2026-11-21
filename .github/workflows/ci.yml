@@ -147,6 +147,18 @@ jobs:
         run: cd frontend && npm ci
       - name: Check type sync
         run: cd backend && python -m scripts.generate_types --check
+      - name: Check the generator's own tests
+        # The backend job skips this whole class: it installs Python only, so
+        # `_find_json2ts_cmd()` finds neither the local binary nor one on PATH
+        # (six skips, §53.151). This job already runs `npm ci`, so the class can
+        # run where the skip came from.
+        #
+        # It has to: `test_check_mode_exit_1_when_stale` is the only test in the
+        # repository that notices the `--check` above losing its ability to
+        # fail. Mutating that branch to `return 0` fails exactly one test and
+        # leaves every CI job green, because this job only ever runs `--check`
+        # against an up-to-date file (§53.155).
+        run: cd backend && python -m pytest tests/test_generate_types.py::TestGenerateTypesScript -q
 
   # The image was only ever built by hand (2026-09-24 rehearsal), so a
   # Dockerfile / dependency-pin break surfaced for the first time on a

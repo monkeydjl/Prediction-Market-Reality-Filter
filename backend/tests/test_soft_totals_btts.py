@@ -4,7 +4,19 @@ from datetime import datetime, timezone
 import pytest
 
 from app.kernel.engines.elo_odds_engine import soft_totals_btts_analysis
-from app.kernel.domain import *
+from app.kernel.domain import (
+    CompetitionIdentity,
+    EnvironmentFeatures,
+    FeatureSet,
+    GeneralFeatures,
+    MarketFeatures,
+    MatchIdentity,
+    PlayerFeatures,
+    SeasonIdentity,
+    SportIdentity,
+    TeamFeatures,
+    TeamIdentity,
+)
 from app.sports.football.engines.football_multi_factor_engine import FootballMultiFactorEngine
 from app.sports.baseball.engines.baseball_engine import BaseballEngine, _DEFAULT_WEIGHTS
 

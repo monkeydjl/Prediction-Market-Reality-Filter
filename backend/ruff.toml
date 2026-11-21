@@ -7,8 +7,13 @@
 #
 # The selected set below is the historical ruff default (pyflakes + the
 # error-class pycodestyle rules) - the correctness-oriented subset. It is fully
-# clean as of 2026-08-05. Widen it deliberately, one rule family at a time,
-# rather than by upgrading ruff.
+# clean for app/ as of 2026-08-05, and app/ is all this gate covers. tests/ and
+# scripts/ are not clean under the same set (318 findings as of 2026-11-21 -
+# unused imports, f-strings with no placeholders, imports below module level),
+# so a bare `ruff check .` fails on debt this gate never gated. Widening it
+# means clearing those first; the breakdown is in
+# docs/reviews/system-health-audit-2026-09-26.md section 53.147. Widen it
+# deliberately, one rule family at a time, rather than by upgrading ruff.
 
 line-length = 100
 

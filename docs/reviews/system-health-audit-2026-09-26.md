@@ -19746,3 +19746,105 @@ as of 2026-08-05」。那句话是真的，但它只对 `app/` 成立——这�
 
 **本节行数**：正文 **+56/−0**，连本段共 **+59/−0**（含与上一节之间的空行）；审计文档
 `git log --numstat` 全文件合计含本轮工作树 **+19761/−13**。
+
+### §53.150 第三次推：纯文档提交，两个计数逐字相同
+`dd0a48c`（只改审计文档，**+59/−0**）推上去，CI `44901710447` 五绿，**6m30s**：
+backend-tests 6m30s、frontend-tests 3m4s、Type Sync Check 1m9s、docker-build 30s、secret-scan 9s。
+
+#### 这次的判据是「什么都没变」
+
+| | 上一轮 `44849303156` | 这一轮 `44901710447` |
+|---|---|---|
+| `collected` | `6891 items` | `6891 items` |
+| backend | `6873 passed, 18 skipped` | `6873 passed, 18 skipped` |
+| frontend | `131 passed` files / `801 passed` | `131 passed` files / `801 passed` |
+
+三行**逐字相同**。上一轮提交里有一行测试文件的改动，这一轮只有一个 markdown 追加——如果计数在这种提交上
+也会动，那它就不是在数用例，而是在数别的东西。**「计数只在用例动的时候动」这句话，只有拿一次「什么都没动」
+的提交去验，才算验过**；连续两次都动过的提交只能说明它们都动了。
+
+#### 一个下日志的坑
+
+`gh run view --job=… --log` 第一次撞上
+`failed to get run log: Get "https://results-receiver.actions.githubusercontent.com/…": EOF`，
+落盘文件 **258 字节**，内容就只有这一行错误。间隔 5 s 重试拿到 **311 376 字节**的完整日志。
+
+⚠️ 危险的地方在于**它 rc=0**：命令成功返回、文件存在、`wc -c` 有个数。只看退出码和"文件在不在"，
+就会把 258 字节的错误串当成日志去 grep，然后得到"日志里没有 `collected` 这一行"——一个完全错误的结论。
+判据是**打开文件第一行**，不是文件存在。
+
+#### 顺带一个不能用的判据：CI 时长
+
+同样 6891 条用例、同样 0 失败，backend job 上一轮 **7m18s**、这一轮 **5m32s**。差 1m46s 里没有一行代码
+变化，只有 runner 的缓存与负载。所以 **CI 的 job 时长不能当性能判据**，要看性能就回本地隔离跑（§53.140 那
+条 1646 ms 的道理一样）。
+
+**本节行数**：正文 **+32/−0**，连本段共 **+35/−0**（含与上一节之间的空行）；审计文档
+`git log --numstat` 全文件合计含本轮工作树 **+19796/−13**。
+
+### §53.151 那 7 条：6 条是整个类被跳过，1 条是只在 Windows 成立的探针
+本地 11 条 skip 一个原因（`RUN_LIVE_TESTS` opt-in），CI 18 条，差 7。这 7 条现在有名字了。
+
+#### 定法（不是猜的）
+
+1. **本地 11 条的名字和原因直接从 junit 读**：`<skipped message="live integration tests are opt-in - set
+   RUN_LIVE_TESTS=1 to run">`，11 条同因、同文件（`test_integration_live.py`）。
+2. **枚举全部 skip 机制**：`grep -E "unittest\.skip|skipUnless|skipIf|skipTest\(|pytest\.skip|importorskip|
+   add_marker"`，`tests/` + `app/` 去掉 `tests/manual/` 共 **26 处**，逐处读了条件。
+3. 26 处里条件能在「Windows + 有前端依赖」→「Linux + 无前端依赖」之间翻转的只有两类，加起来正好 7：
+   **11 + 7 = 18**，与 CI 的 `6873 passed, 18 skipped` 闭合。
+
+#### 那 6 条：一个装饰器跳掉整个类
+
+`tests/test_generate_types.py::TestGenerateTypesScript` 上挂着
+`@unittest.skipUnless(_json2ts_available(), "json2ts CLI not installed (frontend deps missing)")`。
+判断走 `scripts/generate_types._find_json2ts_cmd()`：先找 `frontend/node_modules/.bin/json2ts`（Windows 上找
+`.cmd`），找不到再 `shutil.which("json2ts")`。`backend-tests` 这个 job 从头到尾没有 npm 步骤 ⇒ 两条路都断 ⇒
+**整个类跳过**，一处装饰器带走 **6 条**用例。本地 `frontend/node_modules/.bin/json2ts.cmd` 存在，6 条全跑，
+junit 里 6 条 `PASSED`。
+
+**这 6 条不是空白**：类 docstring 写明「The dedicated `type-sync-check` job keeps the generator itself covered
+in CI」，而 CI 确实有 `Type Sync Check` job，本轮 1m9s，跑的就是 `generate_types --check`。⚠️ 但「另一个 job
+覆盖」这句话我只验了**那个 job 存在且绿**，没核对它是否覆盖到这 6 条各自的断言点——所以它现在是
+「大概有人管」，不是「已验证等价」。
+
+#### 那 1 条：守探针的守卫自己先跳过
+
+`tests/test_sqlite_maintenance_coverage.py`：
+
+```
+if not sys.platform.startswith("win"):
+    self.skipTest("unlink-while-open only fails on Windows")
+```
+
+它守的是「探针有没有灵敏度」——故意泄漏一个打开的句柄，确认 `PermissionError` 真的会抛。Linux 上打开句柄
+不挡 `unlink`，所以这条守卫先跳过。
+
+**这才是这一轮真正该记的一条**：同文件的 `test_a_failed_connect_leaves_no_open_handle` 断言的正是「失败连接
+不留句柄」，而在 Linux 上**任何句柄都不挡 unlink** ⇒ 那条用例在 runner 上即使真泄漏也是绿的。CI 里这一对的
+实际状态是：**被测用例恒绿 + 守它的探针被跳过**。这不是缺陷（这个属性在 Linux 上本来就观测不到），但它是一块
+**只在 Windows 上被验证过的行为**，与「CI 绿 = 到处都对」是两回事。要补就换观测手段（数 `/proc/<pid>/fd`），
+不是删掉那个 skip。
+
+#### 排除掉的几处（都读过条件）
+
+| 位置 | 为什么两边都不触发 |
+|---|---|
+| `test_backup_plaintext_guard` / `test_operational_readiness`（3 处 `pyzipper not installed`） | `pyzipper==0.4.0` 在 `requirements.txt` 里，CI 装得到 |
+| `test_sentry_integration`（3 处 `sentry_sdk not installed`） | `sentry-sdk==2.63.0` 同上 |
+| `test_gbm_train_serve_windows` / `test_model_artifact_health`（3 处产物缺失） | 产物是**入库文件**，路径是 `backend/data/*.json` |
+| `test_run_entrypoint` 的 `skipIf` | 条件是 `backend/.env` 里有 `SERVER_HOST`；CI 没 `.env`，本地 `.env` 也没有该键 |
+| `test_repo_hygiene` 的 `skipUnless` | `git` + `.git` 两边都有 |
+
+⚠️ 第三行我一开始查错了：`ls backend/gbm_features.json` 不存在，差点当成"产物缺失所以两边都跳过"。真实路径是
+`Path(engine_module.__file__).resolve().parents[3] / "data" / …` = `backend/data/gbm_features.json`，**在库里**。
+按文件名找产物是错的，得按代码里的路径表达式找。
+
+#### 顺带：一个判据的边界
+
+这 7 条是**推出来的**（11 + 6 + 1 = 18 闭合 + 26 处条件枚举完备），不是从 CI 日志里读到的——CI 的 pytest 只写了
+`-q`，没写 `-rs`，日志里没有 skip 的名字。要让它变成"读出来的"，办法是给 CI 的 pytest 加 `-rs`，那是一次
+代码改动，不属这一节。
+
+**本节行数**：正文 **+64/−0**，连本段共 **+67/−0**（含与上一节之间的空行）；审计文档
+已入库 **+19761/−13**，加工作树（§53.150 +35、本节 +67，共 +102）**+19863/−13**。

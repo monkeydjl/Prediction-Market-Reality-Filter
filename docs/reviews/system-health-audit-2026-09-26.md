@@ -19958,3 +19958,107 @@ junit `failures="0" errors="0"` —— 与 §53.152 那轮逐字相同，因为�
 
 **本节行数**：正文 **+60/−0**，连本段共 **+63/−0**（含与上一节之间的空行）；审计文档已入库
 **+19863/−13**，加工作树（§53.152 +47、本节 +63）**+19973/−13**。
+
+### §53.154 三条预测全中：探针在 Linux 上真的跑了，而且真的能看见泄漏
+`6023c88`（测试 **+79/−13**）+ `6882547`（审计 **+110/−0**）推上去，CI `44913039178` 五绿，backend job
+**5m49s**（跑测试部分 4m48s）：frontend 2m57s、Type Sync 1m8s、docker-build 1m6s、secret-scan 7s。
+
+#### 先对 §53.153 那三条预测
+
+| # | 预测 | 实测 |
+|---|---|---|
+| 1 | `collected 6891 items` 不变 | `collected 6891 items` ✅ |
+| 2 | `6874 passed, 17 skipped` | `6874 passed, 17 skipped` ✅ |
+| 3 | `-rs` summary 里不再出现 `tests/test_sqlite_maintenance_coverage.py` | 只剩 6 行 `test_generate_types.py` + 1 行 `[11]` live ✅ |
+
+**三条同时成立**，而且第 3 条是关键的那条：它证明新加的 POSIX 分支**真的执行了**，不是「绿了但没跑」。
+
+#### 为什么这个绿是有内容的
+
+探针在 runner 上跑的是 POSIX 分支，也就是连着两句断言：
+
+- `assertGreater(_open_fd_count(), before)` —— 故意泄漏一个连接后，`/proc/self/fd` 必须**看得见**它；
+- `assertEqual(_open_fd_count(), before)`（关掉之后）—— 计数器必须**回得去**。
+
+两句都过，说明三件事同时为真：`/proc/self/fd` 在 ubuntu runner 上可读；泄漏的连接确实被数出来（+1）；
+`conn.close()` 之后计数真的回落。**如果 `/proc` 读不到或计数不动，第一句会以 `0 > 0` 红掉，而不是绿掉**
+——所以这次不是「没跑也算过」的绿。
+
+被测用例的相等断言也因此有了内容：`sqlite_db.connect()` 在 pragma 抛错后确实关掉了已经打开的句柄，泄漏
+会以 `after - before = 1` 红掉。改之前这里断言的是 `unlink()` 成功，与泄漏无关。
+
+#### 本地这一轮什么都没变——这正是问题所在
+
+| | §53.152 那轮 | 本节 |
+|---|---|---|
+| 本地全量 | 6880 passed / 11 skipped | **6880 passed / 11 skipped** |
+| 本地该文件 | 16 passed / 0 skipped | **16 passed / 0 skipped** |
+
+本机是 Windows，走的是 unlink 分支，与改前逐字相同。**这类改动在本地不可验证**，所以 §53.153 才把判据写成
+CI 上那三行、并且写在跑之前。这也顺带解释了为什么「本地全绿」不能作为「跨平台正确」的证据——两次都全绿，
+而两次的代码不等价。
+
+#### 收口
+
+§53.151 那句「CI 里这一对 = 被测用例恒绿 + 探针被跳过」到此作废：现在是**被测用例可红 + 探针可红**，
+两边都在 runner 上跑。剩下没覆盖的只有 macOS（没有 `/proc`、unlink 也不挡句柄），那里会以
+「neither signal is live」跳过，而 macOS 不在 CI 矩阵里。
+
+**本节行数**：正文 **+45/−0**，连本段共 **+48/−0**（含与上一节之间的空行）；审计文档已入库
+**+19973/−13**，加本节工作树 **+20021/−13**。
+
+### §53.155 `Type Sync Check` 到底覆盖了那 6 条里的几条：1 条
+§53.151 把「这 6 条在 CI 里被跳过，但 `type-sync-check` job 管着」写成「大概有人管」。现在逐条对过了。
+
+#### 那个 job 只有一步是真检查
+
+`type-sync-check` 的全部步骤：checkout → setup-python 3.11 → setup-node 22 → `pip install -r
+backend/requirements-dev.txt` → `cd frontend && npm ci` → **`cd backend && python -m
+scripts.generate_types --check`**。就这一条命令，没有别的断言。
+
+#### 六条逐条对
+
+| # | 用例断言的事 | job 覆盖 | 为什么 |
+|---|---|---|---|
+| 1 | 生成文件里有 `_frontend_export.__all__` 的**每一个**名字 | ✗ | `--check` 比的是「新生成 == 已提交」。生成器若漏掉一个模型，**两边一起漏**，比较照样相等 |
+| 2 | 文件带 `do not edit` 头 | ✗ | 同上：头在两边都有，比较不看内容对不对 |
+| 3 | `--check` 在文件最新时返回 0 | ✓ | 这就是那条命令本身 |
+| 4 | `--check` 在文件过期时返回 **1** | **✗** | job **不会篡改文件**，所以永远走「返回 0」那一支 |
+| 5 | 连跑两次输出逐字节相同 | ✗ | `--check` 只生成一次，没有第二次可比 |
+| 6 | 已关闭的 overlay 接口没有 `[k: string]: unknown` 尾巴 | ✗（另一半在） | 同 #1：属性属于生成内容，比较查不出。模块级的对应断言 `AllowlistCompositionTests.test_only_the_documented_models_stay_open` 在 backend job 里**没被跳过**，这条用例的 docstring 自己也写了这一点 |
+
+**1 / 6 被覆盖**，而且被覆盖的那条正是 job 自己在做的事。换句话说：这个 job 是**漂移探测器**（"有人改了模型没重新生成"），
+不是**输出校验器**（"生成结果对不对"）。这两件事只在「已提交文件 == 新生成」这一个点上重合。
+
+#### 第 4 条为什么最要紧：它是这条门控的负向控制
+
+把 `check()` 里过期分支的 `return 1` 改成 `return 0`（保留打印和 diff），跑这个文件：
+
+```
+FAILED tests/test_generate_types.py::TestGenerateTypesScript::test_check_mode_exit_1_when_stale
+1 failed, 121 passed, 1163 subtests passed in 28.01s
+```
+
+**全仓只有这一条会红**（`grep -- '--check'` 也只找到它断言 `returncode == 1`）。而它在 CI 里**被跳过**，
+`type-sync-check` 又只在最新文件上跑一次 —— 所以这个变异在 CI 上会**全绿**。也就是说：`--check` 若退化成
+恒返回 0，CI 从此再也发现不了类型漂移，而五个 job 全是绿的。变异文件已按字节还原，sha256 `MATCH`
+（`954de3b59f31f967…`）。
+
+这条和 §53.153 是同一类问题的两面：上一条是「注释写了断言、代码没有」，这一条是「注释说 job 覆盖了生成器
+（`The dedicated type-sync-check job keeps the generator itself covered in CI`），实际它只覆盖了正向路径」。
+**注释在描述意图，代码在做别的**——两次都是注释更乐观。
+
+#### 补法（没做）
+
+`type-sync-check` job **已经装了 node 和 `npm ci`**，所以那 6 条在它里面本来就能跑。加一行：
+
+```
+- name: Check the generator's own tests
+  run: cd backend && python -m pytest tests/test_generate_types.py -q
+```
+
+成本：本机跑这个类 **6 passed + 17 subtests，25.31 s**（每条要起一次子进程跑生成器）。换来的是这个 job
+从「只能证明文件没漂移」变成「同时证明它能发现漂移」。
+
+**本节行数**：正文 **+53/−0**，连本段共 **+56/−0**（含与上一节之间的空行）；审计文档已入库
+**+19973/−13**，加工作树（§53.154 +48、本节 +56）**+20077/−13**。

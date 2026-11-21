@@ -19848,3 +19848,113 @@ if not sys.platform.startswith("win"):
 
 **本节行数**：正文 **+64/−0**，连本段共 **+67/−0**（含与上一节之间的空行）；审计文档
 已入库 **+19761/−13**，加工作树（§53.150 +35、本节 +67，共 +102）**+19863/−13**。
+
+### §53.152 加了 `-rs`：那 7 条从「推出来」变成「读出来」
+`b2954a6`（`ci.yml` **+4/−1**）+ `245a3f4`（审计 **+102/−0**）推上去，CI `44906648145` 五绿，**7m19s**：
+backend 7m19s、frontend 3m21s、Type Sync 48s、docker-build 44s、secret-scan 8s。
+
+#### 改动只有一行，外加三行注释
+
+```
+-        run: pytest tests/ --cov=app --cov-report=term-missing --cov-report=xml
++        run: pytest -rs tests/ --cov=app --cov-report=term-missing --cov-report=xml
+```
+
+`-rs` 在日志末尾加一段 `short test summary info`。这一轮的 backend 日志里是 **8 行**：
+
+| 行 | 内容 |
+|---|---|
+| `SKIPPED [1] tests/test_generate_types.py:222` | json2ts CLI not installed (frontend deps missing) |
+| `SKIPPED [1] tests/test_generate_types.py:241` | 同上 |
+| `SKIPPED [1] tests/test_generate_types.py:249` | 同上 |
+| `SKIPPED [1] tests/test_generate_types.py:257` | 同上 |
+| `SKIPPED [1] tests/test_generate_types.py:271` | 同上 |
+| `SKIPPED [1] tests/test_generate_types.py:279` | 同上 |
+| `SKIPPED [11] …/site-packages/_pytest/unittest.py:523` | live integration tests are opt-in - set RUN_LIVE_TESTS=1 to run |
+| `SKIPPED [1] tests/test_sqlite_maintenance_coverage.py:381` | unlink-while-open only fails on Windows |
+
+**11 + 6 + 1 = 18**，与 §53.151 推出来的完全一致。那 6 个行号就是 `TestGenerateTypesScript` 的六个
+`def test_`（222 / 241 / 249 / 257 / 271 / 279），一个类没跑掉。
+
+#### 三个只有读了日志才知道的细节
+
+1. **类级 `skipUnless` 是一条用例一行**（`[1]` × 6），不是合并成 `[6]`；**只有位置相同的才合并**——
+   那 11 条 live 全部从 `unittest.py:523` 跳，于是并成一行 `[11]`。我改之前用三行合成用例验过这个形状
+   （两个方法跳在同一个类装饰器上 → 两行 `SKIPPED [1] file:7`），所以 CI 的输出不是惊喜。
+2. **行号是 `def` 行，不是 `skipTest` 行**。sqlite 那条的 `skipTest` 在 391，日志报的是 **381**（`def
+   test_the_probe_would_notice_a_leak` 那一行）。所以「按日志行号去认用例」必须按 `def` 行去映射，按
+   `skipTest` 行找会差 10 行。
+3. **summary 的顺序既不是文件序也不是字母序**（249 / 257 / 279 / 222 / 241 / 271）。这一点我不解释，
+   只记下来：扫日志时别指望它有序，要么按行号认，要么按原因认。
+
+#### 成本
+
+backend 日志 **311 376 B → 312 877 B**（+1.5 KB，多出来的就是这 8 行与标题），测试行为零变化，
+`6873 passed, 18 skipped` 与上一轮逐字相同。这笔开销买的是：下一次「哪些用例在 runner 上不跑」不用再枚举
+26 处 skip、再对着 11 + x = 18 做算术。
+
+**本节行数**：正文 **+44/−0**，连本段共 **+47/−0**（含与上一节之间的空行）；审计文档已入库
+**+19863/−13**，加本节工作树 **+19910/−13**。
+
+### §53.153 注释里写着"在 POSIX 上断言句柄数"，代码里没有那句断言
+§53.151 说 CI 里这一对是「被测用例恒绿 + 守它的探针被跳过」。补的时候先看见的是另一件事：
+`test_a_failed_connect_leaves_no_open_handle` 的注释原文是
+
+> On Windows an open handle makes unlink fail with WinError 32; on POSIX unlink succeeds regardless,
+> so assert on the handle count there instead of trusting a platform-specific side effect.
+
+**代码里没有那句 `assert`。** 函数体只有 Windows 的 `try: path.unlink() / except PermissionError`，
+在 POSIX 上等价于「断言 `unlink()` 成功」——而 POSIX 的 `unlink` 与有没有人握着句柄**无关**，所以那条断言
+在 runner 上恒真。这不是「测试没写断言」（它写了），是**注释描述了一条不存在于代码里的断言**——§4.2 那条
+「测试注释也是失实载体」的又一处，只是这次失实的方向是「写得比做的对」。
+
+#### 改了什么
+
+| 位置 | 改动 |
+|---|---|
+| `_open_fd_count()`（新增，模块级） | `len(os.listdir("/proc/self/fd"))`，拿不到就返回 `None`（macOS / Windows 没有 `/proc`） |
+| `test_a_failed_connect_leaves_no_open_handle` | 先取计数 → 触发失败 → 再取计数 → **POSIX 断言相等**；拿不到计数才走 Windows 的 unlink 分支 |
+| `test_the_probe_would_notice_a_leak` | **去掉 `skipTest`**，按平台选信号：POSIX 断言计数**变大**，Windows 断言 unlink 被挡；两者都不存在才跳，且理由不是「只在 Windows 失败」 |
+| 探针末尾（POSIX） | `conn.close()` 之后断言计数**回到基线**——否则一个只涨不落的计数器会让上一行的相等断言恒真 |
+
+最后一个断言是这次真正的加固点：探针只证明「能看见泄漏」还不够，还得证明「看不见正常」。
+只涨不落的计数器两边都满足「`assertGreater` 通过」，但会让被测用例的 `assertEqual` 永远成立。
+
+顺手删了本文件一个**既有**的 `import json`（F401，`git show HEAD:` 里它只出现在导入行；本轮没有引入，
+改到就一起清掉，`ruff check` 该文件从 1 条到 0 条）。
+
+#### 证据：假计数器把 POSIX 分支两条腿都走了一遍
+
+`/proc/self/fd` 在本机（Windows）读不到，所以用一个**按脚本返回序列**的假计数器替换 `_open_fd_count`，
+驱动两个用例各自的期望结果：
+
+| 场景 | 计数序列 | 期望 | 实测 |
+|---|---|---|---|
+| 被测用例：无泄漏 | 10, 10 | 过 | 过 |
+| 被测用例：泄漏 1 个 | 10, 11 | **红** | 红（`11 != 10 : connect() leaked a descriptor…`） |
+| 探针：计数器正常 | 10, 11, 10 | 过 | 过 |
+| 探针：计数器看不见 | 10, 10, 10 | **红** | 红（`10 not greater than 10 : /proc/self/fd did not see…`） |
+| 探针：计数器漂移 | 10, 11, 12 | **红** | 红（`12 != 10 : closing the connection did not restore…`） |
+
+这张表证明的是**分支逻辑能过能红**，不是 `/proc/self/fd` 的真实行为——后者本机没有。真实行为交给 CI。
+
+#### 本地门
+
+`pytest tests/test_sqlite_maintenance_coverage.py -rs`：**16 passed + 11 subtests，0 skipped**（这条路径
+在 Windows 上走 unlink 分支，与改前一致）。全量：**6880 passed, 11 skipped, 2586 subtests**，
+junit `failures="0" errors="0"` —— 与 §53.152 那轮逐字相同，因为本地跑的就是 Windows 分支。
+`ruff check app/` RC=0、`mypy app/ 334 files 0 issue`、`generate_types --check` up to date。
+
+#### 一条可证伪的预测（这次能验，因为刚加了 `-rs`）
+
+推上去之后 CI 应该满足**三条**：
+
+1. `collected 6891 items` 不变（用例总数没动）；
+2. `6874 passed, 17 skipped`（探针从跳过变成通过，一比一）；
+3. `-rs` 的 summary 里**不再出现** `tests/test_sqlite_maintenance_coverage.py` 那一行。
+
+⚠️ 只有 1、2 成立而 3 不成立，或者条数齐了但 summary 里那行还在，说明**新分支根本没执行**——绿了也不算。
+这一条预测是这次改动的真正判据，写在这里是为了在结果出来之前不能反悔。
+
+**本节行数**：正文 **+60/−0**，连本段共 **+63/−0**（含与上一节之间的空行）；审计文档已入库
+**+19863/−13**，加工作树（§53.152 +47、本节 +63）**+19973/−13**。

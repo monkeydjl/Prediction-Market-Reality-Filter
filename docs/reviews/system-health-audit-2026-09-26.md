@@ -20443,3 +20443,85 @@ reverted: sha match=True (05b4901fe38b)
 | `vitest run`（全量） | **131 files / 801 tests**，与改动前一致 |
 
 **本节行数**：正文 **+111/−0**，连本段共 **+114/−0**；审计文档已入库 **+20345/−14**（§53.159 修正提交之后），加本节 **+20459/−14**。
+
+## §53.161 给 `tests/` 接一道死代码门（F811 ∪ F841 ∪ F403）
+
+### 为什么是这三个族，而不是「把 `select` 放宽」
+
+`backend/ruff.toml` 的注释里早就写下了操作指令：「Widen it deliberately, one rule family
+at a time」。§53.147 记过 tests/ 的债务总量，但没有划出**哪几个族是干净的**。本节先把三个族
+单独量一遍（2026-11-23，`ruff 0.16.1`）：
+
+| 族 | tests/ 命中 | 为什么值得单独成门 |
+|---|---|---|
+| F841 unused-variable | **27** | 一个「赋值了但没用」的局部变量，在测试里最常见的含义是**这条测试什么都没验证** |
+| F811 redefined-while-unused | **7** | 重复导入会**静默遮蔽**前一个名字，而被遮蔽的那个可能才是唯一正确的来源 |
+| F403 star-import | **0** | 与 F811 同族危害（遮蔽）；今天为 0，接进门是为了让它**不能悄悄出现** |
+
+### 34 条的三种修法，没有一条是「为了变绿而删」
+
+每一处都先判一个问题：**这一行是不是被测行为本身？**
+
+| 类 | 处数 | 判据 | 做法 |
+|---|---|---|---|
+| `with X as name` 里的 `name` 未被使用 | **13** | 上下文管理器的**进入**才是被测行为 | 只删 `as name`，块体一字不动（`as iso` ×5、mock ×6、websocket ×1、drift ×1） |
+| `x = call(...)` 里的 `x` 未被使用 | **12** | 调用的**副作用**就是被测行为，断言在别处（DB 行 / 文件字节 / 被 patch 的 mock） | 只删赋值、**保留调用**，并加一行注释说明「返回值刻意不用」 |
+| 纯读 / 纯计算 | **2** | 既无副作用也无消费者 | 整行删除（`season = fs.match.season`、`total_calls = sum(...)`） |
+| 重复导入（F811） | **7** | 首个导入已覆盖后续全部使用 | 删后出现的重复行 |
+
+**三类判据的差别不是风格，是「删掉了什么」**：第一类保留块体，第二类保留调用，只有第三类
+才删整行。把第二类误当第三类处理，调用会一起消失——**测试仍然绿，但被测的东西没了**。
+
+两处 F811 值得单记：`test_api_predictions.py` 在文件中部又写了一整块模块级导入（138–140 行），
+其中 `datetime, timezone` 与文件头的第 14 行重复；`test_replay_degraded_modes.py` 的四个测试
+各自在函数内 `from unittest.mock import patch`，遮蔽了第 11 行的同名导入。删掉的是**多出来的
+那一份**，保留的是位置更早的那一份。
+
+### 一处「死变量掩着的缺陷」
+
+`tests/manual/manual_odds_cache_service.py` 里 `total_calls = sum(...)` 算出的数与下一行
+硬编码的 `~354` 毫无关系——死变量在这里的作用是**让硬编码看起来有出处**。本节只删死变量
+（脚本输出逐字不变），**没有**把硬编码改成 `{total_calls}`：那是行为改动，属于另一件事，
+不该混进「接门」的提交里。
+
+### 门为什么不能写进 `ruff.toml` 的 `select`
+
+`select` 是全局的。把 F811/F841 放进去会同时作用于 app/（app/ 本来就干净）和 tests/，
+而 tests/ 在**完整** select 下仍有 **261** 条（158 F401 / 52 F541 / 49 E402 / 1 E741 /
+1 F402），其中 **210** 条 ruff 可以直接修。所以这道门必须是一条**带 `--select` 的独立命令**：
+
+```yaml
+      - name: Lint backend tests for dead code
+        run: ruff check --select F811,F841,F403 tests/
+```
+
+`ruff.toml` 的注释与 CI 步骤两边都写明了这 261 条是**下一个门**，免得下一个人以为
+`ruff check app/` 就是全部。⚠️ 配置注释里原有的「318 findings as of 2026-11-21」与本节的读数
+不是同一口径（本节实测 tests/ 261 + scripts/ 19 = 280），**差出来的部分不能全归给本节**：
+本节只清掉 34 条。
+
+### 门自证会红
+
+接门不等于「跑一次没报错」。在 `tests/` 放一个探针文件：
+
+```python
+def test_probe():
+    unused = 1
+    assert True
+```
+
+→ `ruff check --select F811,F841,F403 tests/` **exit 1**，并准确指出
+`F841 Local variable 'unused' is assigned to but never used`；移走探针后 **exit 0**。
+
+### 门
+
+| 门 | 结果 |
+|---|---|
+| `ruff check app/` | All checks passed（未受影响） |
+| `ruff check --select F811,F841,F403 tests/` | **All checks passed**（改前 34 条） |
+| `pytest`（受影响的 20 个文件，两批） | 170 passed / 163 passed + 11 skipped，junit **errors=0 failures=0** |
+| `pytest tests/`（全量） | **errors=0 / failures=0**，6883 passed、11 skipped、2588 subtests（与本节改动前逐字相同：6883 / 11 / 9482） |
+| `python -m compileall tests/manual` | 通过（manual 脚本 pytest 不收集，只由 compileall 覆盖语法） |
+| `scripts/eol_audit.py` | **`line-ending damage: none`**；22 个改动文件无一处 MIXED |
+
+**本节行数**：正文 **+79/−0**，连本段共 **+82/−0**；审计文档已入库 **+20460/−15**，加本节 **+20542/−15**。

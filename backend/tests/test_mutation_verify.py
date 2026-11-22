@@ -39,7 +39,7 @@ def _every_mutation():
 
 
 class InventoryTests(unittest.TestCase):
-    def test_the_twenty_four_sets_are_present(self):
+    def test_the_twenty_five_sets_are_present(self):
         """Pins the inventory, so a whole set cannot be dropped silently.
 
         Deliberately exact and ordered: adding a set means editing this test,
@@ -78,7 +78,10 @@ class InventoryTests(unittest.TestCase):
         (53.122), where ``staging`` wrote more lines than production into the
         same file while redacting none of them -- and where the second
         ``_install_filters()`` call, the one a real boot depends on, turned out
-        to have no guard at all.
+        to have no guard at all, and once more for
+        ``type-sync-negative-control`` (53.155 / 53.156), where the CI gate only
+        ever ran ``--check`` against an up-to-date file, so the branch that makes
+        it fail had no test running on the runner at all.
         """
         self.assertEqual(
             [s.key for s in mutation_verify.SETS],
@@ -107,6 +110,7 @@ class InventoryTests(unittest.TestCase):
                 "health-payload-stability",
                 "sentry-event-sanitization",
                 "log-redaction-environment",
+                "type-sync-negative-control",
             ],
         )
 

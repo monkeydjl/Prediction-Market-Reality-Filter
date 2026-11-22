@@ -6729,8 +6729,8 @@ SETS: tuple[MutationSet, ...] = (
             Mutation(
                 label="R2 变异套数改大 1：README 与 harness 的 SETS 不一致",
                 path=_README,
-                old="24 套".encode("utf-8"),
-                new="25 套".encode("utf-8"),
+                old="25 套".encode("utf-8"),
+                new="26 套".encode("utf-8"),
                 guard_file=_README_TESTS,
                 guards=("test_mutation_inventory_matches_the_harness",),
                 note=(
@@ -6754,6 +6754,12 @@ SETS: tuple[MutationSet, ...] = (
                     "§53.122 加第 24 套（`log-redaction-environment`）第五次如约命中，"
                     "改成 `24 套`→`25 套`；五连撞之后这条针的价值已经从「提醒」变成"
                     "「校准」——它每次都在同一个位置响，说明「加套」这件事本身有唯一入口。"
+                    "§53.155 加第 25 套（`type-sync-negative-control`）第六次如约命中，"
+                    "改成 `25 套`→`26 套`。这一次的命中**不是靠触发才知道的**：改 README "
+                    "的同时就把这条针一起改了，四阶段第一关（`preflight`）仍然报 "
+                    "`readme-inventory 2: needle occurs 0x in README.md` —— 因为最初只改了 "
+                    "README 与自护清单名，漏了这里。所以「唯一入口」这句话有边界：它是"
+                    "**四条**（README 两个数、清单名、这条针），不是三处。"
                     "● 针单行、命中 **1 次**（已字节复核）；替换型编辑，删除数 0。"
                 ),
             ),
@@ -7667,6 +7673,44 @@ SETS: tuple[MutationSet, ...] = (
                     "● 针五行（`        _install_filters()` 单独一行命中 2 次，必须带上前面的"
                     "注释与 `if redact:` 才唯一）；跨行针，CRLF，命中 1 次（已字节复核）；"
                     "替换型编辑，删除数 0。"
+                ),
+            ),
+        ),
+    ),
+    MutationSet(
+        key="type-sync-negative-control",
+        title="类型同步门控的负向控制：`--check` 过期时必须返回 1（G1）",
+        rationale=(
+            "§53.155 / §53.156。`Type Sync Check` job 里唯一的真检查是 "
+            "`python -m scripts.generate_types --check`，而 `check()` 的全部意义在于**过期时"
+            "返回 1**：把那个 `return 1` 换成 `return 0`，job 在每次提交上照样绿，类型漂移从"
+            "「有人拦」变成「没人拦」，日志里只剩一行 `[INFO] … is up to date.`。全仓只有一条"
+            "用例会红（`test_check_mode_exit_1_when_stale`），而它在 backend job 里一直是被 "
+            "**skip** 掉的（那个 job 装 Python 不装 node，`_find_json2ts_cmd()` 两头都断），"
+            "所以这个变异曾经会让**五个 job 全绿**。§53.156 把 "
+            "`pytest tests/test_generate_types.py::TestGenerateTypesScript` 加进 Type Sync job"
+            "（后者本来就装 node + `npm ci`）之后，这条守卫才在 CI 里真的跑。"
+            "⚠️ 它没进 harness 的原因与进的理由是同一件事：「变异后必须变红」这个判据要求守卫"
+            "**真的执行**。在没有前端依赖的机器上它会 skip，而 harness 只看 `returncode == 0`，"
+            "于是四阶段会报 **stayed GREEN**——那是环境缺件（§53.151 那 6 条 skip 就是这么被数"
+            "出来的），不是守卫空头。在装了前端依赖的机器上跑，它才是承重的。"
+        ),
+        mutations=(
+            Mutation(
+                label="G1 `--check` 过期时返回 0：门控退化成恒绿的图章",
+                path="backend/scripts/generate_types.py",
+                old=b"        sys.stderr.writelines(diff)\n        return 1\n",
+                new=b"        sys.stderr.writelines(diff)\n        return 0  # mutated: the stale file passes\n",
+                guard_file="tests/test_generate_types.py",
+                guards=("test_check_mode_exit_1_when_stale",),
+                note=(
+                    "§53.155 实测：把过期分支的 `return 1` 换成 `return 0`（打印与 diff 都留着），"
+                    "跑整个文件是 `1 failed, 121 passed`，红的只有 "
+                    "`test_check_mode_exit_1_when_stale`——`grep -- '--check'` 也只找到它断言 "
+                    "`returncode == 1`。所以这条变异钉的是**门控的负向控制**，不是格式："
+                    "正向那条（最新时返回 0）本来就是 job 自己在做的事，不需要变异也天天在跑。"
+                    "● 针单行、该文件全 **LF**（`git ls-files --eol` 是 `w/lf`，与上面那些 CRLF "
+                    "文件不同），命中 1 次（已字节复核）；替换型编辑，删除数 0。"
                 ),
             ),
         ),

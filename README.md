@@ -147,7 +147,7 @@ cd backend && python scripts/generate_types.py
 
 质量工具链（`backend/scripts/`）：
 
-- **`mutation_verify.py`** — 字节级变异验证 harness（24 套 / 346 条变异）：对每条守卫测试做「变异后必须变红 → 还原后必须重新变绿 → sha256 逐字节一致」四阶段验证，证明测试真的锁住了行为。
+- **`mutation_verify.py`** — 字节级变异验证 harness（25 套 / 347 条变异）：对每条守卫测试做「变异后必须变红 → 还原后必须重新变绿 → sha256 逐字节一致」四阶段验证，证明测试真的锁住了行为。
 - **`eol_audit.py`** — 行尾符损坏审计（字节画像判据）。
 - **`report_probability_scale_outliers.py`** — 常驻只读探针，报告疑似 0-1 刻度错位的存量概率。
 - `backup_stores.py` / `restore_stores.py` / `verify_store_counts.py` — 备份恢复与数量核对。

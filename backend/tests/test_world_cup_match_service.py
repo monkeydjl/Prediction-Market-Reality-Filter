@@ -549,9 +549,9 @@ class SyncWorldCupFixturesTests(unittest.TestCase):
         mock_fd_parse.return_value = _make_parsed_fixture()
 
         with patch("app.services.world_cup_match_service.save_fixtures_to_db",
-                   return_value={"created": 1, "updated": 0, "skipped": 0}) as mock_save, \
+                   return_value={"created": 1, "updated": 0, "skipped": 0}), \
              patch("app.services.world_cup_match_service.get_remaining_matches",
-                   return_value=[]) as mock_remaining, \
+                   return_value=[]), \
              patch("app.services.world_cup_match_service.get_prediction_session",
                    return_value=MagicMock()), \
              patch("app.services.world_cup_match_service.close_prediction_session"):

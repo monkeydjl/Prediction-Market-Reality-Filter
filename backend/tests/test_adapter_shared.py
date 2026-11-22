@@ -90,7 +90,7 @@ class TestFetchEloAndOdds:
 
         match = _make_match()
         aliases = {"Real Madrid CF": "RealMadrid", "FC Bayern München": "BayernMunich"}
-        raw = fetch_elo_and_odds(match, elo_scope="club", team_aliases=aliases)
+        fetch_elo_and_odds(match, elo_scope="club", team_aliases=aliases)
 
         # get_club_elo called with alias names
         calls = [c.args[0] for c in mock_club.call_args_list]

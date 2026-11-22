@@ -71,7 +71,7 @@ def test_websocket_accepts_when_enabled(client, monkeypatch):
     """When enabled, the WS is accepted and the manager registers 1 subscriber."""
     monkeypatch.setattr(settings, "PHASE10_REALTIME_PUSH_ENABLED", True)
     monkeypatch.setattr(settings, "WEBSOCKET_HEARTBEAT_INTERVAL_SECONDS", 999)
-    with client.websocket_connect("/ws/matches/match-1/prices") as ws:
+    with client.websocket_connect("/ws/matches/match-1/prices"):
         manager = get_connection_manager()
         assert manager.subscriber_count("match-1") == 1
 

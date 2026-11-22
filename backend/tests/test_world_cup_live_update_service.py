@@ -221,9 +221,9 @@ class UpdateLivePredictionsTests(unittest.TestCase):
         """All three branches fire; return dict has expected keys and counts."""
 
         with \
-            patch.object(svc, "get_newly_finished_matches", return_value=["M100", "M101"]) as mock_finished, \
-            patch.object(svc, "get_matches_near_kickoff", return_value=["M010"]) as mock_pre, \
-            patch.object(svc, "get_live_matches", return_value=["M050", "M051"]) as mock_live, \
+            patch.object(svc, "get_newly_finished_matches", return_value=["M100", "M101"]), \
+            patch.object(svc, "get_matches_near_kickoff", return_value=["M010"]), \
+            patch.object(svc, "get_live_matches", return_value=["M050", "M051"]), \
             patch.object(svc, "run_prediction_pipeline", new=AsyncMock(
                 return_value={"status": "ok"})) as mock_pipeline, \
             patch("app.services.world_cup_scoring_service.score_finished_match",

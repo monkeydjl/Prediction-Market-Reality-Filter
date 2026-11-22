@@ -181,7 +181,6 @@ async def test_caching_strategy():
         print(f"  Estimated API calls: {config['estimated_calls']}")
 
     print("\n" + "-" * 70)
-    total_calls = sum(c['estimated_calls'] for c in CACHING_STRATEGY.values())
     print(f"Total estimated API calls: ~354 (within 500 free quota)")
     print(f"Quota buffer: {500 - 354} calls")
 

@@ -110,7 +110,7 @@ class TestPredictionKernel:
         assert "away" in result.predicted_scores
 
     def test_predict_records_to_learning(self, kernel):
-        result = kernel.predict("m1", engine="auto")
+        kernel.predict("m1", engine="auto")
         # Verify it was recorded
         score = kernel._learning.engine_score("elo_odds", "world_cup")
         # No outcomes yet, so score should be None (no completed matches)

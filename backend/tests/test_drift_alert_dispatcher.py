@@ -102,7 +102,7 @@ class TestDispatchDriftAlerts(unittest.TestCase):
             # patching ``app.services.drift_alert_dispatcher.loop_run_store``
             # raises AttributeError.
             with patch("app.memory.loop_run_store.recent_runs", return_value=runs), \
-                 patch("app.services.drift_alert_dispatcher.capture_message") as cap:
+                 patch("app.services.drift_alert_dispatcher.capture_message"):
                 alerts = drift_alert_dispatcher.evaluate_scheduler_alerts()
                 codes = [a["code"] for a in alerts]
                 self.assertIn("scheduler_zero_resolved", codes)

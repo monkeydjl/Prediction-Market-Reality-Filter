@@ -70,7 +70,7 @@ class TestEngineScorePersistence:
     def test_engine_score_persists_to_db(self, svc):
         """engine_score writes to KernelEngineScore table."""
         _seed_and_process(svc, 3)
-        score = svc.engine_score("elo_odds", "world_cup")
+        svc.engine_score("elo_odds", "world_cup")
 
         session = get_kernel_session()
         row = session.query(KernelEngineScore).filter_by(

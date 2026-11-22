@@ -95,7 +95,7 @@ class TestF1UnicodeSafeOutput(unittest.TestCase):
 
         with patch("sys.stdout", mock_stdout):
             try:
-                exit_code = main(["--json"])
+                main(["--json"])
             except UnicodeEncodeError:
                 self.fail("main() raised UnicodeEncodeError on GBK stdout")
 

@@ -60,7 +60,6 @@ class TestDegradedModes(unittest.TestCase):
         """open_web / sports_event sources must not get market_quality."""
         from app.replay.runner import replay_record
         from app.replay.config import ReplayConfig
-        from unittest.mock import patch
         from app.core.config import settings
         record = _record(source_type="open_web")
         with patch.multiple(settings, MARKET_QUALITY_ENABLED=True):
@@ -72,7 +71,6 @@ class TestDegradedModes(unittest.TestCase):
         """Events with empty evidence_breakdown must not get source_reliability."""
         from app.replay.runner import replay_record
         from app.replay.config import ReplayConfig
-        from unittest.mock import patch
         from app.core.config import settings
         record = _record(with_evidence=False)
         with patch.multiple(settings, SOURCE_RELIABILITY_ENABLED=True):
@@ -86,7 +84,6 @@ class TestDegradedModes(unittest.TestCase):
         error block and the pipeline should continue (market_quality still runs)."""
         from app.replay.runner import replay_record
         from app.replay.config import ReplayConfig
-        from unittest.mock import patch
         from app.core.config import settings
         record = _record()
         flags = {"DECISION_QUALITY_ENABLED": True, "MARKET_QUALITY_ENABLED": True}
@@ -106,7 +103,6 @@ class TestDegradedModes(unittest.TestCase):
         llm_degraded_blocks_act=True, final direction should downgrade to WAIT."""
         from app.replay.runner import replay_record, simulate_llm_degraded
         from app.replay.config import ReplayConfig
-        from unittest.mock import patch
         from app.core.config import settings
         record = _record()
         flags = {

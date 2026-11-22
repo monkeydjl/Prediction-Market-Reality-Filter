@@ -14,6 +14,14 @@
 # means clearing those first; the breakdown is in
 # docs/reviews/system-health-audit-2026-09-26.md section 53.147. Widen it
 # deliberately, one rule family at a time, rather than by upgrading ruff.
+#
+# One family IS already gated for tests/, from CI rather than from this file:
+# `ruff check --select F811,F841,F403 tests/` (audit 53.161). It cannot live in
+# `select` above, because that applies to app/ too -- app/ is clean under the
+# full F set, while tests/ alone still reports 261 findings under it
+# (2026-11-23: 158 F401, 52 F541, 49 E402, 1 E741, 1 F402). Those three
+# families are clean, so they get their own step rather than holding the whole
+# suite hostage to 261 style findings.
 
 line-length = 100
 

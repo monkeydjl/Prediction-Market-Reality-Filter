@@ -290,7 +290,7 @@ class TestApplyMode(unittest.TestCase):
 
             with _stores_in(Path(tmp), EVENT_STORE_FILE=str(current_file)), \
                  patch("restore_stores._check_service_running", return_value=False):
-                result = restore_from_backup(archive, apply=True)
+                restore_from_backup(archive, apply=True)
             self.assertTrue(current_file.exists())
             self.assertEqual(current_file.read_bytes(), b'{"new": true}')
 
@@ -304,7 +304,7 @@ class TestApplyMode(unittest.TestCase):
             with _stores_in(Path(tmp)), \
                  patch.object(settings, "BACKUP_ENCRYPTION_KEY", ""), \
                  patch("restore_stores._check_service_running", return_value=False):
-                result = restore_from_backup(
+                restore_from_backup(
                     archive, apply=True, target_dir=target_dir,
                 )
             restored = target_dir / "event_store.json"

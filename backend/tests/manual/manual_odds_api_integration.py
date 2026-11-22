@@ -194,7 +194,7 @@ async def run_all_tests():
         await test_fetch_match_odds()
 
     # Test 4: Team name normalization
-    norm_ok = test_team_name_normalization()
+    test_team_name_normalization()
 
     # Test 5: Integration
     await test_integration_with_elo_odds_engine()

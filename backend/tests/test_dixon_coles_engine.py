@@ -87,7 +87,6 @@ def test_missing_elo_neutral():
     engine = DixonColesEngine()
     fs = _features()
     # rebuild with None elo via object replace is hard (frozen); construct manually
-    season = fs.match.season
     match = fs.match
     fs2 = FeatureSet(
         match=match,

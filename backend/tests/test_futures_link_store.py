@@ -47,7 +47,7 @@ def test_upsert_link_updates_existing(store):
         source="kalshi", market_question="old question",
         implied_prob=0.18, verified=False,
     )
-    updated = store.upsert_link(
+    store.upsert_link(
         competition="nba", season="2024-25",
         team="LAL", contract_id="KXNBACHAMP-LAL",
         source="kalshi", market_question="new question",

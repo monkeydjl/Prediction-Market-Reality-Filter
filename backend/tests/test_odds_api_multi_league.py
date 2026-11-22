@@ -105,7 +105,7 @@ async def test_fetch_match_odds_uses_nba_sport_key():
         client.get = AsyncMock(side_effect=fake_get)
         # Reset quota so the skip-quota guard does not short-circuit.
         with patch.object(odds_api_service, "_quota_remaining", None):
-            result = await odds_api_service.fetch_match_odds(
+            await odds_api_service.fetch_match_odds(
                 "Los Angeles Lakers", "Boston Celtics", competition="nba"
             )
 

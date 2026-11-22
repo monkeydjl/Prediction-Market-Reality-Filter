@@ -77,7 +77,7 @@ def test_upsert_link_updates_existing(kernel_db):
         market_question="q", implied_prob=0.5,
     )
     # Upsert same key with new confidence/verified
-    updated = store.upsert_link(
+    store.upsert_link(
         match_id="m1", contract_id="c1", source="polymarket",
         outcome_label="YES", mapped_outcome="home_win",
         link_method="rule", link_confidence=0.95, verified=True,

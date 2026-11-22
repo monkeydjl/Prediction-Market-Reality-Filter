@@ -53,6 +53,16 @@ jobs:
           pip-audit -r requirements.txt
       - name: Lint backend
         run: ruff check app/
+      # tests/ is not clean under the full `select` in ruff.toml (261 findings
+      # as of 2026-11-23, mostly unused imports and f-strings with no
+      # placeholders), so `ruff check app/` above covers app/ only and a bare
+      # `ruff check .` fails on debt this gate never gated. These three rule
+      # families ARE clean and are the ones that hide real defects rather than
+      # style: a dead assignment is often a test that asserts nothing, and a
+      # redefinition silently shadows an import. Gated explicitly instead of
+      # widening the global select, which would need all 261 cleared first.
+      - name: Lint backend tests for dead code
+        run: ruff check --select F811,F841,F403 tests/
       - name: Compile backend
         run: python -m compileall app tests
       # mypy is clean and now BLOCKING: `app/` type-checks with zero errors

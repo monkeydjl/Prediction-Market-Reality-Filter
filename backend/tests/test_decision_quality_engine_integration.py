@@ -273,8 +273,10 @@ class TestOverlayIndependence(unittest.TestCase):
             volume=5000.0, liquidity=10000.0, **_MQ_CONFIG,
         )
 
-        # Compute dq first, then mq — output must be identical.
-        dq = build_decision_quality(
+        # Compute dq first, then mq — output must be identical. The return
+        # value is deliberately unused: computing dq is the setup, and the
+        # assertion below is that mq does not see it.
+        build_decision_quality(
             recommendation=rec,
             evidence_breakdown=_evidence_breakdown("support", count=3),
             enabled=True, **_DQ_CONFIG,

@@ -232,9 +232,9 @@ class LiveIntegrationTests(unittest.TestCase):
     def _isolated_storage():
         """Patch event store / audit / cache to temp files for one test.
 
-        Usage: ``with self._isolated_storage() as iso: ...``. Returns a small
-        object whose .store / .audit / .cache are the temp paths. Cleans up on
-        exit.
+        Usage: ``with self._isolated_storage(): ...``. Returns a small object
+        whose .store / .audit / .cache are the temp paths, for tests that need
+        to point at them. Cleans up on exit.
         """
 
         class _Isolated:
@@ -270,7 +270,7 @@ class LiveIntegrationTests(unittest.TestCase):
         print("\n[TEST] Resolve with calibration (live LLM)...")
 
         async def run():
-            with self._isolated_storage() as iso:
+            with self._isolated_storage():
                 record = await analyze_event_question(
                     event_question="Will Bitcoin reach $100,000 by end of 2026?",
                     baseline_probability=50.0,
@@ -298,7 +298,7 @@ class LiveIntegrationTests(unittest.TestCase):
         print("\n[TEST] Calibration report shape (live)...")
 
         async def run():
-            with self._isolated_storage() as iso:
+            with self._isolated_storage():
                 # Resolve one event so there is a calibration to aggregate.
                 record = await analyze_event_question(
                     event_question="Will the Fed raise rates in June?",
@@ -334,9 +334,10 @@ class LiveIntegrationTests(unittest.TestCase):
         print("\n[TEST] Auto-resolve events (live, may take 20-40s)...")
 
         async def run():
-            with self._isolated_storage() as iso:
-                # Seed one event so the store is non-empty.
-                record = await analyze_event_question(
+            with self._isolated_storage():
+                # Seed one event so the store is non-empty. The record itself
+                # is not inspected; seeding is the whole point.
+                await analyze_event_question(
                     event_question="Will Bitcoin reach $100,000 by end of 2026?",
                     baseline_probability=50.0,
                     news_context="Institutional adoption is rising.",
@@ -356,7 +357,7 @@ class LiveIntegrationTests(unittest.TestCase):
         print("\n[TEST] Discover carries semantics (live, may take 30-60s)...")
 
         async def run():
-            with self._isolated_storage() as iso:
+            with self._isolated_storage():
                 result = await discover_events(limit=2, use_cache=False)
                 return result
 
@@ -384,7 +385,7 @@ class LiveIntegrationTests(unittest.TestCase):
         print(f"\n[TEST] Cross-validation with {settings.CROSS_VALIDATION_MODEL} (live)...")
 
         async def run():
-            with self._isolated_storage() as iso:
+            with self._isolated_storage():
                 record = await analyze_event_question(
                     event_question="Will the ECB cut rates this year?",
                     baseline_probability=50.0,

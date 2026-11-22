@@ -137,7 +137,6 @@ class TestAnUnreadablePredictionIsNotReportedAsNone:
 
 from unittest.mock import MagicMock, patch
 from fastapi.testclient import TestClient
-from datetime import datetime, timezone
 
 from app.kernel.protocols import ScheduleFilter, RawMatchData
 from app.kernel.domain import (
@@ -279,7 +278,6 @@ class TestListMatches:
 
     def test_list_matches_empty_when_no_fixtures(self, api_client):
         """Empty adapter → empty list."""
-        from app.kernel.protocols import ScheduleFilter
         empty_adapter = MultiSportFakeAdapter()
         empty_adapter._matches = []
         _patch_kernel_adapter(api_client, empty_adapter)

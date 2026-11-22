@@ -33,6 +33,8 @@ const match: MatchFixtureRecord = {
 // projection, not the `/matches` payload -- but the nested blobs are the
 // generated ones, so they are spelled out in full (audit 53.76).
 const prediction: CompareOnlyPrediction = {
+  // PredictionTriggerResponse.status is required ("ok" | "skipped").
+  status: "ok",
   predicted_score: { home: 2, away: 1 },
   outcome_probabilities: {
     home_win: 0.6,

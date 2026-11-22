@@ -23,7 +23,7 @@ vi.mock("next/link", () => ({
 function baseReport(overrides: Partial<DecisionReport> = {}): DecisionReport {
   return {
     event_id: "evt-1",
-    event: { title: "Test event", summary: "s" },
+    event: { title: "Test event", title_zh: "测试事件", summary: "s" },
     probability: { estimated: 60, baseline: 50, change: 10, direction: "up" },
     market_view: {
       market_probability: 50,
@@ -33,7 +33,9 @@ function baseReport(overrides: Partial<DecisionReport> = {}): DecisionReport {
     },
     edge: { raw: 12, adjusted: 8, trust: 0.7 },
     diagnosis: {
-      qualified: true,
+      // DecisionDiagnosis.qualified is SQLite's raw 0/1/NULL (int | None), not a
+      // bool -- the component only tests truthiness, so 1/0 is the honest fixture.
+      qualified: 1,
       segment_n: 20,
       segment_min_samples: 10,
       segment_skill: 0.25,
@@ -118,7 +120,7 @@ describe("DecisionCard", () => {
             calibration_status: "uncalibrated_provisional",
           },
           diagnosis: {
-            qualified: false,
+            qualified: 0,
             segment_n: 2,
             segment_min_samples: 10,
             segment_skill: null,

@@ -18,6 +18,7 @@ function mockStream(
     updates: [],
     isConnected: false,
     error: null,
+    disabled: false,
     ...overrides,
   };
 }
@@ -53,17 +54,16 @@ describe("RealtimePriceTable", () => {
         updates: [
           {
             type: "market_snapshot",
+            match_id: "m1",
+            link_id: 1,
             implied_prob: 0.6,
             price: 0.6,
-            outcome: "home_win",
-            decimal_odds: 1.67,
-            bookmaker: "polymarket",
             captured_at: "2026-07-17T10:00:00Z",
           },
           {
             type: "odds_snapshot",
+            match_id: "m1",
             implied_prob: 0.65,
-            price: 0.65,
             outcome: "home_win",
             decimal_odds: 1.54,
             bookmaker: "kambi",
@@ -88,8 +88,13 @@ describe("RealtimePriceTable", () => {
     // 验证具体内容渲染
     expect(screen.getByText("65.0%")).toBeInTheDocument();
     expect(screen.getByText("60.0%")).toBeInTheDocument();
-    // 两行 outcome 都是 home_win，应渲染两次
-    expect(screen.getAllByText("home_win")).toHaveLength(2);
+    // Only the odds row can carry an outcome: the producer's market_snapshot
+    // payload is {type, match_id, link_id, implied_prob, price, captured_at}
+    // (backend/app/core/scheduler.py) and the union forbids the key, so the
+    // market row renders the "-" fallback. Asserting two rows used to pass
+    // only because the fixture fed a field the stream never sends.
+    expect(screen.getAllByText("home_win")).toHaveLength(1);
+    expect(rows[2].textContent).toContain("-");
   });
 
   it("不同序列之间不比较（type/bookmaker 隔离）", () => {
@@ -99,17 +104,16 @@ describe("RealtimePriceTable", () => {
         updates: [
           {
             type: "market_snapshot",
+            match_id: "m1",
+            link_id: 1,
             implied_prob: 0.6,
             price: 0.6,
-            outcome: "home_win",
-            decimal_odds: 1.67,
-            bookmaker: "polymarket",
             captured_at: "2026-07-17T10:00:00Z",
           },
           {
             type: "odds_snapshot",
+            match_id: "m1",
             implied_prob: 0.65,
-            price: 0.65,
             outcome: "home_win",
             decimal_odds: 1.54,
             bookmaker: "kambi",
@@ -136,8 +140,8 @@ describe("RealtimePriceTable", () => {
         updates: [
           {
             type: "odds_snapshot",
+            match_id: "m1",
             implied_prob: 0.6,
-            price: 0.6,
             outcome: "home_win",
             decimal_odds: 1.67,
             bookmaker: "kambi",
@@ -145,8 +149,8 @@ describe("RealtimePriceTable", () => {
           },
           {
             type: "odds_snapshot",
+            match_id: "m1",
             implied_prob: 0.65,
-            price: 0.65,
             outcome: "home_win",
             decimal_odds: 1.54,
             bookmaker: "kambi",
@@ -173,8 +177,8 @@ describe("RealtimePriceTable", () => {
         updates: [
           {
             type: "odds_snapshot",
+            match_id: "m1",
             implied_prob: 0.65,
-            price: 0.65,
             outcome: "home_win",
             decimal_odds: 1.54,
             bookmaker: "kambi",
@@ -182,8 +186,8 @@ describe("RealtimePriceTable", () => {
           },
           {
             type: "odds_snapshot",
+            match_id: "m1",
             implied_prob: 0.6,
-            price: 0.6,
             outcome: "home_win",
             decimal_odds: 1.67,
             bookmaker: "kambi",
@@ -208,8 +212,8 @@ describe("RealtimePriceTable", () => {
         updates: [
           {
             type: "odds_snapshot",
+            match_id: "m1",
             implied_prob: 0.6,
-            price: 0.6,
             outcome: "home_win",
             decimal_odds: 1.67,
             bookmaker: "kambi",
@@ -217,8 +221,8 @@ describe("RealtimePriceTable", () => {
           },
           {
             type: "odds_snapshot",
+            match_id: "m1",
             implied_prob: 0.603,
-            price: 0.603,
             outcome: "home_win",
             decimal_odds: 1.66,
             bookmaker: "kambi",

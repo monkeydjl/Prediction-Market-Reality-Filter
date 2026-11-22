@@ -486,7 +486,7 @@ describe("AnalyticsDashboard", () => {
         disconnect() {}
       },
     );
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => ({
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => ({
       ok: true,
       json: async () => responseFor(String(input)),
     }));
@@ -722,7 +722,7 @@ describe("AnalyticsDashboard", () => {
         disconnect() {}
       },
     );
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => ({
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => ({
       ok: true,
       json: async () => responseFor(String(input)),
     }));
@@ -790,7 +790,7 @@ describe("AnalyticsDashboard", () => {
         disconnect() {}
       },
     );
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
       const url = String(input);
       if (url.includes("/accuracy-stats")) {
         return {
@@ -825,7 +825,7 @@ describe("AnalyticsDashboard", () => {
         disconnect() {}
       },
     );
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
       const url = String(input);
       if (url.includes("/odds-cache-stats")) {
         return {

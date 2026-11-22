@@ -12,7 +12,7 @@ describe("Sparkline direction colors", () => {
     );
     const line = container.querySelector("polyline");
     expect(line).not.toBeNull();
-    expect(line.getAttribute("stroke")).toBe("var(--color-up)");
+    expect(line!.getAttribute("stroke")).toBe("var(--color-up)");
     expect(container.querySelector("svg")?.getAttribute("aria-label")).toContain("整体上行");
   });
 
@@ -22,7 +22,7 @@ describe("Sparkline direction colors", () => {
     );
     const line = container.querySelector("polyline");
     expect(line).not.toBeNull();
-    expect(line.getAttribute("stroke")).toBe("var(--color-down)");
+    expect(line!.getAttribute("stroke")).toBe("var(--color-down)");
     expect(container.querySelector("svg")?.getAttribute("aria-label")).toContain("整体下行");
   });
 
@@ -32,7 +32,7 @@ describe("Sparkline direction colors", () => {
     );
     const line = container.querySelector("polyline");
     expect(line).not.toBeNull();
-    expect(line.getAttribute("stroke")).toBe("var(--color-muted-foreground)");
+    expect(line!.getAttribute("stroke")).toBe("var(--color-muted-foreground)");
     expect(container.querySelector("svg")?.getAttribute("aria-label")).toContain("整体平稳");
   });
 });

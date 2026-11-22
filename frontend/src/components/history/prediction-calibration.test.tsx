@@ -13,6 +13,10 @@ describe("PredictionCalibrationCard", () => {
       realized_edge: null,
       directional_hit_rate: null,
       by_category: {},
+      // The response always carries the segment block; an empty map is the
+      // "no segment has data" state, which is what these three cases are about.
+      segment_min_samples: 10,
+      segments: {},
     };
     render(<PredictionCalibrationCard data={data} />);
 
@@ -30,6 +34,10 @@ describe("PredictionCalibrationCard", () => {
       realized_edge: 4.5,
       directional_hit_rate: 0.667,
       by_category: {},
+      // The response always carries the segment block; an empty map is the
+      // "no segment has data" state, which is what these three cases are about.
+      segment_min_samples: 10,
+      segments: {},
     };
     render(<PredictionCalibrationCard data={data} />);
 
@@ -48,6 +56,10 @@ describe("PredictionCalibrationCard", () => {
       realized_edge: 1,
       directional_hit_rate: 0.5,
       by_category: {},
+      // The response always carries the segment block; an empty map is the
+      // "no segment has data" state, which is what these three cases are about.
+      segment_min_samples: 10,
+      segments: {},
     };
     render(<PredictionCalibrationCard data={data} />);
 

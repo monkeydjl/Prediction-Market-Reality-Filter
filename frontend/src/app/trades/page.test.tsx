@@ -55,6 +55,8 @@ const closedTrade: SimTrade = {
   pnl_pct: 9.14,
   is_win: 1,
   status: "closed",
+  created_at: "2026-07-05T02:41:27.000Z",
+  updated_at: "2026-07-05T03:00:00.000Z",
 };
 
 const openTrade: SimTrade = {

@@ -25,7 +25,6 @@ afterEach(() => {
   delete process.env.NEXT_PUBLIC_API_BASE;
   delete process.env.NEXT_PUBLIC_WS_ORIGIN;
   delete process.env.NEXT_PUBLIC_API_ORIGIN;
-  // @ts-expect-error test shim
   globalThis.window = ORIGINAL_WINDOW;
 });
 

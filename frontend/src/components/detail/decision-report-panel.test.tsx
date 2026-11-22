@@ -29,17 +29,19 @@ vi.mock("@/lib/api", () => ({
 
 const report: DecisionReport = {
   event_id: "evt-1",
-  event: { title: "Will the policy pass?", summary: "" },
+  event: { title: "Will the policy pass?", title_zh: "政策会通过吗？", summary: "" },
   probability: { estimated: 60, baseline: 50, change: 10, direction: "up" },
   market_view: {
     market_probability: 50,
     platform: "manifold",
-    liquidity: null,
-    volume: null,
+    // DecisionMarketView.liquidity/volume are NOT NULL columns -- the type doc
+    // says so explicitly, so a null fixture described a row that cannot exist.
+    liquidity: 1000,
+    volume: 2000,
   },
   edge: { raw: 10, adjusted: 8, trust: 0.7 },
   diagnosis: {
-    qualified: true,
+    qualified: 1,
     segment_n: 30,
     segment_min_samples: null,
     segment_skill: 0.6,
@@ -47,7 +49,7 @@ const report: DecisionReport = {
     reason: "edge 经流动性调整后仍显著",
   },
   confidence: { level: "medium", score: 0.6, confidence: 0.6 },
-  recommendation: { decision: "act", action: "押 YES", calibration_status: null },
+  recommendation: { decision: "act", action: "押 YES", calibration_status: "calibrated" },
   risk: { level: "medium", flags: [] },
   category: "politics",
   status: "open",
@@ -83,7 +85,9 @@ describe("DecisionReportPanel", () => {
     render(<DecisionReportPanel eventId="evt-1" />);
 
     await waitFor(() =>
-      expect(screen.getByText("Will the policy pass?")).toBeInTheDocument(),
+      // title_zh wins whenever it is present (a real DecisionEventRef always has
+      // it), so this asserts what the panel actually renders.
+      expect(screen.getByText("政策会通过吗？")).toBeInTheDocument(),
     );
     // DecisionCard 显示的决策标签
     expect(screen.getByText("建议行动")).toBeInTheDocument();

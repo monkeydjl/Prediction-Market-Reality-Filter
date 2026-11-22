@@ -41,6 +41,8 @@ const predCal: PredictionCalibration = {
       n: 30,
       brier_score: 0.12,
       skill_score: 0.4,
+      // Required by CalibrationSegment; null means "no market baseline yet".
+      market_relative_skill: 0.25,
       grade: "GOOD",
       market_brier_score: 0.2,
       qualified: true,

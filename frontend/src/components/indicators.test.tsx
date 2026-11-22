@@ -16,7 +16,9 @@ describe("DeltaPill direction colors", () => {
     expect(pill).toHaveClass("bg-up/15");
     expect(pill).not.toHaveClass("text-pos");
     expect(pill).not.toHaveClass("bg-pos/15");
-    expect(pill.querySelector(".lucide-arrow-up-right")).not.toBeNull();
+    // `!` only because expect().not.toBeNull() is a runtime guard, not a type
+    // guard — TS keeps `Element | null` here (the file is type-checked now).
+    expect(pill!.querySelector(".lucide-arrow-up-right")).not.toBeNull();
   });
 
   it("renders falling deltas green (down tokens, not neg)", () => {
@@ -27,7 +29,7 @@ describe("DeltaPill direction colors", () => {
     expect(pill).toHaveClass("bg-down/15");
     expect(pill).not.toHaveClass("text-neg");
     expect(pill).not.toHaveClass("bg-neg/15");
-    expect(pill.querySelector(".lucide-arrow-down-right")).not.toBeNull();
+    expect(pill!.querySelector(".lucide-arrow-down-right")).not.toBeNull();
   });
 
   it("renders flat deltas neutral (no direction tokens)", () => {

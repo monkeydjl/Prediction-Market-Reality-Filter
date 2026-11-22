@@ -11,10 +11,9 @@ vi.mock("@/lib/api", () => ({
   },
 }));
 
-const record: EventRecord = {
-  event_id: "evt-1",
-  event_title: "Will the event happen?",
-};
+// The panel reads only these two fields; a full EventRecord would need eight
+// unrelated keys, so the cast states the narrowness instead of faking them.
+const record = { event_id: "evt-1", event_title: "Will the event happen?" } as unknown as EventRecord;
 
 describe("ManualResolvePanel", () => {
   beforeEach(() => {

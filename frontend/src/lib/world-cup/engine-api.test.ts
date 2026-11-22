@@ -134,16 +134,18 @@ describe("streamBatchSwitchEngine", () => {
   });
 
   it("sends the operator key on the stream request, which EventSource could not", async () => {
-    const fetchMock = vi.fn(async () => sseResponse([]));
+    // Mirror fetch's real signature: a zero-arg mock types mock.calls as `[]`,
+    // so every call site had to cast its way past an empty tuple.
+    const fetchMock = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) => sseResponse([]));
     vi.stubGlobal("fetch", fetchMock);
 
     await streamBatchSwitchEngine("integrated", "live", {});
 
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe(
       "/api/world-cup/predictions/batch-switch-engine-stream?engine=integrated&status_filter=live",
     );
-    expect(init.headers).toMatchObject({
+    expect(init?.headers).toMatchObject({
       "X-API-Key": "test-key",
       Accept: "text/event-stream",
     });
@@ -156,7 +158,10 @@ describe("engineApi", () => {
   });
 
   it("builds the batch-optimize query and omits an empty engine filter", async () => {
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ total: 3 }), { status: 200 }));
+    const fetchMock = vi.fn(
+      async (_url: RequestInfo | URL, _init?: RequestInit) =>
+        new Response(JSON.stringify({ total: 3 }), { status: 200 }),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     await engineApi.batchOptimize("", 25);
@@ -170,7 +175,8 @@ describe("engineApi", () => {
 
   it("requests auto-tune in background mode so the console gets a task id", async () => {
     const fetchMock = vi.fn(
-      async () => new Response(JSON.stringify({ status: "accepted", task_id: "t9" }), { status: 200 }),
+      async (_url: RequestInfo | URL, _init?: RequestInit) =>
+        new Response(JSON.stringify({ status: "accepted", task_id: "t9" }), { status: 200 }),
     );
     vi.stubGlobal("fetch", fetchMock);
 
@@ -179,7 +185,7 @@ describe("engineApi", () => {
     expect(fetchMock.mock.calls[0][0]).toBe(
       "/api/world-cup/predictions/auto-tune/elo_odds?background=true",
     );
-    expect((fetchMock.mock.calls[0][1] as RequestInit).method).toBe("POST");
+    expect(fetchMock.mock.calls[0][1]?.method).toBe("POST");
     expect(result.task_id).toBe("t9");
   });
 });

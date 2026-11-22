@@ -2,6 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { eventsApi } from "@/lib/api";
+import type { TrackedEntry } from "@/lib/types";
 import { TrackingDecision } from "./tracking-decision";
 
 vi.mock("@/lib/api", () => ({
@@ -16,7 +17,9 @@ describe("TrackingDecision", () => {
   });
 
   it("exposes selected status and priority as pressed buttons", async () => {
-    vi.mocked(eventsApi.setTracking).mockResolvedValue({});
+    // setTracking's return value is unused here: the assertion is on aria-pressed
+    // after the click, so an empty TrackedEntry is the honest stand-in.
+    vi.mocked(eventsApi.setTracking).mockResolvedValue({} as unknown as TrackedEntry);
     render(<TrackingDecision id="evt-1" status="watching" priority="medium" />);
 
     expect(screen.getByRole("button", { name: "观察中" })).toHaveAttribute("aria-pressed", "true");

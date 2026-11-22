@@ -117,6 +117,13 @@ jobs:
           npx audit-ci --config audit-ci.jsonc
       - name: Typecheck frontend
         run: npm run typecheck
+      # tsconfig.json excludes **/*.test.ts(x) so `next build` does not compile
+      # them, and vitest transpiles with esbuild (no type checking at all). The
+      # result: an obvious type error inside a test file used to leave every
+      # gate green (§53.159). tsconfig.test.json is the same config minus that
+      # exclude, so this step type-checks the tests and the source together.
+      - name: Typecheck frontend tests
+        run: npm run typecheck:tests
       - name: Run frontend tests
         run: npm test
       - name: Lint frontend

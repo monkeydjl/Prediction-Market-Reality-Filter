@@ -21,12 +21,13 @@ const api = vi.mocked(eventsApi);
 function decision(overrides: Partial<DecisionReport> = {}): DecisionReport {
   return {
     event_id: "event-1",
-    event: { title: "Duplicate market event", summary: "summary" },
+    event: { title: "Duplicate market event", title_zh: "重复市场事件", summary: "summary" },
     probability: { estimated: 0.62, baseline: 0.5, change: 0.12, direction: "up" },
     market_view: { market_probability: 0.5, platform: "polymarket", liquidity: 1000, volume: 5000 },
     edge: { raw: 12, adjusted: 8, trust: 0.7 },
     diagnosis: {
-      qualified: true,
+      // int | None (SQLite raw 0/1/NULL), not bool -- see DecisionDiagnosis.
+      qualified: 1,
       segment_n: 20,
       segment_min_samples: 10,
       segment_skill: 0.2,
@@ -78,15 +79,22 @@ describe("DecisionsPage", () => {
   });
 
   it("does not render the fresh-edge section on the all decision filter", async () => {
-    api.openDecisions.mockResolvedValue({ count: 1, decisions: [decision()] });
-    api.freshEdges.mockResolvedValue({ count: 1, edges: [freshEdge()] });
+    api.openDecisions.mockResolvedValue({
+      count: 1, total: 1, limit: 20, offset: 0, decision_totals: {}, decisions: [decision()],
+    });
+    api.freshEdges.mockResolvedValue({
+      count: 1, total: 1, limit: 20, offset: 0, classification: "all", classification_totals: {},
+      edges: [freshEdge()],
+    });
 
     render(<DecisionsPage />);
 
     await waitFor(() => expect(api.freshEdges).toHaveBeenCalled());
 
     expect(screen.queryByText("?? Edge")).not.toBeInTheDocument();
-    expect(screen.getAllByText("Duplicate market event")).toHaveLength(1);
+    // DecisionEventRef.title_zh is required, so a real record always renders the
+    // Chinese title -- the English `title` is the fallback, not what users see.
+    expect(screen.getAllByText("重复市场事件")).toHaveLength(1);
   });
 
   it("paginates decision events and resets to page one when filter changes", async () => {
@@ -98,21 +106,24 @@ describe("DecisionsPage", () => {
       offset,
       decision_totals: { act: 3, provisional_act: 4, watch: 4 },
       decisions: offset === 0
-        ? [decision({ event_id: "event-page-1", event: { title: "Decision page 1", summary: "summary" } })]
-        : [decision({ event_id: "event-page-2", event: { title: "Decision page 2", summary: "summary" } })],
+        ? [decision({ event_id: "event-page-1", event: { title: "Decision page 1", title_zh: "决策页 1", summary: "summary" } })]
+        : [decision({ event_id: "event-page-2", event: { title: "Decision page 2", title_zh: "决策页 2", summary: "summary" } })],
     }));
-    api.freshEdges.mockResolvedValue({ count: 0, edges: [] });
+    api.freshEdges.mockResolvedValue({
+      count: 0, total: 0, limit: 20, offset: 0, classification: "all", classification_totals: {},
+      edges: [],
+    });
 
     render(<DecisionsPage />);
 
-    await screen.findByText("Decision page 1");
+    await screen.findByText("决策页 1");
     expect(api.openDecisions).toHaveBeenCalledWith(undefined, 10, 0);
     expect(screen.getByText("\u7b2c 1 / 2 \u9875 \u00b7 \u5171 11 \u6761")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /\u4e0b\u4e00\u9875/ }));
 
     await waitFor(() => expect(api.openDecisions).toHaveBeenLastCalledWith(undefined, 10, 10));
-    expect(await screen.findByText("Decision page 2")).toBeInTheDocument();
+    expect(await screen.findByText("决策页 2")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /\u5efa\u8bae\u884c\u52a8/ }));
 

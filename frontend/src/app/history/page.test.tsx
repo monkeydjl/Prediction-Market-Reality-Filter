@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import HistoryPage from "./page";
 import { eventsApi } from "@/lib/api";
+import type { EventRecord, TrackedEntry } from "@/lib/types";
 
 vi.mock("@/components/history/accuracy-summary", () => ({
   AccuracySummary: () => <section data-testid="accuracy-summary">accuracy summary</section>,
@@ -40,25 +41,30 @@ vi.mock("@/lib/api", async (importOriginal) => {
 
 const api = vi.mocked(eventsApi);
 
-function resolvedEntry(index: number) {
+function resolvedEntry(index: number): TrackedEntry {
   return {
+    event_id: `resolved-${index}`,
+    // The page reads event_title / probability / calibration / outcome here; the
+    // rest of EventRecord is not exercised, so the record is cast rather than
+    // padded with keys no assertion looks at.
     record: {
       event_id: `resolved-${index}`,
       event_title: `Resolved event ${index}`,
       probability: { estimated: 60 },
       calibration: { estimated_probability: 60, brier_score: 0.16, grade: "good" },
       outcome: { actual_outcome: 100, resolved_at: "2026-07-05T00:00:00Z" },
-    },
+    } as unknown as EventRecord,
   };
 }
 
-function openEntry(index: number) {
+function openEntry(index: number): TrackedEntry {
   return {
+    event_id: `open-${index}`,
     record: {
       event_id: `open-${index}`,
       event_title: `Open event ${index}`,
       probability: { estimated: 40 },
-    },
+    } as unknown as EventRecord,
   };
 }
 
@@ -75,6 +81,8 @@ describe("HistoryPage", () => {
       overall: { brier_score: 0.2, skill_score: 0.1, grade: "ok", n: 1 },
       by_source: {},
       by_base_rate_category: {},
+      // The route always reports how much of the corpus had a category.
+      category_coverage: { total: 1, classified: 1, unknown: 0, unknown_rate: 0 },
     });
     api.predictionCalibration.mockResolvedValue({
       n: 1,
@@ -100,7 +108,9 @@ describe("HistoryPage", () => {
       limit: 10,
       offset: 0,
     });
-    api.recentPredictions.mockResolvedValue({ predictions: [] });
+    api.recentPredictions.mockResolvedValue({
+      predictions: [], count: 0, total: 0, limit: 10, offset: 0,
+    });
   });
 
   it("switches between recent predictions and resolved reviews instead of rendering both", async () => {

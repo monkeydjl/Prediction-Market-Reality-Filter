@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { adaptEntry, adaptRecord, sparkSeries, trendOf } from "./adapt";
-import type { EventRecord } from "./types";
+import type { EventAuditSnapshot, EventRecord } from "./types";
 
 describe("adaptRecord", () => {
   it("prefers user tracking fields over inferred defaults", () => {
@@ -9,9 +9,24 @@ describe("adaptRecord", () => {
       event_title: "Will rates fall?",
       event_title_zh: "利率会下降吗？",
       event_summary: "summary",
-      probability: { baseline: 45, estimated: 58, change: 13 },
-      credibility: { confidence: 0.7 },
-      impact: { level: "LOW" },
+      probability: { baseline: 45, estimated: 58, change: 13, direction: "up" },
+      credibility: {
+        score: 70, level: "medium", confidence: 0.7,
+        news_quality: 0.8, evidence_strength: 0.6, source_count: 3,
+      },
+      impact: { score: 30, level: "LOW", drivers: [] },
+      risk: { level: "low" },
+      evidence: {
+        direction: "support", strength: 0.6,
+        conflict: 0, freshness: 0.8, resolution_relevance: 0.7,
+      },
+      source: {},
+      intelligence_report: {
+        headline: "",
+        why_it_matters: "",
+        probability_assessment: "",
+        recommended_action: "",
+      },
       tracking: { status: "tracking", priority: "high" },
       value_score: 42,
     };
@@ -27,10 +42,12 @@ describe("adaptRecord", () => {
   });
 
   it("falls back safely when optional backend fields are missing", () => {
+    // Deliberately partial: the point of this case is a record that omits every
+    // optional field, so it is cast rather than filled in.
     const view = adaptRecord({
       event_id: "evt-2",
       event_title: "Minimal event",
-    });
+    } as unknown as EventRecord);
 
     expect(view.currentProbability).toBe(0);
     expect(view.priority).toBe("medium");
@@ -193,10 +210,15 @@ describe("trendOf", () => {
 
 describe("sparkSeries", () => {
   it("keeps real zero estimates and drops invalid values", () => {
-    expect(sparkSeries([{ estimated: 10 }, {}, { estimated: 0 }, { estimated: 35 }, { estimated: "bad" }])).toEqual([
-      10,
-      0,
-      35,
-    ]);
+    // The inputs are invalid on purpose ({} has no estimate, "bad" is a string,
+    // and the last entry has none at all): the cast is the test's whole subject.
+    const malformed = [
+      { estimated: 10 },
+      {},
+      { estimated: 0 },
+      { estimated: 35 },
+      { estimated: "bad" },
+    ] as unknown as EventAuditSnapshot[];
+    expect(sparkSeries(malformed)).toEqual([10, 0, 35]);
   });
 });

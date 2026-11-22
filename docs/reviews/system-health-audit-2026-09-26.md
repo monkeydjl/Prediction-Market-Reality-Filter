@@ -20230,3 +20230,102 @@ readme-inventory 2: needle occurs 0x in README.md
 
 **本节行数**：正文 **+55/−0**，连本段共 **+58/−0**（含与上一节之间的空行）；审计文档已入库
 **+20141/−13**，加工作树（§53.157 +46、本节 +58）**+20245/−13**。
+
+### §53.159 前端 131 个测试文件从来没被任何门做过类型检查（2026-11-22）
+
+`frontend/tsconfig.json` 的 `exclude` 里有 `**/*.test.ts` / `**/*.test.tsx`，而 `npm run typecheck` 就是
+`tsc --noEmit`（改动前全仓**只有这一份** tsconfig）；`vitest run` 走 esbuild **只转译不查类型**；ESLint 没有
+type-aware 规则。三件事叠起来的意思是：**在测试文件里写一个类型错误，CI 的五道门全绿。**
+
+#### 先让现状自己说话
+
+往 `src/lib/ui-classes.test.ts` 追加一行，再跑三道门：
+
+```
+const __probe: number = "a string is not a number";
+```
+
+| 门 | 结果 |
+|---|---|
+| `npm run typecheck` | **rc=0** |
+| `npm run lint` | **rc=0** |
+| `npx vitest run <该文件>` | **4 passed** |
+
+探针按字节还原，sha256 前后一致。这一步放在改任何东西之前，因为它决定后面「门到底补上没有」有没有对照物。
+
+#### 数字先量准（含一次自我更正）
+
+第一遍我用 `ls src/**/*.test.ts*` 数出 **16**，并据此在对上下文中报了 16。那是 bash 没开 `globstar` 的结果：
+`**` 退化成一层。改用 `find src -name "*.test.ts" -o -name "*.test.tsx"` 得到 **131**——**差 8 倍**。
+这个数字写在最前面，因为它是本节全部结论的分母。
+
+新建 `frontend/tsconfig.test.json`（`extends` 主配置，只改 include/exclude），立刻量出存量：
+
+```
+tsc -p tsconfig.test.json --noEmit   →  65 errors / 18 files
+```
+
+按规则分：TS2322 22、TS2741 8、TS2345 8、TS2739 8、TS18047 5、TS2493 5、TS2740 4、TS2352 2，
+TS2353 / TS2339 / TS2578 各 1。**131 个文件里 113 个是干净的**，所以这不是「补个配置就行」，是一次有边界的还债。
+
+#### 65 条里：夹具漂移、测试意图、真缺陷各是什么
+
+**（1）`realtimepricetable`：那句断言在生产里不可能成立。** 夹具给 `market_snapshot` 塞了
+`outcome / decimal_odds / bookmaker`，而 `PriceUpdate` 是判别联合，这三个键在 `market_snapshot` 分支上被声明成
+`undefined`。于是去问生产者：`app/core/scheduler.py:1326` 的广播载荷逐字是
+`{type, match_id, link_id, implied_prob, price, captured_at}`——**不发 `outcome`**。所以
+`expect(getAllByText("home_win")).toHaveLength(2)` 断言的是「两行都有 outcome」，而市场行永远渲染 `-`
+（组件写的是 `{u.outcome ?? "-"}`）。改成 1 次 + 断言市场行含 `-`，该文件仍 7 passed。
+
+**（2）`title_zh`：补上必填字段，界面就换语言了。** `DecisionEventRef.title_zh` 是必填，夹具里没有。补上之后
+三处 `getByText("… english …")` 立刻失败——因为 `title_zh` 优先，界面显示的是中文。**那三条断言原来靠「夹具缺
+一个必填字段」才过**。改成断言中文标题，并在注释里写明这是真实渲染。
+
+**（3）`domain-reliability`：把请求参数当成了响应字段。** 夹具写着 `min_samples: 5`，而路由返回的键是
+`domains / total_domains / total_rows / total_samples / graded_samples / brier_mean / brier_skill_score /
+prior_metric`——`min_samples` 是**查询参数**，永远不会出现在响应里。顺带发现手写的
+`DomainReliabilityResponse`（`src/lib/api.ts:675`）只声明了 `domains / total_domains / total_rows`，
+**8 个键里少了 5 个**：这正是紧邻它那段注释描述过的同一类债（审计 53.58 把 recent-predictions 的 18/35 键本地副本
+换成生成物）。**本节不擅自加键**——那是契约取值——只把夹具里的伪字段删掉，并在注释里指明它是请求参数。
+
+**（4）同名不同型：`qualified`。** `DecisionDiagnosis.qualified` 是 `int | None`（后端注释原话
+「SQLite's raw 0/1/NULL, hence `int | None` and not `bool`」），而 `CalibrationSegment.qualified` 是 `bool`。
+夹具里两处都写 `true`。只改前者（`1` / `0`：消费侧判的是 truthiness，行为不变），后者保持布尔——因为
+`segment-compare-panel.tsx:316` 有一处 `r.qualified === true` 的**严格比较**，把布尔改成数字就是真 bug。
+
+**（5）mock 手抄了一个空签名。** `vi.fn(async () => …)` 让 `mock.calls[0]` 被推断成空元组 `[]`，于是每个调用点
+都得 `as [string, RequestInit]` 往外爬。`engine-api.test.ts` 3 处、`analytics-dashboard.test.tsx` 4 处，全部改成
+`(_url: RequestInfo | URL, _init?: RequestInit)`——**逐字镜像 `fetch` 的真实签名**（§4.2 那条「fake 逐字镜像真
+签名」）。改完之后 `[1]?.body` 这类读法自然成立，两处 cast 跟着删掉。
+
+其余是机械的，但各有各的坑：`closest()` 之后 `expect(...).not.toBeNull()` **不收窄类型**，用 `?.` 也不行——
+`expect(undefined).not.toBeNull()` 会过，那是把断言变弱——所以用 `!`，运行时守卫仍由那行 expect 负责；
+`mockStream` 少了必填的 `disabled`；`SimTrade` 少了 `created_at / updated_at`；`CalibrationSegment` 少了
+`market_relative_skill`；`PredictionTriggerResponse.status` 必填。
+
+反方向的两处**故意喂非法输入**的用例（`adaptRecord({event_id, event_title})` 测兜底、`sparkSeries([{}, {estimated:"bad"}])`
+测丢弃）**不补字段**——补了就把测试的题目改了——改成显式 `as unknown as T` 加一行说明「这是本用例的题目」。
+
+#### 门接在哪
+
+| 位置 | 改动 |
+|---|---|
+| `frontend/tsconfig.test.json` | 新增：`extends` 主配置，`include` 收 `**/*.ts(x)`，`exclude` 只留 `node_modules` |
+| `frontend/package.json` | 新增 `typecheck:tests` = `tsc -p tsconfig.test.json --noEmit` |
+| `.github/workflows/ci.yml` | `frontend-tests` 在 `Typecheck frontend` 与 `Run frontend tests` 之间加一步 |
+
+#### 复跑同一个探针
+
+| 门 | 改动前 | 改动后 |
+|---|---|---|
+| `npm run typecheck` | rc=0 | **rc=0**（测试仍被 exclude，这是对的，它查的是构建路径） |
+| `npm run typecheck:tests` | —（不存在） | **rc=2**，`src/lib/ui-classes.test.ts(25,7): error TS2322: Type 'string' is not assignable to type 'number'.` |
+| `npm run lint` | rc=0 | rc=0 |
+| `vitest run <该文件>` | 4 passed | 4 passed |
+
+全量前端 **131 files / 801 tests 全绿**；`npm run typecheck` rc=0；`npm run lint` rc=0；
+`backend/scripts/eol_audit.py` 报 **`line-ending damage: none`**；新文件 `tsconfig.test.json` 是 LF（13 行）。
+**门接上之后，同一个探针从「三绿」变成「一处必红」——这是本节唯一需要的判据。**
+
+**本节行数**：正文 **+95/−0**，连本段共 **+97/−0**；审计文档已入库 **+20245/−13**，加工作树（本节 +97）**+20342/−13**。
+

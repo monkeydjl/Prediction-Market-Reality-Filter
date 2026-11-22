@@ -26,6 +26,8 @@ import type {
   CalibrationBucketCell as GeneratedCalibrationBucketCell,
   CalibrationBucketSummaryResponse as GeneratedCalibrationBucketSummaryResponse,
   PredictionCalibrationResponse as GeneratedPredictionCalibrationResponse,
+  DomainReliabilityRow as GeneratedDomainReliabilityRow,
+  DomainReliabilityResponse as GeneratedDomainReliabilityResponse,
   LoopRunView as GeneratedLoopRunView,
   LoopStatusResponse as GeneratedLoopStatusResponse,
   ApiHealthResponse as GeneratedApiHealthResponse,
@@ -657,26 +659,14 @@ export interface QualityAlertsResponse {
   };
 }
 
-export interface DomainReliabilityRow {
-  domain: string;
-  category: string;
-  sample_count: number;
-  correct_count: number;
-  wrong_count: number;
-  credibility_sum: number;
-  /** correct / sample. null when sample_count is 0. */
-  reliability_score: number | null;
-  credibility_avg: number | null;
-  insufficient_samples: boolean;
-  first_seen: string | null;
-  last_updated: string | null;
-}
-
-export interface DomainReliabilityResponse {
-  domains: DomainReliabilityRow[];
-  total_domains: number;
-  total_rows: number;
-}
+// Generated from the named backend models (audit 53.160). The retired
+// hand-written pair declared 3 of the envelope's 8 keys and 11 of the element's
+// 15: it had no brier_sum / brier_count / brier_avg / brier_skill_score at all,
+// and it declared first_seen / last_updated nullable against the store's own
+// NOT NULL DDL. The route had no response_model either, so nothing could have
+// caught the drift -- which is why naming the model came first.
+export type DomainReliabilityRow = GeneratedDomainReliabilityRow;
+export type DomainReliabilityResponse = GeneratedDomainReliabilityResponse;
 
 // The element of the recent-predictions list, and its envelope. Both lived here
 // by hand until audit 53.58, where the local copy declared 18 of the 35 keys the

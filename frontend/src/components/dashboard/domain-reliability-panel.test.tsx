@@ -17,6 +17,14 @@ describe("DomainReliabilityPanel", () => {
     domainMock.mockResolvedValue({
       total_domains: 2,
       total_rows: 2,
+      total_samples: 23,
+      graded_samples: 23,
+      // Weighted by graded_samples, not by rows: (2.4 + 0.9) / 23, and its
+      // complement. Kept arithmetically consistent with the two rows below so
+      // the fixture cannot hide a weighting bug.
+      brier_mean: 0.143478,
+      brier_skill_score: 0.856522,
+      prior_metric: "hit_rate",
       domains: [
         {
           domain: "reuters.com",
@@ -27,6 +35,10 @@ describe("DomainReliabilityPanel", () => {
           credibility_sum: 18.2,
           reliability_score: 0.85,
           credibility_avg: 0.91,
+          brier_sum: 2.4,
+          brier_count: 20,
+          brier_avg: 0.12,
+          brier_skill_score: 0.88,
           insufficient_samples: false,
           first_seen: "2026-07-01T00:00:00Z",
           last_updated: "2026-07-17T00:00:00Z",
@@ -40,6 +52,10 @@ describe("DomainReliabilityPanel", () => {
           credibility_sum: 1.2,
           reliability_score: 0.33,
           credibility_avg: 0.4,
+          brier_sum: 0.9,
+          brier_count: 3,
+          brier_avg: 0.3,
+          brier_skill_score: 0.7,
           insufficient_samples: true,
           first_seen: "2026-07-10T00:00:00Z",
           last_updated: "2026-07-16T00:00:00Z",
@@ -70,8 +86,20 @@ describe("DomainReliabilityPanel", () => {
 
   it("renders the empty state when no domains are settled", async () => {
     // min_samples is a request parameter, not a response field: the route
-    // returns domains/total_domains/total_rows/... and never echoes it.
-    domainMock.mockResolvedValue({ total_domains: 0, total_rows: 0, domains: [] });
+    // returns domains/total_domains/total_rows/... and never echoes it. The
+    // zeros and nulls below are what the producer actually writes on an empty
+    // store -- the type gate added in audit 53.159 is what caught the three-key
+    // stub that used to stand here.
+    domainMock.mockResolvedValue({
+      total_domains: 0,
+      total_rows: 0,
+      total_samples: 0,
+      graded_samples: 0,
+      brier_mean: null,
+      brier_skill_score: null,
+      prior_metric: "hit_rate",
+      domains: [],
+    });
     render(<DomainReliabilityPanel />);
 
     expect(await screen.findByText(/尚无已结算事件/)).toBeInTheDocument();

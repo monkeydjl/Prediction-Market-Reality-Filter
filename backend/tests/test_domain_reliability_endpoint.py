@@ -160,5 +160,85 @@ class TestDomainReliabilityEndpointBrier(unittest.TestCase):
         self.assertEqual(data["prior_metric"], "hit_rate")
 
 
+class TestDomainReliabilityContract(unittest.TestCase):
+    """The named models and the producers must agree key for key (audit 53.160).
+
+    This route published no ``response_model`` until 53.160, so its eight keys
+    were invisible to the contract layer and the frontend hand-wrote three of
+    them. Naming the models is only half the repair: ``DomainReliabilityRow`` is
+    registered as a *root*, which makes pydantic2ts close its generated
+    interface (``additionalProperties: false``). A closed model that declares
+    fewer keys than the producer writes therefore drops the extras **without a
+    sound** -- no error, no warning, just a thinner row than the UI was
+    promised. Asserting the key *sets* against the producers is what makes that
+    silent direction loud, and it fails in both directions at once.
+    """
+
+    def setUp(self):
+        self.client = TestClient(app)
+
+    def test_row_model_declares_exactly_the_producer_keys(self):
+        from app.models.event import DomainReliabilityRow
+
+        # The conftest helper projects through the store's own _row_to_stat,
+        # so this is the producer's real output shape, not a copy of it.
+        produced = set(_fake_stat())
+        declared = set(DomainReliabilityRow.model_fields)
+        self.assertEqual(
+            sorted(produced), sorted(declared),
+            "DomainReliabilityRow and _row_to_stat disagree. produced-only= "
+            "keys the closed model would silently drop; declared-only= keys "
+            f"the endpoint would serve as validation errors. "
+            f"produced-only={sorted(produced - declared)} "
+            f"declared-only={sorted(declared - produced)}",
+        )
+
+    def test_envelope_model_declares_exactly_the_route_keys(self):
+        from app.models.event import DomainReliabilityResponse
+
+        with patch("app.memory.domain_reliability_store.get_stats",
+                   return_value=[_fake_stat()]):
+            response = self.client.get("/api/quality-metrics/domain-reliability")
+        self.assertEqual(response.status_code, 200)
+        served = set(response.json())
+        declared = set(DomainReliabilityResponse.model_fields)
+        # An empty store still writes all eight keys -- the same envelope with
+        # zeros and nulls -- so the same assertion holds on that path too.
+        with patch("app.memory.domain_reliability_store.get_stats",
+                   return_value=[]):
+            empty = set(self.client.get(
+                "/api/quality-metrics/domain-reliability").json())
+        self.assertEqual(served, empty,
+                         "the empty-store body must be the same envelope")
+        self.assertEqual(
+            sorted(served), sorted(declared),
+            "the route body and DomainReliabilityResponse disagree. "
+            f"served-only={sorted(served - declared)} "
+            f"declared-only={sorted(declared - served)}",
+        )
+
+    def test_element_keys_reach_the_body_closed(self):
+        """The row that reaches the wire carries every key the producer wrote.
+
+        Judged against the producer's own output, not against
+        ``model_fields``: comparing the body to the model would also pass a
+        symmetric edit that drops the field from both, which is precisely the
+        silent direction this file exists to make loud. This assertion knows
+        nothing about the model, so the two guards cannot fail together.
+        """
+        with patch("app.memory.domain_reliability_store.get_stats",
+                   return_value=[_fake_stat(sample_count=4, correct_count=3)]):
+            row = self.client.get(
+                "/api/quality-metrics/domain-reliability").json()["domains"][0]
+        produced = _fake_stat(sample_count=4, correct_count=3)
+        self.assertEqual(
+            sorted(row), sorted(produced),
+            f"the wire dropped keys the producer wrote: "
+            f"{sorted(set(produced) - set(row))}",
+        )
+        self.assertEqual(row["wrong_count"], 1)
+        self.assertEqual(row["reliability_score"], 0.75)
+
+
 if __name__ == "__main__":
     unittest.main()

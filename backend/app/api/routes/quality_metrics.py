@@ -29,6 +29,7 @@ from app.memory.prediction_store import (
     calibration_summary,
     list_scored_samples_for_drift,
 )
+from app.models.event import DomainReliabilityResponse
 from app.services.calibration_drift_service import build_drift_report, evaluate_drift_alerts
 from app.services.drift_alert_dispatcher import dispatch_drift_alerts, evaluate_scheduler_alerts
 from app.utils.direction_vocabulary import DIRECTIONS, _STRONG_DISPLAY_DIRECTIONS
@@ -704,7 +705,8 @@ async def quality_metrics_alerts(
 # /api/quality-metrics/domain-reliability
 # ---------------------------------------------------------------------------
 
-@router.get("/quality-metrics/domain-reliability")
+@router.get("/quality-metrics/domain-reliability",
+            response_model=DomainReliabilityResponse)
 async def domain_reliability(
     domain: str | None = Query(default=None),
     category: str | None = Query(default=None),

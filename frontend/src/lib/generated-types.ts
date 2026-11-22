@@ -1358,6 +1358,66 @@ export interface DiscoveryStatusResponse {
   [k: string]: unknown;
 }
 /**
+ * Response for GET /api/quality-metrics/domain-reliability (audit 53.160).
+ *
+ * The route had no ``response_model`` at all, so its eight keys were invisible
+ * to the contract layer and the frontend hand-wrote three of them. Both
+ * aggregates that can be null are guarded by the same ``graded > 0`` test, and
+ * ``prior_metric`` is a settings string (``hit_rate`` by default) -- never
+ * omitted, which is why it is bare rather than optional.
+ */
+export interface DomainReliabilityResponse {
+  domains: DomainReliabilityRow[];
+  total_domains: number;
+  total_rows: number;
+  total_samples: number;
+  graded_samples: number;
+  brier_mean: number | null;
+  brier_skill_score: number | null;
+  prior_metric: string;
+  [k: string]: unknown;
+}
+/**
+ * One ``domains`` entry of ``DomainReliabilityResponse`` (audit 53.160).
+ *
+ * ``domain_reliability_store._row_to_stat`` builds the entry in a single dict
+ * literal with no branches, so all fifteen keys are always written and none
+ * carries a default. The four columns it reads are ``NOT NULL`` in the store's
+ * own DDL (``domain``, ``category``, ``first_seen``, ``last_updated``), so
+ * those four are bare rather than ``| None``: a null there is outside the
+ * producer's domain, exactly as ``CalibrationSegment`` argues for
+ * ``segment_min_samples``.
+ *
+ * The four nullable ones are computed, not read: ``reliability_score`` and
+ * ``credibility_avg`` are guarded by ``sample > 0``, ``brier_avg`` and
+ * ``brier_skill_score`` by ``brier_count > 0``. ``brier_*`` is deliberately
+ * *not* folded into ``sample_count`` -- an event that was never frozen has no
+ * gradeable estimate, and averaging it in as 0.0 would read as a perfect call
+ * nobody made.
+ *
+ * The hand-written frontend copy this retires declared 11 of these 15 keys:
+ * it had no ``brier_sum`` / ``brier_count`` / ``brier_avg`` /
+ * ``brier_skill_score``, and it declared ``first_seen`` / ``last_updated``
+ * nullable against the DDL.
+ */
+export interface DomainReliabilityRow {
+  domain: string;
+  category: string;
+  sample_count: number;
+  correct_count: number;
+  wrong_count: number;
+  credibility_sum: number;
+  reliability_score: number | null;
+  credibility_avg: number | null;
+  brier_sum: number;
+  brier_count: number;
+  brier_avg: number | null;
+  brier_skill_score: number | null;
+  insufficient_samples: boolean;
+  first_seen: string;
+  last_updated: string;
+}
+/**
  * One point of an edge time series: ``trend_analysis_service.edge_series``.
  *
  * Named ``EdgeSeriesPoint`` rather than ``EdgePoint`` on purpose: the frontend

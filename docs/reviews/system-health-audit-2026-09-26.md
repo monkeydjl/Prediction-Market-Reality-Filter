@@ -20329,3 +20329,117 @@ prior_metric`——`min_samples` 是**查询参数**，永远不会出现在响�
 
 **本节行数**：正文 **+96/−0**，连本段共 **+99/−0**；审计文档已入库 **+20245/−13**，加工作树（本节 +99）**+20344/−13**。
 
+
+## §53.160 偿还 `DomainReliabilityResponse`：一条没有 `response_model` 的路由
+
+### 欠账是上一节顺带发现的
+
+§53.159 给 131 个前端测试文件接类型门时，`tsc -p tsconfig.test.json` 在
+`domain-reliability-panel.test.tsx` 报的第三处是
+`Type '{ total_domains: number; total_rows: number; domains: never[]; }' is not
+assignable to parameter of type 'DomainReliabilityResponse'`。那条报错本身只是夹具不全，
+但它背后是三层同时缺失：
+
+| 层 | 现状 | 后果 |
+|---|---|---|
+| 路由 `quality_metrics.py:707` | `async def domain_reliability(...) -> dict[str, Any]`，**无 `response_model`** | 返回的 **8 个键**对契约层完全不可见 |
+| 前端 `api.ts:675` | 手写 `DomainReliabilityResponse` 只声明 **3** 个键 | `total_samples` / `graded_samples` / `brier_mean` / `brier_skill_score` / `prior_metric` 在 TS 里根本不存在 |
+| 前端 `api.ts:660` | 手写 `DomainReliabilityRow` 声明 **11** 个键 | 缺 `brier_sum` / `brier_count` / `brier_avg` / `brier_skill_score`；并把 DDL 里 `NOT NULL` 的 `first_seen` / `last_updated` 声明成 `string \| null` |
+
+**没有任何一道门会因此变红。** 路由不声明模型，`test_every_flexible_response_route_binds_the_canonical_class`
+只扫「绑了裸 `FlexibleResponse`」的路由——「什么都不绑」不在它的视野里；前端是手写副本，
+只有消费方真去读那五个键时 `tsc` 才会响，而那块面板一个 Brier 字段都没读。
+
+### 三件套 + 两处隐藏检查点
+
+1. 模型写进 `event.py`，紧跟 `CalibrationBucketSummaryResponse`（与校准统计同族），**+61/−0**；
+2. 登记进 `_frontend_export.py`（import + `__all__`，**+4/−0**）。`DomainReliabilityRow`
+   必须是**根**——只作为 `DomainReliabilityResponse` 的字段被 `$ref` 到是不够的，
+   那样 `json2ts` 只给一条 `[k: string]: unknown` 尾巴，接口比原来那个手写副本更松；
+3. `generate_types` 重生成：`generated-types.ts` **+60/−0**；
+4. 挂 `response_model=DomainReliabilityResponse`（装饰器续行，风格同 `events.py:1631` 的校准路由，**+3/−1**）；
+5. 删掉手写副本，改成 `export type X = GeneratedX` 两行别名（`api.ts` **+10/−20**）。
+
+生成结果的两半分界正是设计意图：
+
+```ts
+export interface DomainReliabilityResponse {   // FlexibleResponse ⇒ 保留开放尾巴
+  ...
+  [k: string]: unknown;
+}
+export interface DomainReliabilityRow {        // 根 ⇒ 闭合，无尾巴
+  ...
+}
+```
+
+### 元素的可空性按 DDL 判，不按语义判
+
+`_row_to_stat`（`domain_reliability_store.py:86`）是**一个没有分支的 dict 字面量**，
+15 个键无条件写全 ⇒ 一个默认值都不给（§2 ①：镜像 `NOT NULL` 列的不给默认值）。四列在
+store 自己的 DDL 里是 `NOT NULL`：
+
+| 键 | 来源 | 类型依据 |
+|---|---|---|
+| `domain` / `category` / `first_seen` / `last_updated` | 读列 | DDL `NOT NULL` ⇒ 裸 `str` |
+| `sample_count` / `correct_count` / `wrong_count` / `brier_count` | 读列 / `sample - correct` | `INTEGER NOT NULL` ⇒ `int` |
+| `credibility_sum` / `brier_sum` | 读列 | `REAL NOT NULL` ⇒ `float` |
+| `reliability_score` / `credibility_avg` | `sample > 0` 守卫 | 可空 |
+| `brier_avg` / `brier_skill_score` | `brier_count > 0` 守卫 | 可空 |
+| `insufficient_samples` | `sample < settings.DOMAIN_RELIABILITY_CONFIDENCE_MIN_SAMPLES` | `bool` |
+
+`wrong_count` 是**算出来的**（`sample - correct`），不读那一列。按列推会得出同一个类型，
+但同一张表里 `reliability_score` / `credibility_avg` / `brier_avg` / `brier_skill_score`
+**不是列**——按列推就会漏掉它们，这正是「列存在 ≠ 落点用它」。
+
+### 闭合模型的静默方向，需要一条不认识模型的判据
+
+`DomainReliabilityRow` 一旦是根，生成接口就是 `additionalProperties: false`。闭合带来一个
+反方向的危险：**模型少声明一个键时，pydantic 会把生产者的那个键从响应里丢掉，不报错、不告警**。
+`_frontend_export.py` 的注释早写了这句话，但此前没有一条守卫在执行它。
+
+于是新增三条测试（`test_domain_reliability_endpoint.py`，**15 → 18**，+80/−0）：
+
+1. `test_row_model_declares_exactly_the_producer_keys` —— 生产者键集 == 模型字段集。生产者侧
+   走 conftest 的 `fake_domain_reliability_stat`，它内部调真正的 `_row_to_stat`，不是抄形状；
+2. `test_envelope_model_declares_exactly_the_route_keys` —— 路由 body 键集 == 模型字段集，
+   且**空库 body 与有数据 body 是同一个 envelope**（§5 的老账：同一个 0 分不清「真没有 /
+   功能没开 / 读失败」，这里钉的是「空库不换形状」）；
+3. `test_element_keys_reach_the_body_closed` —— body 键集 == **生产者的键集**。
+
+第 3 条的第一版是拿 body 比 `model_fields`，**变异证明它是空头**：把 `brier_avg` 从模型里删掉，
+body 少一个键、`model_fields` 也少一个键，两边仍然相等，测试照绿——那只是模型的复述，不是判据。
+改成比对生产者产物之后：
+
+```
+mutated (删掉 brier_avg) → 2 failed, 1 passed
+  FAILED ...test_element_keys_reach_the_body_closed
+    the wire dropped keys the producer wrote: ['brier_avg']
+  FAILED ...test_row_model_declares_exactly_the_producer_keys
+    produced-only=['brier_avg']
+reverted: sha match=True (05b4901fe38b)
+```
+
+第 2 条在同一个变异下**正确地**仍然是绿的：envelope 是 `extra="allow"`，被模型漏掉的键会作为
+额外键原样透传，body 仍是 8 个键 ⇒ 那个方向对 envelope 不存在。三条一起才覆盖两个方向。
+
+### 两次撞上同一个旧坑
+
+- 变异脚本第一版的针写成 `b"    brier_avg: float | None\n"`，**命中 0 次**：`event.py` 是
+  CRLF（3833 CRLF / 0 bare LF）。§1 记的就是这条——针必须按文件自己的行尾写。改成 `\r\n`
+  后命中 1 次，脚本再断言「恰好 1 次」才动手。
+- 七个改动文件的字节画像全部是**纯 CRLF、无 bare LF**（`Edit` 保留原行尾），没有一处产生 §1
+  那两种损坏 signature。
+
+### 门
+
+| 门 | 结果 |
+|---|---|
+| `ruff check app/` | All checks passed |
+| `mypy app/` | Success: no issues found in **334** source files |
+| `generate_types --check` | `generated-types.ts is up to date.` |
+| `pytest tests/`（全量） | **errors=0 / failures=0**，6883 passed、11 skipped、2588 subtests（对比改动前 6880 = +3） |
+| `tsc --noEmit` | rc=0 |
+| `tsc -p tsconfig.test.json --noEmit` | rc=0（改动前该文件 3 处红） |
+| `vitest run`（全量） | **131 files / 801 tests**，与改动前一致 |
+
+**本节行数**：正文 **+111/−0**，连本段共 **+114/−0**。

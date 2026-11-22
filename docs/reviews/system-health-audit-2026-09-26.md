@@ -20126,3 +20126,107 @@ CI `44917885252` 五绿，`Type Sync Check` 1m32s（上一轮 1m16s）。这个 
 
 **本节行数**：正文 **+61/−0**，连本段共 **+64/−0**（含与上一节之间的空行）；审计文档已入库
 **+20077/−13**，加本节工作树 **+20141/−13**。
+
+### §53.157 第四次推：新步骤第二次跑，计数逐字不动
+`08ccb5c`（只追加审计，**+64/−0**）推上去，CI `44918867612` 五绿，**8m36s**（backend 8m36s、frontend
+3m11s、Type Sync 1m26s、docker-build 30s、secret-scan 15s）。
+
+#### 两件事同时被验了
+
+**一、新步骤不是一次性的。** `Check the generator's own tests` 第二次跑：
+
+| 轮次 | 结果 | 耗时 |
+|---|---|---|
+| `44917885252`（首次） | `6 passed, 1 warning, 17 subtests passed` | 11 s |
+| `44918867612`（本次） | `6 passed, 1 warning, 17 subtests passed` | **8.53 s** |
+
+同一个 job 从 1m32s 到 1m26s，差 6 s 落在 runner 波动里（§53.150 那条：时长不是判据）。**「一次跑通」和
+「每次都能跑通」是两件事**，§53.145 加冒烟步骤时也是这个道理，那次它跑了两次才算数。
+
+**二、纯文档提交不动任何计数。** 与上一轮逐字相同：
+
+| | `44917885252` | `44918867612` |
+|---|---|---|
+| `collected` | `6891 items` | `6891 items` |
+| backend | `6874 passed, 17 skipped` | `6874 passed, 17 skipped` |
+| frontend | `131 files / 801 tests` | `131 files / 801 tests` |
+
+#### 一个看起来矛盾、其实正确的地方
+
+同一批 6 条用例，在 backend job 的 `-rs` 摘要里**仍然是被跳过的**（`json2ts CLI not installed`，6 行都在），
+在 Type Sync job 里**跑过了**（`6 passed`）。**同一个提交里，同一批用例既"跳过"又"通过"**——因为在两个 job
+里它们的运行条件不同：
+
+- backend job 装 Python、不装 node ⇒ `_find_json2ts_cmd()` 两头都断 ⇒ 跳过；
+- Type Sync job 装 node + `npm ci` ⇒ 找得到 ⇒ 跑。
+
+所以「CI 里有 17 条跳过」这句话本身不构成缺口，缺口是「有没有另一个 job 真的跑了它们」。§53.151 当时把这件事
+写成「大概有人管」，§53.155 量出只覆盖了 1/6，现在是真的 6/6——**而 `-rs` 那 6 行依然会在日志里，这是对的**：
+它描述的是那个 job 里发生了什么，不是全仓发生了什么。
+
+#### 一行没有做的事
+
+§53.155 的变异脚本（`check()` 过期分支 `return 1 → return 0`）仍在 `.workbuddy/tmp/` 里，是一次性脚本，没有
+进 `mutation_verify.py`。它现在**有了意义**（CI 会红），但登记进 harness 需要三处一起改（README 两个数、套标题、
+针），属于另一件事。
+
+**本节行数**：正文 **+43/−0**，连本段共 **+46/−0**（含与上一节之间的空行）；审计文档已入库
+**+20141/−13**，加本节工作树 **+20187/−13**。
+
+### §53.158 第 25 套变异：`--check` 恒返回 0 现在由 harness 钉住
+把 §53.155 那个一次性脚本正式登记成 `type-sync-negative-control`（**1 条变异**）：
+
+| 字段 | 值 |
+|---|---|
+| 变异 G1 | `check()` 过期分支 `return 1` → `return 0  # mutated: the stale file passes` |
+| path | `backend/scripts/generate_types.py` |
+| guard | `tests/test_generate_types.py::test_check_mode_exit_1_when_stale` |
+
+#### 四阶段实测
+
+```
+green before True | red after mutation 1/1 files red | green after restore True | bytes restored True
+mutated run -> tests/test_generate_types.py -> 1 failed, 121 deselected in 8.38s
+```
+
+`1 failed` 只算跑到的那些（`121 deselected` 是 `-k` 选掉的），所以这一行同时说明了两件事：选中的守卫真的
+执行了，且执行后真的红了。还原后 sha256 一致由 harness 自己复核，不是我口头保证。
+
+#### 加套要改的是**四**处，不是三处
+
+| # | 位置 | 改动 |
+|---|---|---|
+| 1 | `README.md` | `（24 套 / 346 条变异）` → `（25 套 / 347 条变异）` |
+| 2 | `test_mutation_verify.py` 的方法名 | `test_the_twenty_four_sets_are_present` → `…twenty_five…` |
+| 3 | 同一测试里的 key 清单 | 追加 `"type-sync-negative-control"` |
+| 4 | **`readme-inventory` 的 R2 针** | `old="24 套"` → `old="25 套"`、`new="25 套"` → `"26 套"` |
+
+§4.3 记的是「加套是三处一起改」，**这次证明是四处**。第 4 处就是 R2 那根针——它锚在 README 的套数上，
+README 一改它就命中 0 次。这次我**在改 README 的同一轮里**才想起它，可最初只改了前三处，preflight 直接
+报出来：
+
+```
+readme-inventory 2: needle occurs 0x in README.md
+3 failed, 66 passed, 412 subtests passed
+```
+
+三条红都指向同一根针（`test_every_needle_matches…`、`test_every_needle_occurs_exactly_once…`、
+`test_a_whole_set_apply_can_place…`），加一条 subfail。**这不是又一次意外，是那条「唯一入口」说法缺了
+一格**：入口是四格，记成三格会让下一次照样漏。已把它写进 R2 的 note（第六次命中，且写明是四格不是三格）。
+
+#### 一个只在装了前端依赖的机器上承重的变异
+
+这条守卫在没有 `frontend/node_modules` 的环境里会 **skip**，而 harness 的判据是 `returncode == 0`
+（§4.3 的 `-k` 选法，`test_run_guards` 只接那一个值）。于是同一套在别的机器上会报 **stayed GREEN**——
+那不是守卫空头，是环境缺件。§53.151 数出来那 6 条 skip 就是这么被数出来的。这一层已经写进 rationale，
+因为**下一个跑它的人会先看到一行「stayed GREEN」，然后怀疑变异写错了**。
+
+#### 针的行尾与其它针不同
+
+`generate_types.py` 全 **LF**（`git ls-files --eol` = `w/lf`），而 harness 里绝大多数针是 CRLF。所以这条针
+写成 `b"…\n        return 1\n"`。`InventoryTests` 里那条
+`test_every_needle_matches_whichever_line_ending_the_checkout_uses` 过了，说明它认的是各文件的 checkout
+行尾，不是一刀切 CRLF——这一点之前没验过，这次顺带验了。
+
+**本节行数**：正文 **+55/−0**，连本段共 **+58/−0**（含与上一节之间的空行）；审计文档已入库
+**+20141/−13**，加工作树（§53.157 +46、本节 +58）**+20245/−13**。

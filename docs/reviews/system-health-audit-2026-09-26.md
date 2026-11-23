@@ -20752,3 +20752,148 @@ from app.services.event_category_service import backfill_event_categories  # noq
 | `generate_types --check` | up to date（本节未触及 `app/` 与前端） |
 
 **本节行数**：正文 **+129/−0**，连本段共 **+132/−0**；审计文档已入库 **+20637/−15**，加本节 **+20769/−15**。
+
+## §53.164 给「门到底看了什么」加一条断言：`lint_scan_guard.py`
+
+上一节把 CI 的命令换成了裸 `ruff check .`，理由是不带路径清单就不会过期。这一节要
+还那笔债：**`ruff check .` 的绿灯同时描述两件完全不同的事**——「全部干净」和「它
+什么都没看」。把 `app` 加进 `extend-exclude`，命令还是这个命令，退出码还是 0，
+输出还是 `All checks passed!`，只是 334 个文件从门的视野里消失了。
+
+这不是假想的风险：上一节**刚刚**才为了「本地与 CI 一致」往 `extend-exclude` 里加了
+两个目录。那条出口已经开了，而它通向的失败模式恰好是**静默**的。
+
+### 为什么守卫不是「文件数不能少于 N」
+
+第一版想法是「`--show-files` 计数低于 845 就红」。否掉它有两个理由，都不是风格问题：
+
+- **数字要维护，而没人维护的数字会被下调，不会被调查。** 加一个文件就要改阈值，
+  改得烦了就会有人把 845 改成 800 让它先绿——那时守卫还在，但它守的是 800。
+- **数字说不清方向。** 845 = 844 个 `.py` + `ruff.toml`；844 又是 `git ls-files`
+  里的 `.py` 数。这两个数之间的关系没有任何地方写着，看到 845 的人不会知道
+  「谁被排除了才算少」。
+
+所以守卫锚的不是数量，是**两个集合的相等**：
+
+```
+ruff 会扫描的 .py 文件  ==  git 跟踪的 .py 文件
+```
+
+两个方向失败的含义完全不同，因此要分别报：
+
+| 方向 | 含义 | 典型成因 |
+|---|---|---|
+| 跟踪了但没扫 | **盲区**：仓库里有代码，门从它上面走过去 | `extend-exclude` 写宽了、CI 命令里 pathspec 打错 |
+| 扫了但没跟踪 | **本地红、CI 绿**：开发者看到一条别人看不见的命中 | gitignore 的草稿脚本被扫进来 |
+
+第二种不是理论：上一节量过，`backend/.workbench/` + `backend/backend/` 有 109 个文件，
+不排除就会本地报错、CI 全绿。
+
+### 第一次运行就红了——红在守卫自己身上
+
+脚本写完直接跑，退出码 1：
+
+```
+[FAIL] 1 linted .py file(s) are NOT tracked by git -- local and CI disagree
+    scripts/lint_scan_guard.py
+```
+
+新文件还没 `git add`。这不是守卫的缺陷，是「扫了但没跟踪」那个方向的**真实命中**，
+比任何构造出来的用例都可信。`git add` 之后立刻：
+
+```
+[OK] lint scan set matches git: 845 .py files, both directions.
+```
+
+### 盲区方向的反证：门绿着，守卫红着
+
+把 `extend-exclude` 改成 `[".workbench", "backend", "app"]`，然后**同时**跑两条命令：
+
+| 命令 | 结果 |
+|---|---|
+| `ruff check .` | **rc=0，`All checks passed!`** |
+| `lint_scan_guard.py` | **rc=1**，`334 tracked .py file(s) are NOT linted`，并列出 `app/api/audit_metadata.py` 等 |
+
+改回后用 sha256 比对，字节完全一致。这一格是本节的全文：**同一个变异下，门是绿的，
+守卫是红的**——如果门本来就红，守卫证明不了任何东西。
+
+### 三个实现决定，都是被失败逼出来的
+
+**① 只比 `.py`。** `--show-files` 会把 `ruff.toml` 也列出来（ruff 认为配置文件也在
+覆盖范围内）。如果等式两边都算上它，一个「本该只关于代码」的断言就混进了非代码项。
+现在代码里显式按 `suffix == ".py"` 过滤，并有单测钉住「`ruff.toml` 不在 linted 集合里」。
+
+**② 相对路径用 `as_posix()`。** 第一版用 `str(p.relative_to(root))`，Windows 打出
+`app\services\ledger.py`，而 CI 打出 `app/services/ledger.py`——**同一条消息在两个
+平台上不同**。这不是笔误，是单测直接报出来的（`assertIn("app/services/ledger.py", ...)`
+失败）。修完之后消息在两边逐字相同，断言也才写得下去。
+
+**③ 长清单截断。** 盲区方向的真实命中是 334 个文件。打印 334 行没有人会读，读的人也
+定位不到原因；所以只列前 8 条 + `... and 12 more`，前面写总数。
+
+顺带记一条实测：`ruff check --show-files` **在有命中时也退出 0**（干净和脏都是 0）。
+所以脚本里 `returncode != 0` 只可能意味着 ruff 根本没跑起来。这一点如果不测，很容易
+写成「有命中就抛异常」，然后守卫在最该工作的场景（树上有别的命中）里崩掉。
+
+### 单测与变异：三条防线都要真的咬人
+
+`tests/test_lint_scan_guard.py` 10 条：5 条 `compare`（相等静默 / 盲区 / 本地红 /
+**两个方向同时报而不是早退** / 截断仍带总数）、2 条归一化（相对+绝对混在一起要落成
+同一形态；空行要丢掉）、3 条对真实仓库的端到端。
+
+端到端那 3 条有两个前提，缺一个就变成空头：**git 不存在时 skip**（不是失败，
+因为离开 checkout 跑单测是正常用法）；以及**必须断言两侧都非空**——两个空集合相等，
+守卫会全绿地守着一个空集合。
+
+变异验证（三个都杀掉了）：
+
+| 变异 | 结果 |
+|---|---|
+| `stray = linted - tracked` → `set()` | 2 failed |
+| `blind = tracked - linted` → `set()` | 3 failed |
+| 去掉 `.py` 后缀过滤 | 2 failed |
+
+第三条是「等式混入非代码项」的变异，说明 ① 那条决定也被测试保护着。
+
+### CI 里的位置
+
+新步骤插在 `Lint backend` 之后、`Compile backend` 之前：
+
+```yaml
+      - name: Verify the lint gate's scan set
+        run: python scripts/lint_scan_guard.py
+```
+
+紧接着而不是放在别的 job 里，因为它解释的是**上一条命令**的可信度。放在后面几个步骤
+之后，读日志的人会以为它是又一个独立检查。
+
+### 加一个测试文件的代价：README 里的计数
+
+第一次全量跑是 **1 failed**，不是 0：
+`test_readme_inventory.py::test_backend_test_file_count_matches_the_directory`。
+README 第 132 行写着 `# 后端（442 个测试文件）`，而目录里现在是 443——**新增一个测试
+文件就足以让清单守卫红**。
+
+这不是噪声，是守卫在正常工作。但它补上了 §53.158 记的「加套是四处一起改」之外的第
+五个位置：那四处是**变异套**自己的（README 套数 / 条数 / `test_the_<N>_sets_are_present`
+的名字 / `readme-inventory` 的 R2 针），而**测试文件数**是另一条独立锚，加任何一个
+`tests/*.py` 都会碰它。改 README 一行（442 → 443），该模块 5 条立刻全绿。
+
+值得记的是**它是怎么被发现的**：如果只跑新加的那个测试文件，本地全绿；`ruff`、守卫、
+compileall 也全绿。这个红只有跑全量才会出现，否则要等到 CI。这与本节主题同构——
+**只跑改过的那部分，等于只验了门看得见的那部分。**
+
+### 门
+
+| 门 | 结果 |
+|---|---|
+| `ruff check .` | **All checks passed**（新脚本与单测已在扫描集内） |
+| `lint_scan_guard.py` | **`[OK] lint scan set matches git: 846 .py files`** |
+| `tests/test_lint_scan_guard.py` | 10 passed |
+| 全量 `pytest tests/`（第一次） | **1 failed**：README 测试文件数 442 ≠ 443 |
+| 全量 `pytest tests/`（修 README 后） | **failures=0 / errors=0**，6894 passed、11 skipped、2588 subtests（6883 + 11 条新测试，数目对得上） |
+| 变异（3 个） | 全部 RED，还原后 sha256 一致 |
+| 盲区反证 | `ruff` rc=0 / guard rc=1（334 文件），配置复原 sha256 一致 |
+| `compileall` / `generate_types --check` / `eol_audit` | OK / up to date / `damage: none` |
+
+**本节行数**：正文 **+142/−0**，连本段共 **+145/−0**；审计文档已入库 **+20769/−15**，加本节 **+20914/−15**。

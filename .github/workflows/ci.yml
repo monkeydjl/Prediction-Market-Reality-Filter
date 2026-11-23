@@ -59,6 +59,14 @@ jobs:
       # in audits 53.162 and 53.163 by clearing their debt first, one rule
       # family at a time -- which is also why the per-family `--select` step
       # from 53.161 is gone: it was a scaffold for the debt.
+      #
+      # ...and the absence of a path list makes one new failure mode possible:
+      # an over-wide `extend-exclude` narrows the scan without changing the exit
+      # code, so "All checks passed" also describes a gate that looked at
+      # nothing. The next step is the guard for that, and it is the only reason
+      # the exclusion in ruff.toml is safe to keep.
+      - name: Verify the lint gate's scan set
+        run: python scripts/lint_scan_guard.py
       - name: Compile backend
         run: python -m compileall app tests
       # mypy is clean and now BLOCKING: `app/` type-checks with zero errors

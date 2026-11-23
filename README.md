@@ -129,7 +129,7 @@ npm run build
 ## 测试与质量
 
 ```bash
-# 后端（442 个测试文件）
+# 后端（443 个测试文件）
 cd backend
 pip install -r requirements.txt -r requirements-dev.txt
 python -m compileall app tests

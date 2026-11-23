@@ -20897,3 +20897,113 @@ compileall 也全绿。这个红只有跑全量才会出现，否则要等到 CI
 | `compileall` / `generate_types --check` / `eol_audit` | OK / up to date / `damage: none` |
 
 **本节行数**：正文 **+142/−0**，连本段共 **+145/−0**；审计文档已入库 **+20769/−15**，加本节 **+20914/−15**。
+
+## §53.165 把「怎么算绿」写成可执行的：`scripts/verdict.py`
+
+上一节给门加了「看得见什么」的守卫。这一节补另一半：**门给出的结论怎么读**。
+这个仓库里有两条退出码会撒谎，而且都已经各自骗过人一次：
+
+- **本机 `pytest` 的 rc 恒为 1。** 沙箱的删除守卫会拦临时目录清理，进程因此非零；
+  而能说明真相的那行 summary 被**同一个守卫**吞掉（`[safe-delete]` 把 stdout 一起
+  带走）。所以判据只能是 `--junitxml` 里的 `failures`/`errors`。
+- **`gh` 对空产出报成功。** `gh run view --log > file` 曾返回 **0 字节**且 rc=0，
+  被读成「没有发现」——实际上那一刻什么都没生成。
+
+两条的共同形状：**「没出错」和「没测量」在退出码上长得一样。**
+
+### 两个子命令，把这两件事分开
+
+| 子命令 | 判据 | 它专门挡的那一个 |
+|---|---|---|
+| `verdict junit <xml>` | `failures == 0 且 errors == 0` **且** `tests > 0` | 报告存在但收集数为 0：跑了个空集合，不是通过 |
+| `verdict log <file> --step S --expect T` | step `S` 在日志里出现 **且** 文本 `T` 出现在 `S` 的行里 | step 没跑 ≠ step 通过；step 跑了但没打那行 ≠ 它做了该做的事 |
+
+退出码是**三态**，刻意分开的：
+
+- **0** 证据与「通过」一致；
+- **1** 证据与「通过」矛盾——去看代码；
+- **2** 证据根本读不出来（文件 0 字节、不是 XML、不是 gh 日志格式）——去修工具链。
+
+把 1 和 2 合成一个码，就等于把「代码有问题」和「取证的管子破了」写成同一句话。
+
+### 三个决定，都是被现实逼出来的
+
+**① 缺属性不当作 0。** `<testsuite>` 少了 `errors` 属性时抛 `Unreadable`（exit 2），
+不是默认 0。**默认 0 正是这个脚本要防的空头断言**：一份旧格式或手写的报告会安静地
+读成「没有错误」。
+
+**② `<testcase>` 元素数 ≠ `tests` 计数。** subtest 通过时不产出 `<testcase>` 但计入根
+`tests`（§53.113 记过）。所以两者不等只记一条 `note`，不判失败——把它当数据丢失是
+踩过的坑。
+
+**③ 日志格式不是四个 tab。** 第一版按 `job⇥step⇥时间戳⇥内容` 解析，对着真日志跑
+却报「step 从未运行」。实测 4 484 行里 **4 474 行只有 3 个 tab**：
+
+```
+backend-tests⇥Verify the lint gate's scan set⇥2026-11-23T16:47:59.2Z [OK] ...
+```
+
+**时间戳和内容之间是空格，不是 tab**；另外每个 step 块首行的时间戳前还有一个 BOM。
+按错误的形状解析，得到的不是报错而是「没有一行匹配」——一个**看起来像结论的假阴性**。
+
+### 先拿真件喂它，再相信它
+
+新工具的第一件事不是写测试，是对着已经发生过的证据跑一遍：
+
+| 命令 | 结果 |
+|---|---|
+| `verdict junit junit_final_53164c.xml` | `[OK]`，`tests=9493 failures=0 errors=0 skipped=11`，note：`6905 <testcase> 元素` |
+| `verdict log ci_log_53164.txt --step "Verify the lint gate's scan set" --expect "[OK] lint scan set matches git"` | `[OK]`，该 step 12 行，命中 1 |
+| 同上但加 `--expect "NEVER-PRINTED"` | **rc=1**：`'NEVER-PRINTED' never appears in step ...` |
+
+第二行正是上一节人工核对过的那件事（「新步骤真的跑了吗」），现在变成一条命令。
+第三行是它的正向控制：**期望不成立时它必须红**，否则第一条的绿毫无意义。
+
+### 六种失败形态的退出码
+
+| 喂进去的东西 | rc | 说明 |
+|---|---|---|
+| 0 字节的 xml | **2** | 空报告不是干净的报告 |
+| `tests="0"` 的报告 | **1** | 收集了 0 条不是通过 |
+| 声明 `failures="1"` 但没有 `<failure>` 元素 | **1** | 只信属性会放过一次红 |
+| 缺 `errors` 属性 | **2** | 分不清 0 和未知 |
+| 不是 gh 日志的文本 | **2** | 解析器认不出格式 |
+| step 名不存在 | **1** | 并列出日志里实际有的 step 名，改名可诊断 |
+
+### 单测 21 条，7 个变异全杀
+
+| 变异 | 结果 |
+|---|---|
+| 关掉 `tests == 0` 判据 | 1 failed |
+| 缺属性改成默认 0 | 1 failed |
+| step 没跑不算问题 | 2 failed |
+| **日志格式改回 4 个 tab** | **8 failed** |
+| 期望未命中不报 | 1 failed |
+| 0 字节当成通过 | 1 failed |
+| 忽略声明里的 `failures`/`errors` | 1 failed |
+
+4-tab 那条一次性杀掉 8 个测试——一个字符的形状（`!= 3` → `!= 4`）让 8 条独立断言同时红，
+说明「日志长什么样」这件事被钉住了，而不是被假设了。
+
+### README
+
+「测试与质量」段里补上取证方式，同时测试文件数 443 → 444：
+
+```bash
+python -m pytest tests --junitxml=junit.xml
+# 判据只读 junit：本机 pytest 的退出码会被沙箱删除守卫污染成 1
+python scripts/verdict.py junit junit.xml
+```
+
+### 门
+
+| 门 | 结果 |
+|---|---|
+| `ruff check .` | All checks passed |
+| `lint_scan_guard.py` | `[OK] ... 848 .py files, both directions` |
+| `tests/test_verdict.py` | 21 passed |
+| 变异（7 个） | 全部 RED，还原后 sha256 一致 |
+| `pytest tests/`（全量） | **failures=0 / errors=0**，6915 passed、11 skipped、2588 subtests |
+| `test_readme_inventory.py` | 5 passed（444 已对齐） |
+
+**本节行数**：正文 **+107/−0**，连本段共 **+110/−0**；审计文档已入库 **+20914/−15**，加本节 **+21024/−15**。

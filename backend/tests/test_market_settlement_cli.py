@@ -72,7 +72,6 @@ def test_cli_process_command(kernel_db, capsys):
 
 
 def test_cli_scan_command(kernel_db, capsys):
-    from app.core import config
     # Lower threshold so calibration writes
     _seed_data("m1")
     from scripts.sport_settlement_cli import main

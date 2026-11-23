@@ -7,7 +7,7 @@ no-op. Tests patch settings + HTTP + Sentry to verify both branches.
 from __future__ import annotations
 
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 from app.services import drift_alert_dispatcher
 

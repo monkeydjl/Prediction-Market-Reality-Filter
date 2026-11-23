@@ -1,11 +1,10 @@
 # backend/tests/test_db_migration.py
 """Tests for Phase 3 DB schema migration."""
 import pytest
-from sqlalchemy import inspect, text
+from sqlalchemy import inspect
 
 from app.kernel.kernel_db import (
     init_kernel_db, close_kernel_session, get_kernel_session,
-    KernelBase, KernelFactor, KernelEngineScore, KernelPredictionHistory,
     KernelCalibration,
 )
 

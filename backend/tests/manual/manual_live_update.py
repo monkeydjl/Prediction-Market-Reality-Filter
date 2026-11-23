@@ -119,7 +119,7 @@ async def test_live_update():
     # Test 3: Run live update
     print("Test 3: Run live prediction update")
     result = await update_live_predictions()
-    print(f"\nUpdate Result:")
+    print("\nUpdate Result:")
     print(f"  Status: {result.get('status')}")
     print(f"  Matches checked: {result.get('matches_checked')}")
     print(f"  Live count: {result.get('live_count')}")

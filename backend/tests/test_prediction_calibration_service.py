@@ -14,7 +14,6 @@ Locks the spec invariants:
   missing/malformed fields (best-effort).
 - build_resolution_buckets combines all three bucket computations.
 """
-import math
 import unittest
 
 from app.services.prediction_calibration_service import (

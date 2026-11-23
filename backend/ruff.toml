@@ -1,27 +1,24 @@
 # Ruff configuration for the backend.
 #
 # Without this file ruff applies whatever its current release defaults to,
-# which drifts between versions: on ruff 0.16 a bare `ruff check app/` reports
-# ~632 findings, almost all stylistic. CI runs `ruff check app/`, so that drift
+# which drifts between versions: on ruff 0.16 a bare `ruff check` reports
+# ~632 findings, almost all stylistic. CI runs this gate, so that drift
 # silently turns the lint gate into a wall.
 #
 # The selected set below is the historical ruff default (pyflakes + the
-# error-class pycodestyle rules) - the correctness-oriented subset. It is fully
-# clean for app/ as of 2026-08-05, and app/ is all this gate covers. tests/ and
-# scripts/ are not clean under the same set (318 findings as of 2026-11-21 -
-# unused imports, f-strings with no placeholders, imports below module level),
-# so a bare `ruff check .` fails on debt this gate never gated. Widening it
-# means clearing those first; the breakdown is in
-# docs/reviews/system-health-audit-2026-09-26.md section 53.147. Widen it
-# deliberately, one rule family at a time, rather than by upgrading ruff.
+# error-class pycodestyle rules) - the correctness-oriented subset. It is
+# fully clean for `app/` (since 2026-08-05) and for `tests/` (since
+# 2026-11-23, audit 53.162), and CI gates exactly those two:
+# `ruff check app/ tests/`.
 #
-# One family IS already gated for tests/, from CI rather than from this file:
-# `ruff check --select F811,F841,F403 tests/` (audit 53.161). It cannot live in
-# `select` above, because that applies to app/ too -- app/ is clean under the
-# full F set, while tests/ alone still reports 261 findings under it
-# (2026-11-23: 158 F401, 52 F541, 49 E402, 1 E741, 1 F402). Those three
-# families are clean, so they get their own step rather than holding the whole
-# suite hostage to 261 style findings.
+# `scripts/` is the one directory still outside the gate: it reports 19
+# findings under this set (7 F541, 6 F401, 4 E402, 2 E741 as of 2026-11-23),
+# so a bare `ruff check .` still fails. The 318-test debt in tests/ was paid
+# down one family at a time - F811/F841/F403 first (audit 53.161), then
+# F401/F541/E402 plus the last two stragglers (audit 53.162) - which is why
+# the per-family `--select` step 53.161 added no longer exists: it was a
+# scaffold for the debt, and the debt is gone. Widen to `scripts/` the same
+# way, one family at a time, rather than by upgrading ruff.
 
 line-length = 100
 

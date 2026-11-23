@@ -6,12 +6,10 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 from app.kernel.domain import (
-    SportIdentity, CompetitionIdentity, SeasonIdentity,
-    TeamIdentity, MatchIdentity, MatchOutcome,
+    MatchOutcome,
 )
-from app.kernel.protocols import DataAdapter, ScheduleFilter, RawMatchData
+from app.kernel.protocols import DataAdapter
 from app.sports.football.adapters.league_adapter import (
-    LeagueConfig,
     LeagueAdapter,
     LEAGUE_REGISTRY,
     _LALIGA_CONFIG,

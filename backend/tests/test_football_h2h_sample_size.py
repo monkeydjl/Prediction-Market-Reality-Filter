@@ -57,7 +57,6 @@ from pathlib import Path
 
 from app.kernel.domain import (
     CompetitionIdentity,
-    FeatureSet,
     MatchIdentity,
     SeasonIdentity,
     SportIdentity,

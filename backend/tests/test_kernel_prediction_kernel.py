@@ -2,7 +2,6 @@
 """Tests for PredictionKernel orchestrator."""
 from datetime import datetime, timezone
 import pytest
-import tempfile
 
 from app.kernel.domain import (
     SportIdentity, CompetitionIdentity, SeasonIdentity,
@@ -10,7 +9,6 @@ from app.kernel.domain import (
     GeneralFeatures, TeamFeatures, MarketFeatures,
     PlayerFeatures, EnvironmentFeatures, PredictionResult,
 )
-from app.kernel.protocols import DataAdapter, ScheduleFilter, RawMatchData
 from app.kernel.prediction_kernel import PredictionKernel
 from app.kernel.engine_registry import EngineRegistry
 from app.kernel.feature_registry import FeatureRegistry
@@ -265,7 +263,6 @@ class TestPhase5NHLRegistration:
 class TestConditionalCalibrationApply:
     def test_apply_helper_renormalizes(self, kernel, monkeypatch):
         from app.kernel.prediction_kernel import apply_conditional_calibration
-        from app.kernel.domain import ContributionItem
 
         pred = PredictionResult(
             predicted_scores={"home": 1.5, "away": 1.0},

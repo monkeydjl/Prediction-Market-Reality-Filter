@@ -1,5 +1,6 @@
 import unittest
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from app.services import llm_gateway_service as gateway
 
@@ -119,13 +120,6 @@ class LLMGatewayRouteTests(unittest.TestCase):
              patch.object(gateway.settings, "LLM_PROVIDER_OPENAI_API_KEY", ""), \
              patch.object(gateway.settings, "OPENAI_API_KEY", ""):
             self.assertFalse(gateway.has_configured_llm_route("world_cup"))
-
-
-
-if __name__ == "__main__":
-    unittest.main()
-from types import SimpleNamespace
-from unittest.mock import AsyncMock
 
 
 class _FakeCompletions:
@@ -583,3 +577,7 @@ class TokenMetricsAtTheChokepointTests(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(
             _counter_total(LLM_TOKEN_COST, model="gpt-4") - before, 0.03, places=6
         )
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -5,7 +5,6 @@ import pytest
 
 from app.kernel.kernel_db import (
     KernelSportMarketLink,
-    KernelMarketSnapshot,
     init_kernel_db,
     close_kernel_db,
     get_kernel_session,
@@ -108,7 +107,7 @@ def test_get_verified_links_fail_closed(kernel_db):
     assert len(verified) == 1
     assert verified[0]["contract_id"] == "c2"
     # Unverified link must NOT leak
-    assert all(l["verified"] is True for l in verified)
+    assert all(link["verified"] is True for link in verified)
 
 
 def test_get_pending_links(kernel_db):

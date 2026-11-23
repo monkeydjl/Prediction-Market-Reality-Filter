@@ -55,7 +55,7 @@ async def test_scrape_single_team():
     data = await scrape_team_market_value("Brazil", use_cache=False)
 
     if data:
-        print(f"\n✓ Scraped successfully:")
+        print("\n✓ Scraped successfully:")
         print(f"  Team: {data['team_name']}")
         print(f"  Total value: €{data['total_market_value']:.1f}m")
         print(f"  Avg player value: €{data['avg_player_value']:.1f}m")

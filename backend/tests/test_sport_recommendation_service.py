@@ -8,7 +8,6 @@ from datetime import datetime, timezone
 
 import pytest
 
-from app.core import config
 from app.kernel.kernel_db import (
     init_kernel_db,
     close_kernel_db,
@@ -18,7 +17,6 @@ from app.kernel.kernel_db import (
 )
 from app.kernel.edge_store import EdgeStore
 from app.kernel.sport_recommendation_service import (
-    SportActionableRecommendation,
     SportRecommendationService,
     _derive_direction,
     _compute_risk_level,

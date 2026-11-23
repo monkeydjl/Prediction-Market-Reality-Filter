@@ -8,10 +8,8 @@ if sys.platform == 'win32':
 
 from app.services.world_cup_factor_service import (
     calculate_team_factors,
-    build_prediction_factors,
 )
 from app.services.transfermarkt_scraper import scrape_team_market_value, cache_market_value
-from app.services.sentiment_aggregator import fetch_team_sentiment, cache_sentiment
 from app.utils.prediction_db import init_prediction_db
 
 
@@ -42,7 +40,7 @@ async def test_market_value_integration():
 
     factors = calculate_team_factors("Brazil", team_stats, is_home=True)
 
-    print(f"\nBrazil factors:")
+    print("\nBrazil factors:")
     print(f"  Recent form: {factors['recent_form']}")
     print(f"  Market value rating: {factors['market_value_rating']}")
     if factors.get('market_value_euros'):

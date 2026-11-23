@@ -1,7 +1,6 @@
 """Unit tests for diagnose_event_quality CLI."""
 import copy
 import json
-import os
 import sys
 import tempfile
 import unittest

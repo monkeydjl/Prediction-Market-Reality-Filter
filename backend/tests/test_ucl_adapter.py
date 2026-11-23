@@ -2,13 +2,12 @@
 """Tests for UCLAdapter — DataAdapter Protocol implementation for UCL."""
 from unittest.mock import patch, MagicMock
 from datetime import datetime, timezone
-import pytest
 
 from app.kernel.domain import (
     SportIdentity, CompetitionIdentity, SeasonIdentity,
     TeamIdentity, MatchIdentity, MatchOutcome,
 )
-from app.kernel.protocols import DataAdapter, ScheduleFilter, RawMatchData
+from app.kernel.protocols import DataAdapter
 from app.sports.football.adapters.ucl_adapter import UCLAdapter
 
 

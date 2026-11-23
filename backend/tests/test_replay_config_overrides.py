@@ -1,6 +1,5 @@
 """Tests for ReplayConfig.settings_overrides (LATER #1)."""
 import unittest
-from unittest.mock import patch
 
 from app.core.config import settings
 from app.replay.config import ReplayConfig, apply_replay_config

@@ -19,9 +19,9 @@ from unittest.mock import AsyncMock, patch
 _BACKEND = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_BACKEND))
 
-from app.memory import llm_daily_spend_store as store
-from app.services import llm_gateway_service as gateway
-from app.utils import sqlite_db
+from app.memory import llm_daily_spend_store as store  # noqa: E402
+from app.services import llm_gateway_service as gateway  # noqa: E402
+from app.utils import sqlite_db  # noqa: E402
 
 
 def _db(tmp):

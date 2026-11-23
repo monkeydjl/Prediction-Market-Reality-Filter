@@ -2,7 +2,6 @@
 """Tests for NBA static team ORtg/DRtg (P1-B4)."""
 from __future__ import annotations
 
-import pytest
 
 from app.sports.basketball.nba_team_ratings import (
     PRIMARY_FRANCHISES,

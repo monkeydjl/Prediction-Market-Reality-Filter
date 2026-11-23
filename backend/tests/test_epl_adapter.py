@@ -2,11 +2,10 @@
 """Tests for EPLAdapter — DataAdapter Protocol implementation for EPL."""
 from unittest.mock import patch, MagicMock
 from datetime import datetime, timezone
-import pytest
 
 from app.kernel.domain import (
     SportIdentity, CompetitionIdentity, SeasonIdentity,
-    TeamIdentity, MatchIdentity, MatchOutcome,
+    TeamIdentity, MatchIdentity,
 )
 from app.kernel.protocols import DataAdapter
 from app.sports.football.adapters.epl_adapter import EPLAdapter

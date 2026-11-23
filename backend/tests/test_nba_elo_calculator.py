@@ -1,6 +1,5 @@
 # backend/tests/test_nba_elo_calculator.py
 """Tests for NBA Elo calculator — stateless functions."""
-import pytest
 
 from app.sports.basketball.elo_calculator import (
     compute_expected_score,

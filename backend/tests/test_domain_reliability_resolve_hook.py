@@ -58,7 +58,6 @@ class TestResolveHook(unittest.TestCase):
         """When TRACKING_ENABLED=False, no DB writes occur."""
         with patch.object(settings, "DOMAIN_RELIABILITY_TRACKING_ENABLED", False), \
              patch("app.memory.domain_reliability_store.apply_resolution"):
-            from app.services.event_resolve_service import resolve_with_calibration
             # resolve_with_calibration requires event to exist; just verify
             # apply_resolution is not called when disabled.
             # We can't easily call resolve_with_calibration without a real event,

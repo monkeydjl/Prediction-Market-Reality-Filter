@@ -83,7 +83,7 @@ async def test_reddit_sentiment():
     print("\nFetching sentiment from r/soccer...")
     reddit_data = await fetch_reddit_sentiment(subreddit="soccer", team_name=None, limit=50)
 
-    print(f"\nResults:")
+    print("\nResults:")
     print(f"  Posts analyzed: {reddit_data['posts_count']}")
     print(f"  Avg sentiment: {reddit_data['avg_sentiment']:+.2f}")
     print(f"  Positive ratio: {reddit_data['positive_ratio']:.1%}")
@@ -132,7 +132,7 @@ async def test_team_sentiment():
     cached = get_cached_sentiment(team, ttl_hours=6)
 
     if cached:
-        print(f"  ✓ Cached sentiment retrieved")
+        print("  ✓ Cached sentiment retrieved")
         print(f"  Cache age: {cached['cache_age_hours']:.2f} hours")
         print("\n✅ Team sentiment aggregation working")
     else:
@@ -163,7 +163,7 @@ async def test_match_sentiment():
     print(f"  News: {match_sentiment['away_sentiment']['news']['avg_sentiment']:+.2f}")
     print(f"  Reddit: {match_sentiment['away_sentiment']['reddit']['avg_sentiment']:+.2f}")
 
-    print(f"\nComparison:")
+    print("\nComparison:")
     print(f"  Sentiment diff: {match_sentiment['sentiment_diff']:+.2f}")
     print(f"  Interpretation: {match_sentiment['interpretation']}")
     print(f"  Confidence: {match_sentiment['confidence']:.2f}")

@@ -1,7 +1,6 @@
 # backend/tests/test_hockey_engine.py
 """Tests for HockeyEngine — 5-factor Bradley-Terry binary prediction engine."""
 from datetime import datetime, timezone
-import pytest
 
 from app.kernel.domain import (
     SportIdentity, CompetitionIdentity, SeasonIdentity,

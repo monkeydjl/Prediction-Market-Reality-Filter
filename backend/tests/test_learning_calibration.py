@@ -10,7 +10,7 @@ from app.kernel.domain import (
 )
 from app.kernel.kernel_db import (
     init_kernel_db, close_kernel_session, get_kernel_session,
-    KernelPrediction, KernelMatchOutcome, KernelCalibration,
+    KernelMatchOutcome, KernelCalibration,
 )
 from app.kernel.learning_service import KernelLearningService
 
@@ -387,7 +387,6 @@ class TestConditionalCalibration:
 
     def test_conditional_calibration_buckets(self, svc):
         """Bucket rows stored under competition#c_* keys when samples allow."""
-        from app.kernel.learning_service import competition_with_bucket
 
         # Seed with varying confidence via record_prediction
         for i in range(30):

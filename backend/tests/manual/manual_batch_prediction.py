@@ -61,7 +61,7 @@ async def test_batch_prediction():
     result = await batch_predict_matches(match_ids=match_ids, trigger="batch_test")
 
     # Display results
-    print(f"Batch Result:")
+    print("Batch Result:")
     print(f"  Total: {result.get('total')}")
     print(f"  Succeeded: {result.get('succeeded')}")
     print(f"  Failed: {result.get('failed')}")

@@ -9,7 +9,7 @@ import ast
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 from urllib.error import URLError
 
 from app.services import world_cup_match_service

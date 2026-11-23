@@ -327,7 +327,7 @@ class TestReport(unittest.TestCase):
     def test_report_invalid_outcome_excluded_from_scoring(self):
         """status='invalid' → actual_outcome=None, direction_correct=None,
         not counted in calibration deviation."""
-        from report_quality_metrics import _collect_entries, _extract_metrics
+        from report_quality_metrics import _extract_metrics
         # Note: list_resolved_events filters out status!='resolved', so this
         # event won't appear in _collect_entries at all. We test _extract_metrics
         # directly to confirm the gating contract.
@@ -384,7 +384,7 @@ class TestReport(unittest.TestCase):
     def test_report_resilient_to_single_event_failure(self):
         """One record that raises during _extract_metrics must not abort the
         whole report — it lands in report_errors instead."""
-        from report_quality_metrics import _extract_metrics, _build_report
+        from report_quality_metrics import _build_report
         # Two healthy items + one we make fail by patching _extract_metrics.
         good_items = [
             {"event_id": "g1", "source_type": "prediction_market",

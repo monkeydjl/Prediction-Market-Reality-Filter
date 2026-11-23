@@ -1,7 +1,6 @@
 # backend/tests/test_hockey_feature_builder.py
 """Tests for HockeyFeatureBuilder — FeatureBuilder Protocol."""
 from datetime import datetime, timezone
-import pytest
 
 from app.kernel.domain import (
     SportIdentity, CompetitionIdentity, SeasonIdentity,

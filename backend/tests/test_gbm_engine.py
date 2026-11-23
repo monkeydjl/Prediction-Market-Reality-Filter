@@ -188,7 +188,6 @@ class GbmEngineFallbackTests(unittest.TestCase):
             "app.services.world_cup_engines.world_cup_gbm_engine._AWAY_MODEL_PATH"
         ) as mock_away:
             # Simulate missing files
-            from pathlib import Path
             mock_home.exists.return_value = False
             mock_away.exists.return_value = False
             _load_models.cache_clear()

@@ -5,7 +5,7 @@ import pytest
 from sqlalchemy import text
 
 from app.kernel.kernel_db import init_kernel_db, close_kernel_session, get_kernel_session, KernelFactor
-from app.kernel.factor_registry import FactorRegistry, FactorConfig
+from app.kernel.factor_registry import FactorRegistry
 
 
 @pytest.fixture

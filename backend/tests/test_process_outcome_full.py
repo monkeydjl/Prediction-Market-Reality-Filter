@@ -8,7 +8,7 @@ from app.kernel.domain import (
     SportIdentity, CompetitionIdentity, SeasonIdentity,
     TeamIdentity, MatchIdentity, MatchOutcome, PredictionResult,
     FeatureSet, GeneralFeatures, TeamFeatures, MarketFeatures,
-    PlayerFeatures, EnvironmentFeatures, PredictionError, ContributionItem,
+    PlayerFeatures, EnvironmentFeatures, ContributionItem,
 )
 from app.kernel.kernel_db import init_kernel_db, close_kernel_session
 from app.kernel.learning_service import KernelLearningService

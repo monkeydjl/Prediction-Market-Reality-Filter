@@ -1,9 +1,8 @@
 """Unit tests for resolve_elo_params / settings fallback."""
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from app.kernel.elo_params_resolve import (
-    has_applied_elo_params,
     resolve_elo_params,
     resolve_nba_hfa,
     settings_elo_params,

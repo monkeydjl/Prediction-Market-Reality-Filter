@@ -8,7 +8,7 @@ from pathlib import Path
 _BACKEND = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_BACKEND))
 
-from app.services.model_eval_lab_service import (
+from app.services.model_eval_lab_service import (  # noqa: E402
     compute_ece,
     extract_model_metrics,
 )
@@ -158,7 +158,7 @@ class TestComputeEce(unittest.TestCase):
         self.assertAlmostEqual(compute_ece(items), 10.0)
 
 
-from app.services.model_eval_lab_service import (
+from app.services.model_eval_lab_service import (  # noqa: E402
     REPORT_SCHEMA_VERSION,
     build_model_eval_report,
     compute_ece_n,

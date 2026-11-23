@@ -1,14 +1,13 @@
 # backend/tests/test_multi_adapter.py
 """Tests for MultiAdapter — prefix-dispatch proxy."""
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 from datetime import datetime, timezone
-import pytest
 
 from app.kernel.domain import (
     SportIdentity, CompetitionIdentity, SeasonIdentity,
-    TeamIdentity, MatchIdentity, MatchOutcome,
+    TeamIdentity, MatchIdentity,
 )
-from app.kernel.protocols import DataAdapter, ScheduleFilter, RawMatchData
+from app.kernel.protocols import DataAdapter, ScheduleFilter
 from app.sports.football.adapters.multi_adapter import MultiAdapter
 
 

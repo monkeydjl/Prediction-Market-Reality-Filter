@@ -2,16 +2,12 @@
 """Tests for dynamic engine selection (Phase 3)."""
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
-import pytest
 
 from app.kernel.domain import (
-    SportIdentity, CompetitionIdentity, SeasonIdentity,
-    TeamIdentity, MatchIdentity, FeatureSet, PredictionResult,
-    GeneralFeatures, TeamFeatures, MarketFeatures,
-    PlayerFeatures, EnvironmentFeatures, EngineScore,
+    PredictionResult,
+    EngineScore,
 )
 from app.kernel.engine_registry import EngineRegistry
-from app.kernel.engines.elo_odds_engine import EloOddsEngine
 
 
 class FakeEngine:

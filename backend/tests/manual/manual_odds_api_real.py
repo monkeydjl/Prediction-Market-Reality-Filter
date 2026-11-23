@@ -2,7 +2,6 @@
 
 import sys
 import asyncio
-import os
 
 if sys.platform == 'win32':
     sys.stdout.reconfigure(encoding='utf-8')
@@ -93,7 +92,7 @@ async def test_fetch_world_cup_odds():
     odds = await fetch_match_odds("Brazil", "Argentina", "2026-06-24T18:00:00Z")
 
     if odds:
-        print(f"\n✓ Odds retrieved:")
+        print("\n✓ Odds retrieved:")
         print(f"  Home (Brazil): {odds['home']:.2f}")
         print(f"  Draw: {odds['draw']:.2f}")
         print(f"  Away (Argentina): {odds['away']:.2f}")
@@ -141,21 +140,21 @@ async def test_cache_with_real_data():
     odds1 = await get_cached_odds(home_team, away_team, ttl_seconds=3600)
 
     if odds1:
-        print(f"  ✓ Odds retrieved:")
+        print("  ✓ Odds retrieved:")
         print(f"    Home: {odds1['home']:.2f}")
         print(f"    Draw: {odds1['draw']:.2f}")
         print(f"    Away: {odds1['away']:.2f}")
         print(f"    Source: {odds1['source']}")
         print(f"    Bookmaker: {odds1.get('bookmaker', 'N/A')}")
     else:
-        print(f"  ⚠️  No odds found (match not available yet)")
+        print("  ⚠️  No odds found (match not available yet)")
 
     # Second call - should use cache
     print("\n2. Second call (cache hit):")
     odds2 = await get_cached_odds(home_team, away_team, ttl_seconds=3600)
 
     if odds2:
-        print(f"  ✓ Odds retrieved:")
+        print("  ✓ Odds retrieved:")
         print(f"    Source: {odds2['source']}")
         print(f"    Cache age: {odds2.get('cache_age_seconds', 0):.0f}s")
 
@@ -166,7 +165,7 @@ async def test_cache_with_real_data():
             print("\n⚠️  Cache not used (might be disabled)")
             return False
     else:
-        print(f"  ⚠️  No odds in cache")
+        print("  ⚠️  No odds in cache")
         return False
 
 
@@ -190,7 +189,7 @@ async def test_batch_prefetch():
     print(f"\nPrefetching odds for {len(matches)} matches...")
     result = await prefetch_matches_odds(matches, ttl_seconds=3600)
 
-    print(f"\nResults:")
+    print("\nResults:")
     print(f"  Total: {result['total']}")
     print(f"  Fetched (new): {result['fetched']}")
     print(f"  Cached (reused): {result['cached']}")
@@ -213,7 +212,7 @@ async def test_cache_statistics():
 
     stats = get_cache_stats()
 
-    print(f"\nCache Statistics:")
+    print("\nCache Statistics:")
     print(f"  Total entries: {stats['total_entries']}")
     print(f"  Fresh (< 1 hour): {stats['fresh_count']}")
     print(f"  Stale (> 1 hour): {stats['stale_count']}")
@@ -233,10 +232,10 @@ async def test_integration_summary():
 
     print("\nThe Odds API Integration Status:")
     print(f"  {'✅' if has_key else '⚠️ '} API key configured")
-    print(f"  ✅ Odds API service implemented")
-    print(f"  ✅ Cache service integrated")
-    print(f"  ✅ Prediction pipeline integration")
-    print(f"  ✅ Frontend display support")
+    print("  ✅ Odds API service implemented")
+    print("  ✅ Cache service integrated")
+    print("  ✅ Prediction pipeline integration")
+    print("  ✅ Frontend display support")
 
     print("\nAPI Features:")
     print("  - Fetch soccer odds (h2h markets)")

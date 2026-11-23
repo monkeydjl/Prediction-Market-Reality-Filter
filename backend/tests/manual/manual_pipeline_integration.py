@@ -6,11 +6,6 @@ import asyncio
 if sys.platform == 'win32':
     sys.stdout.reconfigure(encoding='utf-8')
 
-from app.services.world_cup_prediction_pipeline import (
-    run_prediction_pipeline,
-    batch_predict_matches,
-)
-from app.services.world_cup_match_service import sync_world_cup_fixtures
 from app.utils.prediction_db import init_prediction_db
 
 

@@ -19,7 +19,6 @@ from app.kernel.sport_market_link_store import SportMarketLinkStore
 from app.kernel.market_snapshot_store import MarketSnapshotStore
 from app.kernel.edge_detector_service import (
     EdgeDetectorService,
-    EdgeResult,
     EdgeDetectionSummary,
 )
 

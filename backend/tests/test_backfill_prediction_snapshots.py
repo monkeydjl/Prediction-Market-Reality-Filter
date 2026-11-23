@@ -6,7 +6,6 @@ get their snapshots populated from the stored event record, and that the
 """
 from __future__ import annotations
 
-import os
 import sys
 import tempfile
 import unittest

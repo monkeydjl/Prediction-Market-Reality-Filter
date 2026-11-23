@@ -1,6 +1,5 @@
 """Unit tests for ReplayConfig + apply_replay_config."""
 import unittest
-from unittest.mock import patch
 
 
 class TestReplayConfigPresets(unittest.TestCase):

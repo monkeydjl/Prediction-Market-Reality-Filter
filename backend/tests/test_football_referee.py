@@ -1,5 +1,4 @@
 """Tests for football_referee.bias_for_referee (P1-F8)."""
-import pytest
 
 from app.sports.football.football_referee import bias_for_referee
 

@@ -10,11 +10,11 @@ from unittest.mock import patch
 _BACKEND = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_BACKEND))
 
-from fastapi.testclient import TestClient
+from fastapi.testclient import TestClient  # noqa: E402
 
-from app.main import app
-from app.memory import decision_timeline_store, event_store
-from app.utils import sqlite_db
+from app.main import app  # noqa: E402
+from app.memory import decision_timeline_store, event_store  # noqa: E402
+from app.utils import sqlite_db  # noqa: E402
 
 
 def _db(tmp):

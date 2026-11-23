@@ -3019,13 +3019,13 @@ class SmallInlineContractTests(unittest.TestCase):
             (ResetEventDataResponse, ["message", "cleared"],
              {"message": str, "cleared": dict[str, int | str]}),
         ]
-        for model, keys, annotations in cases:
+        for model, keys, want_types in cases:
             fields = model.model_fields
             self.assertEqual(
                 list(fields), keys,
                 f"{model.__name__} is no longer its producer key order",
             )
-            for name, want in annotations.items():
+            for name, want in want_types.items():
                 with self.subTest(model=model.__name__, field=name):
                     self.assertEqual(
                         fields[name].annotation, want,
@@ -6912,7 +6912,6 @@ class WorldCupMatchesContractTests(unittest.TestCase):
 
         from app.models.event import (
             FlexibleResponse,
-            MatchFixtureRecord,
             MatchListEntry,
             MatchListResponse,
             MatchPredictionPayload,
@@ -7199,7 +7198,7 @@ class WorldCupMatchesContractTests(unittest.TestCase):
                 self.assertIn(
                     alias,
                     client,
-                    f"the old name must stay exported as an alias of the "
+                    "the old name must stay exported as an alias of the "
                     "generated type so existing consumers keep compiling "
                     "(audit 53.76)",
                 )
@@ -7285,7 +7284,6 @@ class WorldCupPredictionHistoryContractTests(unittest.TestCase):
     """
 
     def test_the_history_envelope_holds_both_entry_shapes_byte_for_byte(self):
-        import json
 
         from app.models.event import (
             ConfidenceCalibrationInfo,

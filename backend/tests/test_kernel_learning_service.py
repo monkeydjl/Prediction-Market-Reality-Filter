@@ -2,15 +2,12 @@
 """Tests for KernelLearningService."""
 from datetime import datetime, timezone
 import pytest
-import tempfile
-import os
 
 from app.kernel.domain import (
     SportIdentity, CompetitionIdentity, SeasonIdentity,
     TeamIdentity, MatchIdentity, MatchOutcome, PredictionResult,
-    PredictionError, EngineScore,
 )
-from app.kernel.kernel_db import init_kernel_db, get_kernel_session, close_kernel_session
+from app.kernel.kernel_db import init_kernel_db, close_kernel_session
 from app.kernel.learning_service import KernelLearningService
 
 

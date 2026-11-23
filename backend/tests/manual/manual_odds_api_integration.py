@@ -10,7 +10,6 @@ from app.services.odds_api_service import (
     fetch_match_odds,
     get_available_quota,
     normalize_team_name,
-    find_matching_fixture,
 )
 from app.core.config import settings
 
@@ -47,14 +46,14 @@ async def test_quota_check():
     quota = await get_available_quota()
 
     if quota:
-        print(f"\n✅ API Connection Successful")
+        print("\n✅ API Connection Successful")
         print(f"   Requests used: {quota['requests_used']}")
         print(f"   Requests remaining: {quota['requests_remaining']}")
 
         if quota['requests_remaining'] < 50:
-            print(f"\n⚠️  Low quota warning: <50 requests remaining")
+            print("\n⚠️  Low quota warning: <50 requests remaining")
     else:
-        print(f"\n❌ Unable to check quota (API key invalid or network error)")
+        print("\n❌ Unable to check quota (API key invalid or network error)")
         return False
 
     return True
@@ -76,7 +75,7 @@ async def test_fetch_match_odds():
     )
 
     if odds:
-        print(f"\n✅ Odds Retrieved:")
+        print("\n✅ Odds Retrieved:")
         print(f"   Home (Brazil): {odds['home']}")
         print(f"   Draw: {odds['draw']}")
         print(f"   Away (Argentina): {odds['away']}")
@@ -84,11 +83,11 @@ async def test_fetch_match_odds():
         print(f"   Bookmakers: {odds['bookmakers_count']}")
         print(f"   Last update: {odds['last_update']}")
     else:
-        print(f"\n⚠️  No odds available for this match")
-        print(f"   Possible reasons:")
-        print(f"   - Match not yet listed on betting sites")
-        print(f"   - Team names don't match API format")
-        print(f"   - World Cup 2026 odds not yet available")
+        print("\n⚠️  No odds available for this match")
+        print("   Possible reasons:")
+        print("   - Match not yet listed on betting sites")
+        print("   - Team names don't match API format")
+        print("   - World Cup 2026 odds not yet available")
 
     return odds is not None
 
@@ -142,7 +141,7 @@ async def test_integration_with_elo_odds_engine():
         odds_draw = odds['draw']
         odds_away = odds['away']
     else:
-        print(f"\n⚠️  Using MOCK odds (real odds not available)")
+        print("\n⚠️  Using MOCK odds (real odds not available)")
         odds_home = 2.10
         odds_draw = 3.20
         odds_away = 3.50
@@ -158,9 +157,9 @@ async def test_integration_with_elo_odds_engine():
         odds_away=odds_away,
     )
 
-    print(f"\nPrediction:")
+    print("\nPrediction:")
     print(f"  Score: {prediction['predicted_score']['home']:.2f} - {prediction['predicted_score']['away']:.2f}")
-    print(f"  Win probabilities:")
+    print("  Win probabilities:")
     print(f"    Brazil: {prediction['outcome_probabilities']['home_win']:.1%}")
     print(f"    Draw: {prediction['outcome_probabilities']['draw']:.1%}")
     print(f"    Argentina: {prediction['outcome_probabilities']['away_win']:.1%}")

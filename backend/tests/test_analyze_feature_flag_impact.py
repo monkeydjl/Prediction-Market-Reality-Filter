@@ -13,7 +13,7 @@ _BACKEND = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_BACKEND))
 sys.path.insert(0, str(_BACKEND / "scripts"))
 
-from analyze_feature_flag_impact import (
+from analyze_feature_flag_impact import (  # noqa: E402
     _compute_direction_matrix,
     _format_matrix,
     main,
@@ -289,7 +289,6 @@ class TestAnalyzeFeatureFlagImpact(unittest.TestCase):
         Before this fix, guardrails_baseline was only reachable inside
         --per-phase's internal branch."""
         from analyze_feature_flag_impact import _config_by_name
-        from app.replay.config import ReplayConfig
         cfg = _config_by_name("guardrails_baseline")
         # Same prerequisites as guardrails_only, guardrails off
         self.assertTrue(cfg.decision_quality_enabled)

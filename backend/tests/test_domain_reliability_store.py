@@ -6,7 +6,6 @@ import unittest
 from unittest.mock import patch
 
 from app.core.config import settings
-from app.services.domain_reliability_service import attribute_evidence
 from app.utils import sqlite_db
 
 

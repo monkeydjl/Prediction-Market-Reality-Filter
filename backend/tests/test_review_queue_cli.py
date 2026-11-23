@@ -24,9 +24,9 @@ _SCRIPTS_DIR = _BACKEND_DIR / "scripts"
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
-from app.core.config import settings
-from app.memory import review_queue_store as rq
-from app.utils import sqlite_db
+from app.core.config import settings  # noqa: E402
+from app.memory import review_queue_store as rq  # noqa: E402
+from app.utils import sqlite_db  # noqa: E402
 
 
 class TestReviewQueueCli(unittest.TestCase):

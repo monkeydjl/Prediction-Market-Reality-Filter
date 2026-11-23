@@ -30,10 +30,10 @@ from unittest.mock import patch
 _BACKEND = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_BACKEND))
 
-from app.memory import review_queue_store
-from app.models.event import ActionableRecommendation, Outcome, Probability
-from app.services import review_queue_detectors
-from app.services.review_queue_detectors import (
+from app.memory import review_queue_store  # noqa: E402
+from app.models.event import ActionableRecommendation, Outcome, Probability  # noqa: E402
+from app.services import review_queue_detectors  # noqa: E402
+from app.services.review_queue_detectors import (  # noqa: E402
     detect_auto_resolve_low_confidence,
     detect_review_candidates,
 )

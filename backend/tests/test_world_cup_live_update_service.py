@@ -10,7 +10,7 @@ All external dependencies are mocked — no database, network, or LLM is hit.
 import asyncio
 import unittest
 from datetime import datetime, timezone, timedelta
-from unittest.mock import AsyncMock, MagicMock, patch, call
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.services import world_cup_live_update_service as svc
 

@@ -1,5 +1,4 @@
 """Tests for football_xg.xg_for_team (P1-F5)."""
-import pytest
 
 from app.sports.football.football_xg import xg_for_team
 

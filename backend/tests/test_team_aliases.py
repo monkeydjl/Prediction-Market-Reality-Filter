@@ -1,5 +1,4 @@
 """Tests for the team alias registry."""
-import pytest
 
 
 def test_resolve_nba_abbreviation():

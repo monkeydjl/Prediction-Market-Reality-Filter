@@ -305,7 +305,6 @@ class TestFootballMultiFactorPredict:
         engine = FootballMultiFactorEngine()
         # player injury empty; custom carries impact
         base = _make_features()
-        from dataclasses import replace
         from app.kernel.domain import PlayerFeatures, FeatureSet
         empty_player = PlayerFeatures(None, None, None, None)
         low = FeatureSet(

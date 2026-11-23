@@ -10,7 +10,6 @@ from app.kernel.domain import (
 )
 from app.kernel.kernel_db import (
     init_kernel_db, close_kernel_session, get_kernel_session,
-    KernelPrediction, KernelMatchOutcome,
 )
 from app.kernel.learning_service import KernelLearningService
 from app.kernel.factor_registry import FactorRegistry

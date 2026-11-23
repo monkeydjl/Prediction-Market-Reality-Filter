@@ -40,25 +40,24 @@ if sys.platform == "win32":
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.services.event_intelligence_service import (
+from app.services.event_intelligence_service import (  # noqa: E402
     analyze_event_question,
     discover_events,
 )
-from app.services.event_collection_service import (
+from app.services.event_collection_service import (  # noqa: E402
     collect_shared_articles,
-    collect_articles,
 )
-from app.services.event_resolve_service import (
+from app.services.event_resolve_service import (  # noqa: E402
     auto_resolve_events,
     resolve_with_calibration,
 )
-from app.services.calibration_service_event import summarize
-from app.services.event_extraction_service import extract_candidate_events
-from app.memory import event_store, event_cache
-from app.services import event_audit_service
-from app.utils import sqlite_db
-from app.services.rss_service import fetch_news
-from app.services.gnews_service import fetch_google_news
+from app.services.calibration_service_event import summarize  # noqa: E402
+from app.services.event_extraction_service import extract_candidate_events  # noqa: E402
+from app.memory import event_store, event_cache  # noqa: E402
+from app.services import event_audit_service  # noqa: E402
+from app.utils import sqlite_db  # noqa: E402
+from app.services.rss_service import fetch_news  # noqa: E402
+from app.services.gnews_service import fetch_google_news  # noqa: E402
 
 
 class LiveIntegrationTests(unittest.TestCase):

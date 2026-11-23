@@ -8,7 +8,7 @@ from pathlib import Path
 _BACKEND = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_BACKEND))
 
-from app.services.decision_diff_service import build_decision_diff
+from app.services.decision_diff_service import build_decision_diff  # noqa: E402
 
 
 def _snapshot(**overrides):

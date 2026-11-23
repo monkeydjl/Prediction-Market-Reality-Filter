@@ -6,7 +6,6 @@ Tests the full pipeline without HTTP layer.
 """
 import asyncio
 import sys
-import os
 from pathlib import Path
 
 # Force UTF-8 output on Windows
@@ -79,7 +78,7 @@ async def test_event_analysis():
         return True
 
     except Exception as e:
-        print(f"❌ FAILED - Error during analysis:")
+        print("❌ FAILED - Error during analysis:")
         print(f"  {type(e).__name__}: {e}")
         import traceback
         traceback.print_exc()

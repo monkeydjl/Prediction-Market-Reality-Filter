@@ -10,7 +10,7 @@ from app.kernel.kernel_db import (
     get_kernel_session,
 )
 from app.kernel.calibration_fusion_service import (
-    CalibrationFusionService, CompositeTrust,
+    CalibrationFusionService,
 )
 
 

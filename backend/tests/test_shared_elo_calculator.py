@@ -1,6 +1,5 @@
 # backend/tests/test_shared_elo_calculator.py
 """Tests for shared Elo calculator — stateless functions consistency with NBA version."""
-import pytest
 
 from app.sports._shared.elo_calculator import (
     compute_expected_score,

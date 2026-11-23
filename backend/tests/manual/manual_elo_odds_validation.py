@@ -115,7 +115,7 @@ def compare_scenarios():
 
     # Summary
     print_header("VALIDATION RESULTS")
-    print(f"\n✅ All 5 scenarios predicted successfully")
+    print("\n✅ All 5 scenarios predicted successfully")
     print(f"⏱️  Average speed: {total_time/len(scenarios)*1000:.1f}ms per prediction")
     print(f"⏱️  Total time: {total_time*1000:.1f}ms for 5 predictions")
 

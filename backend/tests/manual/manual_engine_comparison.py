@@ -125,9 +125,9 @@ async def compare_brazil_argentina():
     print(f"Speed difference: {current_time/elo_odds_time:.1f}x (Current is {current_time/elo_odds_time:.1f}x slower)")
 
     if current_pred.get('ai_reasoning'):
-        print(f"Interpretability: Current wins (has AI reasoning)")
+        print("Interpretability: Current wins (has AI reasoning)")
     else:
-        print(f"Interpretability: Comparable")
+        print("Interpretability: Comparable")
 
 
 async def compare_heavy_favorite():
@@ -199,7 +199,7 @@ async def compare_heavy_favorite():
     print(f"Confidence: {current_pred['confidence']:.1%}")
     print(f"⏱️  Speed: {current_time*1000:.1f}ms")
 
-    print(f"\n📊 Both engines correctly identify France as heavy favorite")
+    print("\n📊 Both engines correctly identify France as heavy favorite")
     print(f"Speed advantage: Elo+Odds is {current_time/elo_odds_time:.1f}x faster")
 
 
@@ -276,7 +276,7 @@ async def compare_even_matchup():
     print(f"Confidence: {current_pred['confidence']:.1%}")
     print(f"⏱️  Speed: {current_time*1000:.1f}ms")
 
-    print(f"\n📊 Both engines recognize this as a coin-flip match")
+    print("\n📊 Both engines recognize this as a coin-flip match")
     print(f"Confidence comparison: Elo+Odds {elo_odds_pred['confidence']:.1%} vs Current {current_pred['confidence']:.1%}")
 
 

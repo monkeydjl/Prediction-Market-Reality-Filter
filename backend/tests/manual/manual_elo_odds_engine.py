@@ -9,7 +9,6 @@ from app.services.world_cup_elo_odds_engine import (
     predict_match_elo_odds,
     calculate_elo_win_probability,
     odds_to_probabilities,
-    fuse_elo_and_odds,
     predict_matches_batch,
 )
 
@@ -32,7 +31,7 @@ def test_elo_only_prediction():
     print(f"Elo ratings: {prediction['elo_ratings']['home']} vs {prediction['elo_ratings']['away']}")
     print(f"Elo difference: {prediction['elo_ratings']['difference']:+.0f}")
     print(f"\nPredicted score: {prediction['predicted_score']['home']:.2f} - {prediction['predicted_score']['away']:.2f}")
-    print(f"\nOutcome probabilities:")
+    print("\nOutcome probabilities:")
     print(f"  {prediction['home_team']} win: {prediction['outcome_probabilities']['home_win']:.1%}")
     print(f"  Draw: {prediction['outcome_probabilities']['draw']:.1%}")
     print(f"  {prediction['away_team']} win: {prediction['outcome_probabilities']['away_win']:.1%}")
@@ -66,13 +65,13 @@ def test_elo_odds_fusion():
     print(f"Elo ratings: {prediction['elo_ratings']['home']} vs {prediction['elo_ratings']['away']}")
     print(f"Elo difference: {prediction['elo_ratings']['difference']:+.0f}")
 
-    print(f"\n📊 Elo-based probabilities:")
+    print("\n📊 Elo-based probabilities:")
     elo_probs = prediction['elo_probabilities']
     print(f"  {prediction['home_team']} win: {elo_probs['home_win']:.1%}")
     print(f"  Draw: {elo_probs['draw']:.1%}")
     print(f"  {prediction['away_team']} win: {elo_probs['away_win']:.1%}")
 
-    print(f"\n💰 Market-based probabilities (from odds):")
+    print("\n💰 Market-based probabilities (from odds):")
     market_probs = prediction['market_probabilities']
     print(f"  Odds: {prediction['home_team']} {market_probs} | Draw 3.20 | {prediction['away_team']} 3.50")
     print(f"  {prediction['home_team']} win: {market_probs['home_win']:.1%}")
@@ -80,7 +79,7 @@ def test_elo_odds_fusion():
     print(f"  {prediction['away_team']} win: {market_probs['away_win']:.1%}")
     print(f"  Market favorite: {prediction['market_favorite']}")
 
-    print(f"\n🔮 Final fused prediction (30% Elo + 70% Odds):")
+    print("\n🔮 Final fused prediction (30% Elo + 70% Odds):")
     print(f"  {prediction['home_team']} win: {prediction['outcome_probabilities']['home_win']:.1%}")
     print(f"  Draw: {prediction['outcome_probabilities']['draw']:.1%}")
     print(f"  {prediction['away_team']} win: {prediction['outcome_probabilities']['away_win']:.1%}")
@@ -146,7 +145,7 @@ def test_even_matchup():
     print(f"\n{prediction['home_team']} vs {prediction['away_team']}")
     print(f"Elo difference: {prediction['elo_ratings']['difference']:+.0f} (EVEN)")
 
-    print(f"\nOutcome probabilities:")
+    print("\nOutcome probabilities:")
     print(f"  {prediction['home_team']} win: {prediction['outcome_probabilities']['home_win']:.1%}")
     print(f"  Draw: {prediction['outcome_probabilities']['draw']:.1%}")
     print(f"  {prediction['away_team']} win: {prediction['outcome_probabilities']['away_win']:.1%}")
@@ -228,7 +227,7 @@ def test_odds_conversion():
 
     probs = odds_to_probabilities(odds_home, odds_draw, odds_away)
 
-    print(f"\nDecimal odds:")
+    print("\nDecimal odds:")
     print(f"  Home: {odds_home}")
     print(f"  Draw: {odds_draw}")
     print(f"  Away: {odds_away}")
@@ -240,13 +239,13 @@ def test_odds_conversion():
     total = implied_home + implied_draw + implied_away
     overround = (total - 1.0) * 100
 
-    print(f"\nRaw implied probabilities (with margin):")
+    print("\nRaw implied probabilities (with margin):")
     print(f"  Home: {implied_home:.1%}")
     print(f"  Draw: {implied_draw:.1%}")
     print(f"  Away: {implied_away:.1%}")
     print(f"  Total: {total:.1%} (overround: {overround:.1f}%)")
 
-    print(f"\nNormalized probabilities (margin removed):")
+    print("\nNormalized probabilities (margin removed):")
     print(f"  Home: {probs['home_win']:.1%}")
     print(f"  Draw: {probs['draw']:.1%}")
     print(f"  Away: {probs['away_win']:.1%}")

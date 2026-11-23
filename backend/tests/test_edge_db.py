@@ -5,7 +5,6 @@ from app.kernel.kernel_db import (
     init_kernel_db,
     close_kernel_db,
     KernelCalibration,
-    KernelSportEdge,
     get_calibration,
     get_kernel_session,
 )

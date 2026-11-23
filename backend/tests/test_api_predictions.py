@@ -13,6 +13,15 @@ from app.kernel.kernel_db import (
 )
 from datetime import datetime, timezone
 
+from unittest.mock import MagicMock, patch
+from fastapi.testclient import TestClient
+
+from app.kernel.protocols import RawMatchData
+from app.kernel.domain import (
+    SportIdentity, CompetitionIdentity, SeasonIdentity,
+    TeamIdentity, MatchIdentity,
+)
+
 
 @pytest.fixture
 def db(tmp_path):
@@ -133,16 +142,6 @@ class TestAnUnreadablePredictionIsNotReportedAsNone:
         """
         _drop_predictions_table()
         assert get_match_ids_with_predictions([]) == set()
-
-
-from unittest.mock import MagicMock, patch
-from fastapi.testclient import TestClient
-
-from app.kernel.protocols import ScheduleFilter, RawMatchData
-from app.kernel.domain import (
-    SportIdentity, CompetitionIdentity, SeasonIdentity,
-    TeamIdentity, MatchIdentity,
-)
 
 
 def _make_raw_match(match_id="wc-test", sport_code="football", comp_code="world_cup",
@@ -594,7 +593,7 @@ class TestPredictEndpointFix:
         """Fix: predict response includes feature_version."""
         from app.api.routes import predictions
         from app.kernel.domain import (
-            PredictionResult, ContributionItem,
+            PredictionResult,
         )
         _patch_kernel_adapter(api_client)
 

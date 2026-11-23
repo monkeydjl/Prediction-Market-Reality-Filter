@@ -3,12 +3,11 @@
 from contextlib import ExitStack
 from unittest.mock import patch, MagicMock, AsyncMock
 from datetime import date, datetime, timezone, timedelta
-import asyncio
 import pytest
 
 from app.kernel.domain import (
     SportIdentity, CompetitionIdentity, SeasonIdentity,
-    TeamIdentity, MatchIdentity, MatchOutcome,
+    TeamIdentity, MatchIdentity,
 )
 from app.services.football_live_referee_service import LiveRefereeResult
 from app.services.football_live_style_service import LiveStyleResult
@@ -17,11 +16,8 @@ from app.sports.football.h2h import H2HMeeting
 from app.sports.football.adapters._shared import (
     fetch_team_elo,
     fetch_elo_and_odds,
-    query_fixture,
-    query_result,
     build_match_identity,
     build_match_outcome,
-    save_fixture,
     enrich_situational_features,
     enrich_style_features,
 )

@@ -152,7 +152,7 @@ async def test_integration_with_elo_odds():
     brazil = await get_elo_rating("Brazil", fifa_rank=3)
     argentina = await get_elo_rating("Argentina", fifa_rank=1)
 
-    print(f"\nUsing cached Elo ratings:")
+    print("\nUsing cached Elo ratings:")
     print(f"  Brazil: {brazil['elo_rating']:.0f} (source: {brazil['source']})")
     print(f"  Argentina: {argentina['elo_rating']:.0f} (source: {argentina['source']})")
 
@@ -167,7 +167,7 @@ async def test_integration_with_elo_odds():
         odds_away=3.50,
     )
 
-    print(f"\nPrediction:")
+    print("\nPrediction:")
     print(f"  Score: {prediction['predicted_score']['home']:.2f} - {prediction['predicted_score']['away']:.2f}")
     print(f"  Brazil win: {prediction['outcome_probabilities']['home_win']:.1%}")
     print(f"  Confidence: {prediction['confidence']:.1%}")

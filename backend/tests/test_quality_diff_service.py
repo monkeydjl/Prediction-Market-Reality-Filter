@@ -2,7 +2,6 @@
 import unittest
 
 from app.services.quality_diff_service import (
-    DIRECTION_LABELS,
     _effective_direction,
     build_diff,
 )

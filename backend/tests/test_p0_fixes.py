@@ -23,7 +23,6 @@ Scope:
 """
 from __future__ import annotations
 
-import io
 import unittest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -451,7 +450,6 @@ class TestF5RestorePathValidation(unittest.TestCase):
     def test_rejects_entry_outside_target_dir(self):
         """Even if arcname looks safe, a resolved path outside target_dir
         must be rejected (defense-in-depth via _validate_within_runtime_root)."""
-        from scripts.restore_stores import _target_path_for_arcname
 
         # A basename is accepted, but if somehow the resolved path escapes
         # (e.g. via symlink), _validate_within_runtime_root catches it.

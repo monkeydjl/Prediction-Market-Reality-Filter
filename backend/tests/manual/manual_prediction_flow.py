@@ -61,7 +61,7 @@ async def test_prediction():
     print("Step 3: Run prediction pipeline")
     result = await run_prediction_pipeline(match_id, trigger="test")
 
-    print(f"\nPrediction Result:")
+    print("\nPrediction Result:")
     print(f"  Status: {result.get('status')}")
     print(f"  Action: {result.get('action')}")
     print(f"  Match: {result.get('home_team')} vs {result.get('away_team')}")
@@ -80,7 +80,7 @@ async def test_prediction():
     try:
         prediction = session.query(MatchPrediction).filter_by(match_id=match_id).first()
         if prediction:
-            print(f"✓ Prediction saved to database")
+            print("✓ Prediction saved to database")
             print(f"  Score: {prediction.predicted_home_score} - {prediction.predicted_away_score}")
             print(f"  Win probabilities: Home {prediction.home_win_prob:.1%}, Draw {prediction.draw_prob:.1%}, Away {prediction.away_win_prob:.1%}")
             print(f"  Rule-based score: {prediction.rule_home_score} - {prediction.rule_away_score}")

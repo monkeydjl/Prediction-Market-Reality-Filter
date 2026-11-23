@@ -2,7 +2,6 @@
 
 import sys
 import asyncio
-from datetime import datetime, timedelta
 
 if sys.platform == 'win32':
     sys.stdout.reconfigure(encoding='utf-8')
@@ -115,7 +114,7 @@ async def test_batch_prefetch():
     print(f"\nPrefetching odds for {len(matches)} matches:")
     result = await prefetch_matches_odds(matches, ttl_seconds=3600)
 
-    print(f"\nResults:")
+    print("\nResults:")
     print(f"  Total: {result['total']}")
     print(f"  Fetched (new): {result['fetched']}")
     print(f"  Cached (reused): {result['cached']}")
@@ -137,7 +136,7 @@ async def test_cache_stats():
 
     stats = get_cache_stats()
 
-    print(f"\nCache Statistics:")
+    print("\nCache Statistics:")
     print(f"  Total entries: {stats['total_entries']}")
     print(f"  Fresh (< 1 hour): {stats['fresh_count']}")
     print(f"  Stale (> 1 hour): {stats['stale_count']}")
@@ -181,7 +180,7 @@ async def test_caching_strategy():
         print(f"  Estimated API calls: {config['estimated_calls']}")
 
     print("\n" + "-" * 70)
-    print(f"Total estimated API calls: ~354 (within 500 free quota)")
+    print("Total estimated API calls: ~354 (within 500 free quota)")
     print(f"Quota buffer: {500 - 354} calls")
 
     print("\n✅ Caching strategy documented")

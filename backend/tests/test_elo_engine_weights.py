@@ -2,7 +2,6 @@
 """Tests for EloOddsEngine FactorRegistry integration (Phase 3)."""
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
-import pytest
 
 from app.kernel.domain import (
     SportIdentity, CompetitionIdentity, SeasonIdentity,

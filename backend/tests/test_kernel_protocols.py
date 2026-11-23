@@ -1,13 +1,10 @@
 # backend/tests/test_kernel_protocols.py
 """Tests for kernel Protocol interfaces."""
-import pytest
 from datetime import datetime, timezone
 
 from app.kernel.domain import (
     SportIdentity, CompetitionIdentity, SeasonIdentity,
-    TeamIdentity, MatchIdentity, MatchOutcome, FeatureSet,
-    GeneralFeatures, TeamFeatures, MarketFeatures,
-    PlayerFeatures, EnvironmentFeatures, PredictionResult,
+    TeamIdentity, MatchIdentity,
 )
 from app.kernel.protocols import (
     DataAdapter, FeatureBuilder, PredictionEngine, LearningService,

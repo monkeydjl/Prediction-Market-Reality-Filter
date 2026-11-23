@@ -128,7 +128,6 @@ _SettingsClass.LOG_FILE = os.path.join(_TEST_DATA_DIR, "app.log")
 # Also update the singleton instance so code that already imported settings
 # sees the temp paths immediately.
 from app.core.config import settings as _settings_instance  # noqa: E402
-import app.core.config as _config_module  # noqa: E402
 
 _settings_instance.EVENT_STORE_FILE = _SettingsClass.EVENT_STORE_FILE
 _settings_instance.EVENT_CACHE_FILE = _SettingsClass.EVENT_CACHE_FILE

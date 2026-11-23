@@ -16,9 +16,7 @@ The current implementation leaks raw exception text; the safe contract replaces
 unstable exception details with fixed messages while preserving structured
 error context (operation type, count).
 """
-import tempfile
 import unittest
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient

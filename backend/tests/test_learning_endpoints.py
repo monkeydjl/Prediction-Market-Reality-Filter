@@ -1,10 +1,13 @@
 """Tests for learning dashboard DB functions and endpoints."""
-import json
 from datetime import datetime, timezone
 
 import pytest
 from sqlalchemy.exc import OperationalError
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
+from app.api.routes.predictions import router
+from app.core import config
 from app.kernel.kernel_db import (
     close_kernel_session,
     get_kernel_session,
@@ -341,11 +344,6 @@ class TestComputeReliabilityBins:
 
 
 # --- Endpoint tests ---
-
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
-from app.api.routes.predictions import router
-from app.core import config
 
 
 def _create_app():

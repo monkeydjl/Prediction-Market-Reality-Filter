@@ -1,7 +1,6 @@
 # backend/tests/test_kernel_feature_registry.py
 """Tests for FeatureRegistry."""
-import pytest
-from app.kernel.feature_registry import FeatureDefinition, FeatureRegistry
+from app.kernel.feature_registry import FeatureRegistry
 
 
 class TestFeatureRegistry:

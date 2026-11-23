@@ -11,8 +11,8 @@ from unittest.mock import patch
 _BACKEND = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_BACKEND))
 
-from app.memory import source_trust_registry_store as registry
-from app.utils import sqlite_db
+from app.memory import source_trust_registry_store as registry  # noqa: E402
+from app.utils import sqlite_db  # noqa: E402
 
 
 def _db(tmp):

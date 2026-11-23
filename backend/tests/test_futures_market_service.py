@@ -1,7 +1,6 @@
 # backend/tests/test_futures_market_service.py
 """Tests for FuturesMarketService — TDD RED phase."""
 import pytest
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch, MagicMock
 
 from app.kernel.futures_market_service import FuturesMarketService

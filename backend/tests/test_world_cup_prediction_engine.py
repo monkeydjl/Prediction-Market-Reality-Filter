@@ -4,7 +4,7 @@ Lock hybrid engine fusion behavior and prediction_method strings.
 """
 
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 from app.services.world_cup_engines.world_cup_prediction_engine import fuse_predictions, predict_match_score
 
 

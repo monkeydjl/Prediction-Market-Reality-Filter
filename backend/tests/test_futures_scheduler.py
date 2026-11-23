@@ -1,7 +1,7 @@
 # backend/tests/test_futures_scheduler.py
 """Tests for futures scheduler jobs — TDD RED phase."""
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 from app.core.scheduler import (
     _job_discover_futures_markets,

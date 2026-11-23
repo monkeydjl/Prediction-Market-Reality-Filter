@@ -5,12 +5,10 @@ These are the bridge tests: they verify that the WorldCupAdapter correctly
 implements the DataAdapter Protocol by wrapping existing world_cup_* services,
 and that FootballFeatureBuilder correctly implements the FeatureBuilder Protocol.
 """
-import pytest
 from datetime import datetime, timezone
 
 from app.kernel.domain import (
     MatchIdentity,
-    MatchOutcome,
     SportIdentity,
     CompetitionIdentity,
     SeasonIdentity,

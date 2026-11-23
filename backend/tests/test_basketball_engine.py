@@ -1,7 +1,6 @@
 # backend/tests/test_basketball_engine.py
 """Tests for BasketballEngine — Bradley-Terry binary prediction engine."""
 from datetime import datetime, timezone
-import pytest
 
 from app.kernel.domain import (
     SportIdentity, CompetitionIdentity, SeasonIdentity,

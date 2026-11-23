@@ -1,8 +1,6 @@
 # backend/tests/test_club_elo_service.py
 """Tests for club_elo_service — ClubElo.com CSV fetcher + cache."""
 from unittest.mock import patch, MagicMock
-from io import StringIO
-import pytest
 
 from app.services.club_elo_service import (
     get_club_elo,
@@ -162,7 +160,7 @@ class TestCacheTimezoneHandling:
         """Cache should work when fetched_at is naive (SQLAlchemy round-trip)."""
         from app.services.club_elo_service import _check_cache
         from unittest.mock import patch, MagicMock
-        from datetime import datetime, timezone, timedelta
+        from datetime import datetime, timezone
 
         mock_entry = MagicMock()
         mock_entry.elo_rating = 1900.0

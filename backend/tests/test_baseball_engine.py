@@ -1,7 +1,6 @@
 # backend/tests/test_baseball_engine.py
 """Tests for BaseballEngine — 5-factor Bradley-Terry binary prediction engine."""
 from datetime import datetime, timezone
-import pytest
 
 from app.kernel.domain import (
     SportIdentity, CompetitionIdentity, SeasonIdentity,

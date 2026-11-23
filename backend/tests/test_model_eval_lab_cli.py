@@ -12,7 +12,7 @@ from unittest.mock import patch
 _BACKEND = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_BACKEND))
 
-from scripts.model_eval_lab import main
+from scripts.model_eval_lab import main  # noqa: E402
 
 
 def _record(event_id="evt-001", model="gpt-4o-mini", **overrides):

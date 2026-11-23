@@ -2,7 +2,6 @@
 """Tests for BacktestRunner — TDD RED phase."""
 import pytest
 
-from app.kernel.backtest.elo_time_machine import EloParams
 from app.kernel.backtest.runner import BacktestParams, BacktestRunner
 
 

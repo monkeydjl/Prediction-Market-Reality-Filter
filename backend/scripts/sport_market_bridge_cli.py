@@ -53,7 +53,7 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     init_kernel_db()
     store = SportMarketLinkStore()
     links = store.get_links(match_id=args.match_id)
-    target = next((l for l in links if l["contract_id"] == args.contract_id), None)
+    target = next((link for link in links if link["contract_id"] == args.contract_id), None)
     if target is None:
         _print(f"[FAIL] no link found for match={args.match_id} contract={args.contract_id}")
         return 1
@@ -71,7 +71,7 @@ def _cmd_reject(args: argparse.Namespace) -> int:
     init_kernel_db()
     store = SportMarketLinkStore()
     links = store.get_links(match_id=args.match_id)
-    target = next((l for l in links if l["contract_id"] == args.contract_id), None)
+    target = next((link for link in links if link["contract_id"] == args.contract_id), None)
     if target is None:
         _print(f"[FAIL] no link found for match={args.match_id} contract={args.contract_id}")
         return 1

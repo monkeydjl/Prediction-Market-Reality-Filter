@@ -11,7 +11,7 @@ from pathlib import Path
 _BACKEND = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_BACKEND))
 
-from app.services.event_category_service import backfill_event_categories
+from app.services.event_category_service import backfill_event_categories  # noqa: E402
 
 
 def main() -> int:

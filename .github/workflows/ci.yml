@@ -52,13 +52,13 @@ jobs:
           python -m pip install pip-audit
           pip-audit -r requirements.txt
       - name: Lint backend
-        run: ruff check app/ tests/
-      # tests/ joined this gate in audit 53.162: it used to be excluded because
-      # it carried 259 findings under the same `select`, all now cleared. One
-      # command with the full select, rather than the per-family --select step
-      # that audit 53.161 added and this supersedes -- the narrower gate existed
-      # only because the debt did. `backend/scripts/` is NOT covered yet (19
-      # findings), so `ruff check .` still fails; widen to it next if wanted.
+        run: ruff check .
+      # No path arguments: every tracked directory is clean under the full
+      # `select`, so the gate covers whatever exists instead of a list that
+      # would have to be extended each time. tests/ and scripts/ were admitted
+      # in audits 53.162 and 53.163 by clearing their debt first, one rule
+      # family at a time -- which is also why the per-family `--select` step
+      # from 53.161 is gone: it was a scaffold for the debt.
       - name: Compile backend
         run: python -m compileall app tests
       # mypy is clean and now BLOCKING: `app/` type-checks with zero errors

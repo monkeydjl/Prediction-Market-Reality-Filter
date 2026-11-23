@@ -24,7 +24,6 @@ import argparse
 import logging
 import sys
 from pathlib import Path
-from typing import Any
 
 # Make backend importable when run as a script.
 _BACKEND = Path(__file__).resolve().parent.parent

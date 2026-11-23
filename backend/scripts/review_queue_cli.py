@@ -25,8 +25,8 @@ from pathlib import Path
 _BACKEND = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_BACKEND))
 
-from app.core.config import settings
-from app.memory import review_queue_store as rq
+from app.core.config import settings  # noqa: E402
+from app.memory import review_queue_store as rq  # noqa: E402
 
 
 def _print(text: str) -> None:

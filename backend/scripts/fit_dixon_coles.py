@@ -251,7 +251,7 @@ def main() -> int:
     parser.add_argument("--output", default=str(DEFAULT_OUTPUT), help="Output JSON path.")
     args = parser.parse_args()
 
-    print(f"[fit] loading historical results from CSV ...")
+    print("[fit] loading historical results from CSV ...")
     params = fit_dixon_coles(
         half_life_days=args.half_life,
         since_year=args.since,

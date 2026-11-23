@@ -20,9 +20,7 @@ import logging
 import math
 from datetime import date
 from pathlib import Path
-from unittest.mock import patch
 
-from app.services.world_cup_engines import world_cup_btd_model as btd_model
 from app.services.world_cup_engines.world_cup_btd_model import (
     calculate_btd_probabilities,
 )

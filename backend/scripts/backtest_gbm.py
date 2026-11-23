@@ -22,7 +22,6 @@ import math
 from datetime import date
 from pathlib import Path
 
-import numpy as np
 
 # Imported, not re-declared: a backtest that measures the model on a window the
 # model was not fitted with measures nothing useful, and three separate copies of

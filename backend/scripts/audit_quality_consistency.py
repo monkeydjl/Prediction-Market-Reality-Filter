@@ -167,9 +167,9 @@ def _check_decision_quality_downgrade_applied(
             conflict_type="decision_quality_downgrade_lost_in_merge",
             severity=ERROR,
             message=(
-                f"decision_quality.downgrade_reason is set but "
-                f"final_downgrade_reason is None — Phase 1 downgrade "
-                f"was lost in merge_quality_overlays."
+                "decision_quality.downgrade_reason is set but "
+                "final_downgrade_reason is None — Phase 1 downgrade "
+                "was lost in merge_quality_overlays."
             ),
             field_values={
                 "dq_downgrade_reason": dq_reason,
@@ -202,9 +202,9 @@ def _check_llm_telemetry_degraded_mislabeled(
                 conflict_type="degraded_mode_mislabeled_as_llm",
                 severity=WARN,
                 message=(
-                    f"llm_telemetry.degraded_mode=True but "
-                    f"analysis_quality='llm' — degraded sample would "
-                    f"pollute headline LLM calibration aggregate."
+                    "llm_telemetry.degraded_mode=True but "
+                    "analysis_quality='llm' — degraded sample would "
+                    "pollute headline LLM calibration aggregate."
                 ),
                 field_values={
                     "degraded_mode": degraded,

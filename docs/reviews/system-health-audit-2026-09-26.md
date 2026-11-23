@@ -20620,3 +20620,135 @@ F402 这条值得单独说：被遮蔽的 `annotations` 是 `__future__` 的**�
 | `ruff check scripts/` | 仍有 **19** 条（7 F541 / 6 F401 / 4 E402 / 2 E741）⇒ `ruff check .` 仍会红，下一个门是它 |
 
 **本节行数**：正文 **+92/−0**，连本段共 **+95/−0**；审计文档已入库 **+20542/−15**，加本节 **+20637/−15**。
+
+## §53.163 `scripts/` 也进门：`ruff check .` 不留例外目录
+
+前一节把 `tests/` 并进门时，CI 的命令是 `ruff check app/ tests/`，注释里留了一句
+「`backend/scripts/` 还没覆盖（19 条），所以 `ruff check .` 仍会红，想扩就下一个做」。
+本节就是那句话的兑现。
+
+### 起点：19 条，11 个文件
+
+| 规则 | 条数 | 分布 |
+|---|---|---|
+| F541 f-string 没有占位符 | 7 | `audit_quality_consistency.py` ×6、`fit_dixon_coles.py` ×1 |
+| F401 导入未使用 | 6 | `backfill_quality_overlays.py`、`backtest_btd.py` ×2、`backtest_gbm.py`、`fit_btd_model.py`、`verify_local_stack.py` |
+| E402 模块级导入不在文件头 | 4 | `backfill_event_categories.py` ×1、`review_queue_cli.py` ×2、`source_trust_registry_cli.py` ×1 |
+| E741 歧义变量名 | 2 | `sport_market_bridge_cli.py` |
+
+19 条，**0 条是可执行逻辑错误**——这也是为什么它一直排在 `tests/` 后面：`scripts/` 是
+手动执行的运维脚本，没有测试覆盖，改错了 CI 也看不出来。所以本节每改一处都补了
+执行证据，而不是只看 ruff 变绿。
+
+### 13 条自动修：修的是「写了 f 但没有占位符」和「导入了不用」
+
+F541 的 7 条全是把 `f"..."` 降级成普通字符串。看起来最像噪声，但它**是可观测的**：
+读代码的人看到 `f"decision_quality.downgrade_reason is set but "` 会先怀疑这里漏了
+`{}`——写法暗示了一个并不存在的插值机制。这与 §53.133 记的那类「注释也是失实载体」
+是同一族：**代码的形状在声称一件事，就该让它真的成立。**
+
+F401 的 6 条里有一条值得留档：`backtest_btd.py` 删掉的是
+
+```python
+from app.services.world_cup_engines import world_cup_btd_model as btd_model
+```
+
+——**带 `as` 的整模块导入**。F401 只在名字从未被引用时才命中，所以删它是安全的；
+但这里有一个「更小」的改法会出错：只删 `as btd_model` 保留
+`import world_cup_btd_model`，那就变成了一个纯副作用导入，读代码的人会更难判断
+「这个文件到底用没用那个模型」。选整行删，因为紧接着的下一行已经从同一个模块
+`from ... import calculate_btd_probabilities` 拿到了唯一要用的东西。
+
+另 5 条是纯冗余导入：`typing.Any`、`unittest.mock.patch`、`numpy as np`、`os`、`sys`。
+删完逐文件核了用量，因为「F401 命中」只说明**静态**没引用，动态引用（字符串
+`getattr`、`eval`）看不出来：
+
+| 文件 | 删的导入 | 复核 |
+|---|---|---|
+| `backtest_gbm.py` | `numpy as np` | 文件内 `np.` 计数 **0** |
+| `fit_btd_model.py` | `os` | 文件内 `os.` 计数 **0**；同文件 `np.` 仍有 20+ 处，numpy 在**另一行**导入，没被误删 |
+
+`fit_btd_model.py` 那一条是关键：如果只看到「删了一个导入就 diff 少了 1 行」而不再
+数剩下的 `np.`，「numpy 被删了」和「numpy 在别处导入」在 diff 里长得一模一样。
+
+### 2 条 E741：`l` 改 `link`
+
+`sport_market_bridge_cli.py` 里两处 `next((l for l in links if l["contract_id"] == ...))`，
+`l` 改成 `link`。纯改名，但改了两处而不是一处——同一个函数族里 `_cmd_verify` 与
+`_cmd_reject` 各有一份相同逻辑，**只改一处会留下同一个文件里两种写法**。
+
+### 4 条 E402：这里的 `# noqa` 不是掩盖，是唯一正确的写法
+
+四个文件都是同一个模式：
+
+```python
+# Make backend importable when run as a script.
+_BACKEND = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_BACKEND))
+
+from app.services.event_category_service import backfill_event_categories  # noqa: E402
+```
+
+上一节在 `tests/` 里处理 49 条 E402 时，**39 条加的也是 `# noqa: E402`**，理由是
+`tests/__init__.py` 让 pytest 能 import `app`，bootstrap 对 pytest 冗余、对
+`python tests/x.py` 必要。`scripts/` 的判据更硬：**这些脚本没有任何测试入口**，
+唯一的使用方式就是直接执行，所以 `sys.path.insert` 是承重的，删了就是功能没了。
+
+这个「更硬」不是推断，是反证过的——把 insert 那一行去掉、其余不动，放到同目录下
+直接跑 `--help`，`PYTHONPATH` 置空：
+
+| 文件 | 删 insert 后 | 保留 insert 后 |
+|---|---|---|
+| `backfill_event_categories.py` | rc=1 `ModuleNotFoundError: No module named 'app'` | rc=0 `usage: backfill_event_categories.py [-h] [--write]` |
+| `review_queue_cli.py` | rc=1 同上 | rc=0 `usage: review_queue_cli.py [-h] {list,sla,action,audit} ...` |
+| `source_trust_registry_cli.py` | rc=1 同上 | rc=0 `usage: source_trust_registry_cli.py [-h] {list,add,delete,export,import} ...` |
+
+所以这 4 条 `# noqa: E402` 是**对既有约束的注释**，不是对规则的豁免。判据差别在这里：
+如果一条 `noqa` 写上去之后，「换个写法就能消除」——那它掩盖了问题；如果写上去之后
+「唯一的替代方案是让脚本不能跑」——那它是把无法消除的先后顺序记录下来。
+
+### 两处配置：为什么不改成路径清单
+
+**`ci.yml`**：`ruff check app/ tests/` → `ruff check .`。
+**`ruff.toml`**：新增 `extend-exclude = [".workbench", "backend"]`。
+
+`ci.yml` 换掉路径清单的理由，和上一节删掉 `--select F811,F841,F403` 那一步是同一条：
+**路径清单是一个会过期的枚举**。本节要加 `scripts/`，下一个目录还得再改一次；而
+`ruff check .` 覆盖的是「树里存在什么」。上一节留的那句「想扩就下一个做」正是枚举
+需要维护的证据。
+
+但裸 `ruff check .` 在本机会**多扫两个 gitignore 的草稿目录**：`backend/.workbench/`
+（107 个探针脚本）和 `backend/backend/`（2 个检查脚本的散落副本）。这是**实测出来的，
+不是猜的**：把这两个目录作为显式路径（ruff 的 `exclude` 不作用于命令行给出的路径）
+跑一遍 ⇒ **109 个文件、8 条错误**。也就是说 ruff 的 `respect-gitignore` 在这里
+**没有**跳过它们。不清掉就会出现「本地红 / CI 绿」，
+这比两个都红更糟——开发者会学会忽略这条门。
+
+显式 `extend-exclude` 之后，用计数确认没有顺手把真代码也关掉：
+
+| 范围 | `ruff check . --show-files` 计数 |
+|---|---|
+| `app/` | 334 |
+| `tests/` | 460 |
+| `scripts/` | 48 |
+| 仓库根（`run.py`、`check_world_cup_events.py`） | 2 |
+| `ruff.toml`（ruff 把配置文件也算一条） | 1 |
+| **合计** | **845** |
+| `.workbench/` | **0** |
+| `backend/backend/` | **0** |
+
+「合计 845」这个数字本身是本节最有用的一条守卫：如果哪天有人把 `app` 加进
+`extend-exclude`，`ruff check .` 照样是绿的，只有这个计数会掉。
+
+### 门
+
+| 门 | 结果 |
+|---|---|
+| `ruff check .`（全仓，无路径参数） | **All checks passed**（改前 19 条） |
+| `pytest tests/`（全量） | **errors=0 / failures=0**，6883 passed、11 skipped、2588 subtests——与本节改动前逐字相同 |
+| 四个 CLI `--help`（`PYTHONPATH` 置空） | rc=0 ×4 |
+| `compileall scripts` | OK |
+| `eol_audit.py` | **`line-ending damage: none`**（13 个文件无一处 MIXED；3 个 LF 文件 `ok (LF both sides)`） |
+| `generate_types --check` | up to date（本节未触及 `app/` 与前端） |
+
+**本节行数**：正文 **+129/−0**，连本段共 **+132/−0**；审计文档已入库 **+20637/−15**，加本节 **+20769/−15**。

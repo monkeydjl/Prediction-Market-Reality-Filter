@@ -129,11 +129,13 @@ npm run build
 ## 测试与质量
 
 ```bash
-# 后端（443 个测试文件）
+# 后端（444 个测试文件）
 cd backend
 pip install -r requirements.txt -r requirements-dev.txt
 python -m compileall app tests
-python -m pytest tests
+python -m pytest tests --junitxml=junit.xml
+# 判据只读 junit：本机 pytest 的退出码会被沙箱删除守卫污染成 1
+python scripts/verdict.py junit junit.xml
 
 # 前端（131 个测试文件，vitest）
 cd frontend

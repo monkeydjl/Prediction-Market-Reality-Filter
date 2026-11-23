@@ -20525,3 +20525,98 @@ def test_probe():
 | `scripts/eol_audit.py` | **`line-ending damage: none`**；22 个改动文件无一处 MIXED |
 
 **本节行数**：正文 **+79/−0**，连本段共 **+82/−0**；审计文档已入库 **+20460/−15**，加本节 **+20542/−15**。
+
+## §53.162 把 `tests/` 并入同一条 lint 门：259 条清零，门从三条命令缩回一条
+
+### 起点与终点
+
+§53.161 之后 `tests/` 在项目自己的 `select`（`E4,E7,E9,F`）下剩 **261** 条。本节清掉
+**259** 条（另外 2 条是最后收尾的杂项），于是下面这条命令从头一次全绿：
+
+```
+ruff check app/ tests/
+```
+
+**门因此缩回一条。** §53.161 加的那条 `ruff check --select F811,F841,F403 tests/` 已经删除：
+它存在的唯一理由是「tests/ 还有 259 条，够不着完整 select」。**脚手架是为债搭的，债没了就该拆** ——
+留着它会让人以为 `app/ tests/` 不能一起跑。
+
+### 210 条自动修，一条命令，90 个文件
+
+| 族 | 条数 | 修法 |
+|---|---|---|
+| F401 unused-import | **158** | `ruff --fix`（安全修，不用 `--unsafe-fixes`） |
+| F541 f-string 无占位符 | **52** | 同上：去掉 `f` 前缀，字符串本身一字不动 |
+
+自动修的可信度不能靠「ruff 说是安全修」——删的是 import，而 import 可能带**副作用**。逐条看过
+删除清单：被整行删掉的 21 条 `app.*` 导入里，只有一条值得核（`conftest.py` 的
+`import app.core.config as _config_module`），而它上一行已经把同一个模块导进来了，删别名无副作用。
+其余被删的是 `pytest` / `os` / `tempfile` / `math` / `json` 这类 stdlib，没有导入期行为。
+
+### E402 的 49 条：39 条是有意的，10 条是真缺陷
+
+先分成两类，判据是「这个文件支不支持直接执行」：
+
+| 类 | 条数 | 判据 | 处理 |
+|---|---|---|---|
+| 路径引导后的导入 | **39**（13 文件） | 文件里有 `if __name__ == "__main__"`，且上方有 `sys.path.insert` | 加 `# noqa: E402` |
+| 中部临时导入 | **10**（3 文件） | 文件里没有 `__main__`，也没有路径引导 | **把导入搬到文件头** |
+
+为什么 39 条不能「搬到顶部」了事——`python tests/xxx.py` 时 `sys.path[0]` 是 `tests/`，
+`app` 根本不在路径上。反证：
+
+```
+$ python -c "import sys; sys.path.insert(0,'tests'); import app"
+ModuleNotFoundError: No module named 'app'
+```
+
+而 `tests/__init__.py` 存在 ⇒ **pytest** 会把 `backend/` 放进 `sys.path` ⇒ 引导对 pytest 是多余的、
+对直接执行是必需的。实测三个文件直接跑仍然 OK（`test_review_queue_store` 31 条、
+`test_source_trust_registry_store` 14 条、`test_decision_diff_service` 14 条）。
+仓库里本来就有 **48 处** `# noqa: E402`（连 `conftest.py` 都用，因为 dotenv 必须先 patch），
+这 39 处是同一件事，只是当初没补。
+
+### 一个真的跑漏了 14 条测试的文件
+
+`test_llm_gateway_service.py` 的 `if __name__ == "__main__": unittest.main()` 出现在**第 125 行**，
+后面还有 460 行。直接执行时，`unittest.main()` 在文件后半部分**定义之前**就跑了：
+
+```
+HEAD 版本：__main__ 之前 9 个 test 方法，之后 14 个 ⇒ 直接执行只跑 9，漏 14
+```
+
+把 `__main__` 移到文件末尾、把它的两行导入搬到头部之后：
+
+```
+直接执行：Ran 23 tests ... OK
+pytest 收集：23 tests collected
+```
+
+**两边第一次相等。** 这个缺陷不是 E402 本身，E402 只是它的症状——它只有 2 条 E402，
+却藏着一个「三分之一测试从不执行」的事实。**规则命中数不是缺陷大小，缺陷要靠读代码定。**
+
+另两处中部导入（`test_api_predictions.py` 的 4 行、`test_learning_endpoints.py` 的 4 行）是纯粹的
+便利性导入，搬到文件头即可，不涉及语义。
+
+### 最后 2 条杂项
+
+| 规则 | 位置 | 修法 |
+|---|---|---|
+| F402 | `test_generate_types.py`：`for model, keys, annotations in cases` 遮蔽了 `from __future__ import annotations` | 循环变量改名 `want_types` |
+| E741 | `test_sport_market_stores.py`：`all(l["verified"] ...)` 的 `l` | 改名 `link` |
+
+F402 这条值得单独说：被遮蔽的 `annotations` 是 `__future__` 的**编译期特性**，不是普通名字。
+在同一个模块里用同名循环变量，读代码的人会以为 `annotations` 还是那个 future 导入。
+
+### 门
+
+| 门 | 结果 |
+|---|---|
+| `ruff check app/ tests/` | **All checks passed**（改前 tests/ 侧 261 条） |
+| `pytest tests/`（全量） | **errors=0 / failures=0**，6883 passed、11 skipped、2588 subtests——**与本节改动前逐字相同** |
+| 直接执行抽样（3 文件） | 31 / 14 / 14 全 OK |
+| `test_llm_gateway_service.py` 直接执行 vs pytest | 23 = 23（改前 9） |
+| `scripts/eol_audit.py` | **`line-ending damage: none`**（本节触及 104 个文件，无一处 MIXED） |
+| `ruff check scripts/` | 仍有 **19** 条（7 F541 / 6 F401 / 4 E402 / 2 E741）⇒ `ruff check .` 仍会红，下一个门是它 |
+
+**本节行数**：正文 **+92/−0**，连本段共 **+95/−0**；审计文档已入库 **+20542/−15**，加本节 **+20637/−15**。

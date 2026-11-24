@@ -21007,3 +21007,101 @@ python scripts/verdict.py junit junit.xml
 | `test_readme_inventory.py` | 5 passed（444 已对齐） |
 
 **本节行数**：正文 **+107/−0**，连本段共 **+110/−0**；审计文档已入库 **+20914/−15**，加本节 **+21024/−15**。
+
+## §53.166 `mypy tests/` 摸底：9 247 里 84% 是一个开关，残差里 5% 是同一个下标形状
+
+CI 只跑 `mypy app/`（§0 第四道门），`tests/` 从来没有被类型检查过。本节只做一件事：
+**把「如果也检查 tests/ 要付多少」量清楚**，不改任何代码。
+
+命令是可复算的（都在 `backend/` 下）：
+
+```bash
+python -m mypy tests/ --config-file mypy.ini                      # 9 247
+python -m mypy tests/ --config-file mypy.ini --allow-untyped-defs  # 1 517
+```
+
+第二条不是「放宽标准」，而是**去掉 `mypy.ini` 里那个只为 `app/` 设的开关**：
+`disallow_untyped_defs = True`（cluster 12 付掉 225 条之后打开的）。`check_untyped_defs`
+仍然生效，所以函数体照样被检查——1 517 条全部是**函数体内的真实类型冲突**，
+不是「函数少了个 `->`」。
+
+### 两个数
+
+| 跑法 | 错误 | 文件 |
+|---|---|---|
+| 全套 `mypy.ini` | **9 247** | 468 |
+| 只放开 `disallow_untyped_defs` | **1 517** | 195 |
+
+**7 730 条（83.6%）是 `no-untyped-def`**：462 个被检查文件里有 **454 个**至少缺一个注解，
+平均**每个文件 17 处**。这是一项「给 7 730 个函数写 `-> None`」的机械工程，
+不是类型缺陷——写完之后 `1 517` 一条都不会少。
+
+### 残差 1 517 的构成
+
+| 规则 | 条数 | 占比 | 典型消息 |
+|---|---|---|---|
+| `index` | **830** | 54.7% | `Value of type "dict[str, Any] \| None" is not indexable` |
+| `arg-type` | 297 | 19.6% | `Argument 2 ... has incompatible type "**dict[str, object]"` |
+| `union-attr` | 146 | 9.6% | `Item "TextIO" of "TextIO \| Any" has no attribute "reconfigure"` |
+| `attr-defined` | 86 | 5.7% | `Module has no attribute "flock"` |
+| `var-annotated` | 50 | 3.3% | `Need type annotation for "semantics"` |
+| 其余 12 类 | 108 | 7.1% | `misc` 17 / `call-overload` 16 / `method-assign` 15 / `unused-ignore` 9 … |
+
+按目录：`tests/` **1 469**、`tests/manual/` **21**、`scripts/` **27**——最后那 27 条不是
+「顺手查了 scripts/」，而是 `tests/` import 了 `scripts.*`，mypy 顺着导入一起检查了。
+
+### 头号形状：`dict | None` 直接下标（763 条 / 48 个文件）
+
+`index` 的 830 条里 **763 条是同一个形状**、同一个类型写法 `dict[str, Any] | None`，
+分布在 48 个文件（最多的是 `test_prediction_store.py` 75 条）。真实命中长这样：
+
+```python
+run_id = runs.start_run("world_cup_scoring_reconcile")
+self.assertEqual(runs.get_run(run_id)["status"], "running")   # get_run -> dict | None
+```
+
+**这条在本目录里的性质与 `app/` 不同。** 同样的写在 `app/` 里会变成对用户的 500
+（`mypy.ini` 头部 cluster 3 记的就是这类：一张非空的缓存表就能触发 500），
+或者被一个 blanket `except Exception` 吞掉变成"功能一直是空的"（cluster 5/6/8 里
+反复出现的 `CancelledError` 守卫就是这个死法）。**在测试里它当场就炸**：`None["status"]` 抛
+`TypeError`，测试带完整回溯失败。也就是说这 763 条**不是看不见的缺陷**，而是
+「myypy 要求你先断言再取值」的书写风格税。
+
+这也是本节的核心判断：**同一个规则在两个目录里的价值不同**，因为失败的可见性不同。
+把 `app/` 的严格度平移到 `tests/` 时，绝大部分收益不是"发现缺陷"，而是"写法统一"。
+
+### 两条只在 Windows 上出现的错误
+
+`attr-defined` 里有 **5 条**是 `Module has no attribute "flock"` / `LOCK_EX`——`fcntl` 是
+POSIX 模块，Windows 上没有。这与 `mypy.ini` 头部 cluster 4 记的 `os.name` 平台分支是
+同一类：**计数会随平台变**，本地与 CI 会给出不同的数。所以任何"把 tests/ 也纳入门"的
+方案，都得先决定这 5 条怎么办（`sys.platform` 分支 / per-module `ignore_errors` /
+`cast`），否则本地永远差 5 条。
+
+### 结论：不扩门，把数留住
+
+理由按强度排序：
+
+1. **收益的主体是注解数量，不是缺陷发现。** 7 730 + 763 里真正会藏缺陷的部分接近 0；
+   而 `app/` 能靠这条路挖出六个 `CancelledError`，是因为 `app/` 的失败会被吞。
+2. **`tests/` 已经有更强的运行时判据**：它自己就是判据。类型错了要么当场抛，要么断言失败。
+3. **平台差 5 条**会让这道门在 Windows 上先天红，重演 cluster 4 已经付过一次的代价。
+
+如果哪天要做，按这个顺序，不要从注解开始：
+
+1. 在 `mypy.ini` 加一段 `[mypy-tests.*]` 覆写（`disallow_untyped_defs = False`），
+   让门先只覆盖函数体——一个配置文件改动换来 `1 517` 而不是 `9 247`；
+2. 清那个 763 条的下标形状（48 个文件，机械改法：取值前 `assert row is not None`，
+   顺带把断言失败的信息写清楚）；
+3. 处理 5 条平台错误，用 `sys.platform` 分支而不是 `# type: ignore`（cluster 4 的教训）；
+4. 最后才谈 `disallow_untyped_defs`——它是 7 730 条，永远排在最后。
+
+### 门（本节不改代码）
+
+| 项 | 结果 |
+|---|---|
+| 工作树代码改动 | **无**（本节只有测量与本文档） |
+| `mypy app/` | 未受影响，CI 里仍是 BLOCKING |
+| 复算命令 | 见本节开头两条，`--allow-untyped-defs` 是唯一变量 |
+
+**本节行数**：正文 **+95/−0**，连本段共 **+98/−0**；审计文档已入库 **+21024/−15**，加本节 **+21122/−15**。

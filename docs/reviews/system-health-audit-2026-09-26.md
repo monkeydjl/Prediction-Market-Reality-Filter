@@ -21105,3 +21105,111 @@ POSIX 模块，Windows 上没有。这与 `mypy.ini` 头部 cluster 4 记的 `os
 | 复算命令 | 见本节开头两条，`--allow-untyped-defs` 是唯一变量 |
 
 **本节行数**：正文 **+95/−0**，连本段共 **+98/−0**；审计文档已入库 **+21024/−15**，加本节 **+21122/−15**。
+
+## §53.167 `analytics-dashboard` 摸底：2 383 行是组件不是测试，而真问题是 19 个端点没有契约
+
+上一轮我的菜单里写的是「拆 `analytics-dashboard` 那个 2 383 行的巨型测试」。**这句是错的**，
+先更正：
+
+| 文件 | 行数 |
+|---|---|
+| `frontend/src/components/sports/world-cup/analytics-dashboard.tsx` | **2 383** |
+| `frontend/src/components/sports/world-cup/analytics-dashboard.test.tsx` | **852** |
+
+2 383 是组件。测试 852 行，其中 467 行是夹具，四条用例合计 373 行。**把测试当巨型文件去拆，
+是在修一个不存在的问题**；而组件为什么长到 2 383 行，量出来是另一件事。
+
+### 组件剖开：35 个手写 interface 占了 420 行
+
+| 段 | 行 | 内容 |
+|---|---|---|
+| 11–429 | 419 | **35 个 `interface`**（`EngineStats` / `AccuracyStats` / `QualityLoopReport` / `ResultConsistencyReport` / `PostMatchBackfillRun` …） |
+| 430–562 | 133 | `ENGINES` 常量、`EMPTY_QUALITY_SUMMARY`、14 个格式化小函数 |
+| 564–1773 | 1 210 | 6 个内部面板组件：`QualityTrendCharts` 124 / `ConsistencyIssuesPanel` 205 / `PostMatchBackfillPanel` 247 / `PostMatchCorrectionForm` 181 / `ReconcileScoringPanel` 152 / `ResultConsistencyPanel` 294 |
+| 1774–2383 | 610 | `AnalyticsDashboard` 本体：**44 个 `useState`**、5 个 `useEffect` |
+
+**419 行的类型声明不是坏味道本身，是症状。** 按 §2 的规则，返回 dict 的端点要有
+`response_model` 才会生成前端类型、前端才不用手写。查了一下代价来源：
+
+```
+backend/app/api/routes/world_cup_analytics.py   966 行 / 19 个路由 / 带 response_model 的 0 个
+```
+
+19 个端点全部是 `@router.get(...)` + `async def ... -> dict[str, Any]`，例如：
+
+```python
+@router.get("/engine-stats")
+async def get_engine_stats(session: Session = Depends(get_prediction_session_dep)) -> dict[str, Any]:
+@router.get("/quality-loop")
+async def get_quality_loop(session: Session = Depends(get_prediction_session_dep)) -> dict[str, Any]:
+@router.get("/odds-cache-stats")
+async def get_odds_cache_stats(session: Session = Depends(get_prediction_session_dep)) -> dict[str, Any]:
+```
+
+没有 `response_model` ⇒ 没有 schema ⇒ 前端只能手写。组件里 35 个 interface 里
+**34 个在 `generated-types.ts` 里没有对应物**——不是谁忘了复用，而是从来没被生成过。
+这是目前找到的**最大一处 §2 欠账**（19 / 19）。
+
+### 唯一的同名碰撞，是个陷阱
+
+35 个里只有 **1 个名字撞上了生成物**：`CalibrationBucket`。两份定义并排：
+
+```ts
+// 组件内（quality-loop 的 calibration_buckets）
+interface CalibrationBucket {
+  label: string;  count: number;  avg_confidence: number | null;
+  accuracy: number | null;  gap: number | null;  is_usable: boolean;
+}
+
+// generated-types.ts（另一个端点的同名模型）
+export interface CalibrationBucket {
+  label: string | null;  count: number;
+  actual_accuracy: number | null;  avg_confidence: number | null;
+  [k: string]: unknown;
+}
+```
+
+字段不一样（`accuracy` vs `actual_accuracy`）、可空性也不一样（`label: string` vs
+`string | null`）。所以这**不是一份过期副本，是两个不同载荷撞了名**——但它比副本更危险：
+哪天有人"顺手去重"把它换成生成物，`accuracy` 会立刻报错（安全），而 `label` 从非空变可空
+**不会报错**，只会在某个 `label` 为 null 的桶上崩掉。这与 §4.1 记的「同名≠同值、同值≠同义」
+是同一族，只是这次发生在类型而不是方向常量上。
+
+### 测试剖开：贵的是 440 行的假路由，不是那 236 行的用例
+
+| 段 | 行 | 内容 |
+|---|---|---|
+| 1–3 | 3 | import |
+| 5–25 | 21 | `qualitySummary()` 夹具 |
+| **27–466** | **440** | **`responseFor(url)`：17 个 `url.includes` 分支的假路由** |
+| 468–479 | 12 | `describe` + `afterEach` |
+| 480–715 | **236** | 用例一（带 `{ timeout: 15_000 }`，§53.140 加的）：79 个 `expect` / 9 次 `fireEvent.click` / 6 个 `waitFor` / 48 个 `getBy` |
+| 716–781 | 66 | 用例二（校正提交） |
+| 782–818 | 37 | 用例三（accuracy 空态） |
+| 819–852 | 34 | 用例四（odds cache 空态） |
+
+那 236 行里**一条分节注释都没有**——五个流程（§53.140 的分段：首屏 254 / 静态查询 530 /
+流程 745 / 其余 ~100 ms）在源码里是连续的，要拆得先自己找出边界。
+
+### 三种拆法，只有一种值得做
+
+| 方案 | 代价 | 收益 | 判断 |
+|---|---|---|---|
+| ① 把 236 行的用例拆成 5 条 | 每条重付首屏 ~254 ms（×5）；跨流程断言会削弱；得先划边界 | 失败定位更准 | **不做**。§53.140 已记为「候选未做」，今天量完理由更硬：贵的是共享的 440 行假路由，不是用例体 |
+| ② 把 `responseFor` 抽成夹具模块 | 一次搬 440 行，零运行时成本，不动任何断言 | 852 → ~410 行；四条用例不再靠"抬头 440 行"共享假路由；将来加第五个端点时改一处 | **先做这个** |
+| ③ 拆组件 | 6 个面板已经是独立函数，搬文件是机械活 | 文件变短 | 排在后面。**先做 ④ 文件自己会变短** |
+| ④ 给 19 个端点登记 `response_model` | 按 §2 三件套逐端点做，一个端点一小步 | 35 个 interface 里有对应物的可以删掉交给生成物；前端不再能悄悄偏离后端 | **价值最高** |
+
+①之所以不做，还有一条今天才有的证据：**那 236 行并不慢在"长"，而慢在"大 DOM × 48 个
+`getBy`"**（§53.140 的实测）。拆成 5 条只会让 5 倍的首屏各配 1/5 的查询——总时长上升，
+单条变快，而 §53.140 已经用 `timeout: 15_000` 解决了超时这个真问题。
+
+### 门（本节不改代码）
+
+| 项 | 结果 |
+|---|---|
+| 代码改动 | **无**（只有测量与本文档） |
+| 前端测试 | 未跑（未改动），上一轮 CI 131 files / 801 tests 全绿 |
+| 复算 | 行数 `wc -l`；接口数 `^interface` 计数；路由模型 `grep -c response_model app/api/routes/world_cup_analytics.py` = 0 |
+
+**本节行数**：正文 **+105/−0**，连本段共 **+108/−0**；审计文档已入库 **+21122/−15**，加本节 **+21230/−15**。

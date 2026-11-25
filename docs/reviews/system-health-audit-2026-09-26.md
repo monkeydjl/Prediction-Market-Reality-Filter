@@ -21589,3 +21589,122 @@ schema 断言红，线上仍然返回 8 个键**。
 所以历史要读 diff，不要读 `-S` 的摘要。**
 
 **本节行数**：正文 **+115/−0**，连本段共 **+118/−0**；审计文档已入库 **+21488/−15**，加本节 **+21606/−15**。
+
+## §53.171 第四个端点：`/system-health`，和一个八小时的偏差
+
+这一节本来是最小的一个：5 个键、一条 `return`、没有分支。做它是为了让链路保持热度，
+不指望它长出判据。结果它长出来了。
+
+### 探针：字符串不带时区
+
+`last_update` 是 `latest_prediction.last_updated.isoformat()`。先量，不猜：
+
+```text
+column read back: datetime.datetime(2026, 6, 20, 12, 0) tzinfo: None
+'last_update': '2026-06-20T12:00:00'
+```
+
+SQLite 把 `DateTime(timezone=True)` 读回来是 **naive**，`.isoformat()` 于是给了一个
+**没有时区标记**的字符串。而它上面第 977 行已经在做这件事：
+
+```python
+last_updated = latest_prediction.last_updated.replace(tzinfo=timezone.utc)   # 算 age 用
+```
+
+同一个函数里，**同一列**，一半当 UTC 用、另一半原样发出去。响应里两个字段描述的不是同一个时刻。
+
+消费侧：`new Date("2026-06-20T12:00:00")`。**没有标记的 ISO 串按本地时间解析**，
+在 UTC+8 就是八小时偏差——「最后更新」那一行一直是错的。
+
+### 夹具比生产者更正确，所以谁也没发现
+
+`analytics-dashboard.test.tsx:396` 的 mock 写的是：
+
+```ts
+last_update: "2026-06-15T12:00:00Z",
+```
+
+带 `Z`。也就是说这条渲染路径**从来没有被真实数据碰过**：测试喂进一个生产者永远不会发出的形状，
+于是「解析之后对不对」这件事在测试里恒真，在线上恒假。mock 比代码更正确，不是 mock 的错，
+但它把差异盖住了——和 §53.170 那句被两处抄错的话是同一个结构：**两个载体互相印证一个不存在的形状。**
+
+### 修，而不是只记
+
+判据是**能不能被观测**：
+
+| 这一节的两处不一致 | 改不改 | 为什么 |
+|---|---|---|
+| `else 0` 的 int zero（§53.170） | 改生产者，但**记明不可守** | pydantic 在序列化前抹平，API 上看不出来 |
+| `isoformat()` 不带时区（本节） | 改生产者，**有守卫** | 字符串是响应的一部分，肉眼可见，测试可断 |
+
+```python
+"last_update": (
+    latest_prediction.last_updated.replace(tzinfo=timezone.utc).isoformat()
+    if latest_prediction
+    else None
+)
+```
+
+输出变成 `2026-06-20T12:00:00+00:00`。变异 3 就是把它改回去，`test_system_health_timestamp_
+carries_an_offset` 立刻红——**这条断言是本节唯一为「改代码」付的守卫成本，付得起。**
+
+### 模型里两个判断
+
+- **`status` 是 `Literal["healthy", "stale"]`**：生产者只有一个条件表达式，两个分支就是全部词表。
+  写成 `str` 的话，客户端把第三个值拼错也能通过类型检查，界面两个颜色都不亮。
+- **`data_freshness_hours` 的 `0.0` 要和 `last_update is None` 成对读**：没有预测行时前者是
+  初值 `0.0`、后者是 `None`。「刚更新过」和「从来没有」在这一对里能分开，单独看前者不能——
+  但两个键总是同时写，所以配对是可行的。这一条写进 docstring，没有另加开关（加开关是行为改动）。
+
+### 守卫四条，变异五个
+
+| 断言 | 边界上守什么 |
+|---|---|
+| 线上 5 键 == 字面量；schema 5 个 property | 生产者漂移 / 模型缩水 |
+| `status` 的 schema `enum == ["healthy","stale"]` 且 required | Literal 被改成 `str` |
+| 有时间戳时 `endswith("+00:00")` 且 `fromisoformat().tzinfo` 非空 | **时区标记被抹掉** |
+| `route.response_model is SystemHealthResponse` | 绑定被摘 |
+
+| 变异 | 结果 | 谁红的 |
+|---|---|---|
+| 路由去掉 `response_model=` | **3 failed** | 三条 schema 断言 + 绑定断言 |
+| 模型删掉 `last_update` | **1 failed** | 第 1 条（schema 4 vs 线上 5） |
+| **生产者撤掉 UTC 偏移** | **1 failed** | **专门那条时间戳测试** |
+| `status` 去掉 `Literal` | **1 failed** | `enum` 断言 |
+| 生产者加第 6 个键 | **1 failed** | 第 1 条 |
+
+### 只修了看见的那一处
+
+同族的还有三处，**本节没有动**：
+
+- `world_cup_analytics.py:391`（`prediction-coverage` 的 `last_updated`）；
+- `predictions.py:636`、`:650`；
+- `world_cup_predictions.py:95`。
+
+它们的形状一样（naive 列的 `.isoformat()`）。写在这里是为了不让下一个人以为「已经修好了」——
+本节改的是一条路由的一个字段，理由只是它正好在建模的地方，**以及它是目前唯一有测试盯着的一条**。
+
+### 门
+
+| 门 | 结果 |
+|---|---|
+| `ruff check .` | All checks passed |
+| `mypy app/` | **Success: no issues found in 334 source files** |
+| `generate_types --check` | up to date |
+| `lint_scan_guard.py` | `[OK] ... 848 .py files, both directions` |
+| `pytest tests/`（全量） | **`tests=9530 failures=0 errors=0 skipped=11`**，6931 passed、2588 subtests |
+| `tests/test_world_cup_analytics_routes.py` | 57 passed（53 + 4 条新契约测试） |
+| 前端 `tsc` / `tsc -p tsconfig.test.json` / `eslint` | rc=0 ×3 |
+| `vitest analytics-dashboard.test.tsx` | 4 passed |
+
+`event.py` +36、`_frontend_export.py` +2、`world_cup_analytics.py` +13/−2、测试 +93、
+`api.ts` +6、生成物 +36、组件 +1/−8。
+
+组件 **27 → 26** 个 `interface`、**2 279 → 2 272** 行；`world_cup_analytics.py` 里
+`response_model` **3 → 4**。
+
+剩下 **15 个**路由仍是 `-> dict[str, Any]`，组件里还有 26 个手写 interface。
+这一节给出的判据很短：**「键集对齐」不检查值的**含义**。**
+五个键的名字和类型都对得上，其中一个一直在说八小时前的时刻。
+
+**本节行数**：正文 **+116/−0**，连本段共 **+119/−0**；审计文档已入库 **+21606/−15**，加本节 **+21725/−15**。

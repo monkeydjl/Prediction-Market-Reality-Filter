@@ -22129,3 +22129,115 @@ utc_isoformat():   2026-06-20T13:00:00+00:00
 `response_model` **4 → 5**，剩 **14 个**路由仍返回 `dict[str, Any]`。
 
 **本节行数**：正文 **+127/−0**，连本段共 **+130/−0**；审计文档已入库 **+22016/−15**，加本节 **+22146/−15**。
+
+## §53.175 第六个端点：`/engine-stats`，和一次差点写出来的重复守卫
+
+`response_model` **5 → 6 / 19**。这个端点有手写类型可删，而且是**一对**：
+`EngineStats`（信封）和 `EngineUsage`（桶）。组件里的 `interface` 数 **26 → 24**，
+行数 **2 272 → 2 262**。
+
+不过这一节最值得记的不是删掉了什么，是**我差点写出第二个业主**。
+
+### `by_engine` 是 map，不是四字段模型
+
+生产者永远只发四个桶：`grouped` 用 `ENGINE_NAMES` 播种，return 也只遍历它。所以最直觉的写法是
+四个具名字段。**不采用**：那样会变成 `additionalProperties: false`，第五个引擎上线那天直接 500——
+map 必须能变宽，不能拒绝（§53.169 对 `QualityTrends.by_engine` 已经做过同一个判断）。
+所以是 `dict[str, EngineStatsEntry]`。
+
+代价是**反向**的，得写清楚：`dict[str, ...]` 生成的是索引签名，比它替换掉的
+`Record<EngineKey, EngineUsage>` **更松**。前面五节删掉的 interface，生成物要么等价、要么更严
+（多出来的只有 `[k: string]: unknown` 那条尾巴，意思是「允许额外的键」）；这一节是第一次
+**不再承诺键存在**——`stats.by_engine.elo_odds` 曾经由类型保证，现在是运行期的事。
+
+而那个「四键」的承诺本来就不是后端给的：`EngineKey` 是组件里写死的四个字符串。
+**把窄度从类型里挪走，不等于把它丢掉**——见下一段，它本来就有主。
+
+### 变异跑出来的：这条断言已经有主了
+
+我写的第一版测试里有这么一条：
+
+```python
+self.assertEqual(set(body["by_engine"]), set(ENGINE_NAMES))     # 删了
+```
+
+理由写得挺像回事：「map 是开的，四键承诺没有业主」。**跑变异的时候它自己露了**：
+「map 只发三个桶」这个变异红了 **2 条**，其中一条我根本没写——
+
+```text
+- test_engine_stats_counts_every_row_into_a_bucket        <- 我写的
+- test_engine_stats_serves_one_bucket_per_runnable_engine  <- 早就有的
+```
+
+那条既有测试的 docstring 把话已经说完：
+
+> 它以前自带一份 `engine_keys` 元组……现在从 `ENGINE_NAMES` 派生，而这里的判据是**调度注册表**：
+> 拿响应去和 `ENGINE_NAMES` 比，是**一个集合和它自己比**，少一个成员时两边一起缩，照样绿。
+
+也就是说：**它比我要写的那条更强**（用独立判据 `app.services.world_cup_engines.ENGINES` 而不是
+生产者自己遍历的那个元组），而我那条是它的弱化副本。删掉。
+
+留下的是一条它**看不见**的：`bucket_engine` 的兜底。它对认不出的方法返回 `hybrid`，
+如果哪天返回了第五个值，那一行仍计入 `total_predictions`，却不进任何桶——
+**键集完全正确，总数完全正确，百分比悄悄不再是 100**。变异 3 就是这一发：
+
+```text
+[ok] unknown method falls outside every bucket: RED (1 failing)
+         - test_engine_stats_counts_every_row_into_a_bucket      <- 只有我这条红
+```
+
+**既有那条没有红**，这不是巧合，是这条测试存在的全部理由。反过来，变异 2 红了两条，
+说明两者在这一个失败模式上重叠——留着不亏，因为它守的东西不一样。
+
+这一段的判据很短：**写新断言之前，先看这一族有没有业主，以及那个业主的判据是不是比你的更强。**
+我这次是被变异逼着去看的，不是读代码读出来的。
+
+### `0` 和 `0.0`：绑定模型这个动作本身会改 wire
+
+生产者的空分支写的是 `else 0`（int）。声明 `percentage: float` 之后 pydantic 会把它 coercion 成
+`0.0`，**所以「只是加了个 response_model」这句话在这一格上不成立**：字节从 `0` 变成 `0.0`。
+
+处理方式照 §53.170：把生产者改成 `else 0.0`，让代码和契约说同一句话，而不是让模型在背后默默转换。
+差别只在 JSON 的 `0` 和 `0.0`：JS 只有一种数字类型、`JSON.parse` 两种输入给同一个值，
+所以**树里没有任何消费者能看出区别**；能看出的是 `isinstance(x, int)` 这种严格 Python 消费方，
+所以写下来，而不是一句「无影响」带过。
+
+两条变异专门量这一格：
+
+| 变异 | 结果 | 说明 |
+|---|---|---|
+| 生产者退回 `else 0` | **GREEN（0）** | **预期存活**：float 字段把它 coercion 回去了，生产者那一改对 wire 不可见 |
+| `percentage` 声明改 `int` | **RED（1）** | 这才是 `isinstance(..., float)` 那条断言真正的靶子 |
+
+第一行是诚实的记账：**「我把 `else 0` 改成了 `else 0.0`」这件事本身没有守卫，也守不住**——
+它改的是生产者与模型的一致性，不是可观察行为。第二行说明那条断言并不空：它守的是**模型的声明**，
+而声明是能被改错的东西。
+
+### 五个变异
+
+| 变异 | 结果 | 红的用例 |
+|---|---|---|
+| 摘掉 `response_model` | **RED（2）** | 绑定 + schema |
+| map 只发四个里的三个 | **RED（2）** | 我那条 + **既有那条**（重叠，合理） |
+| 兜底返回 `unknown` | **RED（1）** | **只有我那条**（证明不是重复守卫） |
+| 生产者退回 `else 0` | GREEN（0） | 预期存活，见上 |
+| `percentage` 改 `int` | **RED（1）** | `isinstance(..., float)` |
+
+### 门
+
+| 门 | 结果 |
+|---|---|
+| `ruff check .` | All checks passed |
+| `mypy app/` | **Success: no issues found in 334 source files** |
+| `generate_types --check` | up to date |
+| `lint_scan_guard.py` | `[OK] ... 850 .py files, both directions` |
+| `pytest`（全量） | **`tests=9552 failures=0 errors=0 skipped=11`**，6953 passed、2588 subtests |
+| `tests/test_world_cup_analytics_routes.py` | **67 passed**（63 + 4 条新契约测试） |
+| 前端 `tsc` / `tsc -p tsconfig.test.json` / `eslint src` | rc=0 ×3 |
+
+`event.py` **+60**、`_frontend_export.py` **+4**、`world_cup_analytics.py` **+3/−2**、测试 **+113**、
+`api.ts` **+10**、组件 **+1/−11**、`generated-types.ts` **+62**。
+
+`response_model` **5 → 6**，剩 **13 个**路由仍返回 `dict[str, Any]`；组件 `interface` **26 → 24**。
+
+**本节行数**：正文 **+109/−0**，连本段共 **+112/−0**；审计文档已入库 **+22146/−15**，加本节 **+22258/−15**。

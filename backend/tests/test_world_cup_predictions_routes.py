@@ -1308,5 +1308,33 @@ class WorldCupPredictionWireShapeTests(unittest.TestCase):
         )
 
 
+class PredictionTimestampSerializationTests(unittest.TestCase):
+    """`last_updated` must carry an offset, not a bare wall clock.
+
+    ``MatchPrediction.last_updated`` round-trips out of SQLite naive (the column
+    is declared ``DateTime(timezone=True)``, which SQLite does not honour), and
+    the payload is rendered by clients that parse it with ``new Date(...)`` --
+    which reads a marker-less string as local time. Audit 53.172.
+    """
+
+    def test_last_updated_carries_an_offset(self) -> None:
+        prediction = MatchPrediction(
+            match_id="ts-1",
+            predicted_home_score=1.0,
+            predicted_away_score=0.5,
+            home_win_prob=0.5,
+            draw_prob=0.3,
+            away_win_prob=0.2,
+            confidence=0.6,
+            prediction_method="elo_only",
+            last_updated=datetime(2026, 6, 20, 12, 0, 0),
+            factors={},
+        )
+
+        payload = _serialize_prediction(prediction)
+
+        self.assertEqual(payload["last_updated"], "2026-06-20T12:00:00+00:00")
+
+
 if __name__ == "__main__":
     unittest.main()

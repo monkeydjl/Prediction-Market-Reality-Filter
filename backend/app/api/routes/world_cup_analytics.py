@@ -19,6 +19,7 @@ from app.models.event import (
     QualityLoopReportResponse,
     SystemHealthResponse,
 )
+from app.utils.helpers import utc_isoformat
 from app.utils.prediction_db import get_prediction_session_dep
 from app.models.world_cup_prediction import (
     MatchFixture,
@@ -388,9 +389,7 @@ async def get_prediction_coverage(
         if last_updated is None or last_updated < stale_cutoff:
             payload = _fixture_payload(fixture)
             payload["prediction_method"] = prediction.prediction_method
-            payload["last_updated"] = (
-                prediction.last_updated.isoformat() if prediction.last_updated else None
-            )
+            payload["last_updated"] = utc_isoformat(prediction.last_updated)
             payload["age_hours"] = (
                 round((now - last_updated).total_seconds() / 3600, 2)
                 if last_updated is not None
@@ -984,15 +983,8 @@ async def get_system_health(session: Session = Depends(get_prediction_session_de
         "recent_predictions_24h": recent_predictions,
         "cache_entries": cache_entries,
         "data_freshness_hours": round(data_age_hours, 1),
-        # SQLite hands `last_updated` back naive, and the client parses this
-        # string with `new Date(...)` -- which reads a marker-less ISO string as
-        # *local* time, eight hours off in UTC+8. The line above already
-        # attaches UTC to compute the age; the emitted string has to carry the
-        # same offset, or the two halves of this response describe different
-        # instants (audit 53.171).
-        "last_update": (
-            latest_prediction.last_updated.replace(tzinfo=timezone.utc).isoformat()
-            if latest_prediction
-            else None
-        )
+        # The client parses this with `new Date(...)`, which reads a marker-less
+        # ISO string as local time -- eight hours off in UTC+8. `utc_isoformat`
+        # attaches the offset; see its docstring for why naive means UTC here.
+        "last_update": utc_isoformat(latest_prediction.last_updated) if latest_prediction else None
     }

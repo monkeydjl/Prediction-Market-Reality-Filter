@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from typing import Any
 from bs4 import BeautifulSoup
 
+from app.utils.helpers import utc_isoformat
 from app.utils.prediction_db import get_prediction_session
 from app.models.world_cup_prediction import Base
 from sqlalchemy import Integer, String, Float, DateTime
@@ -244,7 +245,7 @@ async def get_elo_rating(
                         "elo_rating": cached.elo_rating,
                         "fifa_rank": cached.fifa_rank,
                         "confederation": cached.confederation,
-                        "last_updated": cached.last_updated.isoformat(),
+                        "last_updated": utc_isoformat(cached.last_updated),
                         "source": f"cached_{cached.source}"
                     }
 

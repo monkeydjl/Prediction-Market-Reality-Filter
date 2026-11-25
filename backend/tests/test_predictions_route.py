@@ -460,3 +460,66 @@ class TestConditionalCalibrationRoute:
             )
         assert denied.status_code == 401
         assert allowed.status_code == 200, allowed.text
+
+
+class TestLearningSerializersCarryTimestamps:
+    """`last_updated` on the learning panels must not be timezone-naive.
+
+    Both serializers read a ``DateTime`` column that SQLite hands back naive, and
+    both feed a panel that renders the value with ``new Date(...)`` -- which
+    parses a marker-less string as *local* time. In UTC+8 the calibration and
+    engine-performance panels were therefore showing an instant eight hours off,
+    with the unit tests unable to see it because their fixtures fed ``...Z``
+    (audit 53.172).
+    """
+
+    def test_engine_score_last_updated_carries_an_offset(self):
+        from datetime import datetime
+
+        from app.api.routes.predictions import _engine_score_to_dict
+        from app.kernel.kernel_db import KernelEngineScore
+
+        payload = _engine_score_to_dict(
+            KernelEngineScore(
+                engine="elo_odds",
+                competition="epl",
+                accuracy=0.5,
+                last_updated=datetime(2026, 6, 20, 12, 0, 0),
+            )
+        )
+
+        assert payload["last_updated"] == "2026-06-20T12:00:00+00:00"
+
+    def test_calibration_last_updated_carries_an_offset(self):
+        from datetime import datetime
+
+        from app.api.routes.predictions import _calibration_to_dict
+        from app.kernel.kernel_db import KernelCalibration
+
+        payload = _calibration_to_dict(
+            KernelCalibration(
+                engine="elo_odds",
+                competition="epl",
+                slope=1.0,
+                intercept=0.0,
+                last_updated=datetime(2026, 6, 20, 12, 0, 0),
+            )
+        )
+
+        assert payload["last_updated"] == "2026-06-20T12:00:00+00:00"
+
+    def test_a_missing_timestamp_stays_none(self):
+        from app.api.routes.predictions import _calibration_to_dict
+        from app.kernel.kernel_db import KernelCalibration
+
+        payload = _calibration_to_dict(
+            KernelCalibration(
+                engine="elo_odds",
+                competition="epl",
+                slope=1.0,
+                intercept=0.0,
+                last_updated=None,
+            )
+        )
+
+        assert payload["last_updated"] is None

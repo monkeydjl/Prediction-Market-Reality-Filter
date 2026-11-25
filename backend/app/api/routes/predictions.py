@@ -19,6 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.security import require_write_key
 from app.core import config
+from app.utils.helpers import utc_isoformat
 
 if TYPE_CHECKING:
     # Kernel imports stay inside the route/helper bodies at runtime (lazy, so a
@@ -633,7 +634,7 @@ def _engine_score_to_dict(score: KernelEngineScore) -> dict:
         "brier_score": score.brier_score,
         "sample_count": score.sample_count,
         "confidence_calibration": score.confidence_calibration,
-        "last_updated": score.last_updated.isoformat() if score.last_updated else None,
+        "last_updated": utc_isoformat(score.last_updated),
     }
 
 
@@ -647,7 +648,7 @@ def _calibration_to_dict(cal: KernelCalibration) -> dict:
         "sample_count": cal.sample_count,
         "avg_confidence": cal.avg_confidence,
         "avg_accuracy": cal.avg_accuracy,
-        "last_updated": cal.last_updated.isoformat() if cal.last_updated else None,
+        "last_updated": utc_isoformat(cal.last_updated),
     }
 
 

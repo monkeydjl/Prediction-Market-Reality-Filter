@@ -38,6 +38,7 @@ from app.services.world_cup_data_quality import (
     normalize_prediction_data_quality,
 )
 from app.services.world_cup_engine_names import PredictionEngine
+from app.utils.helpers import utc_isoformat
 from app.utils.prediction_db import get_prediction_session, close_prediction_session, init_prediction_db
 
 
@@ -92,7 +93,7 @@ def _serialize_prediction(prediction: MatchPrediction) -> dict[str, Any]:
         "engine_used": _engine_used_from_method(method),
         "ai_reasoning": prediction.ai_reasoning,
         "key_factors": prediction.key_factors,
-        "last_updated": prediction.last_updated.isoformat() if prediction.last_updated else None,
+        "last_updated": utc_isoformat(prediction.last_updated),
         "has_betting_odds": bool(quality_metrics.get("has_odds") or (method and "elo_odds" in method)),
         "data_quality": data_quality,
         "data_quality_notes": data_quality_notes,

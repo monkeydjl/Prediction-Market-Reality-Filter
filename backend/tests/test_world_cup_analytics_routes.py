@@ -602,6 +602,51 @@ class WorldCupAnalyticsRouteAuthTests(unittest.TestCase):
         )
         self.assertIs(route.response_model, SystemHealthResponse)
 
+    def test_prediction_coverage_stale_entry_carries_an_offset(self) -> None:
+        """The stale branch is the only one that emits `last_updated`.
+
+        That is also why nothing noticed the missing zone: an empty table, a
+        fresh prediction and a missing prediction all skip this line. The
+        fixture therefore has to be a *scheduled* fixture whose prediction is
+        older than the cutoff (audit 53.172).
+        """
+        self.session.add(
+            MatchFixture(
+                match_id="cov-1",
+                fixture_id="cov-1",
+                home_team="Team A",
+                away_team="Team B",
+                kickoff_utc=datetime(2026, 7, 1, 18, 0, 0),
+                venue="Test Stadium",
+                stage="group_stage",
+                status="scheduled",
+            )
+        )
+        self.session.add(
+            MatchPrediction(
+                match_id="cov-1",
+                predicted_home_score=1.0,
+                predicted_away_score=0.5,
+                home_win_prob=0.5,
+                draw_prob=0.3,
+                away_win_prob=0.2,
+                confidence=0.6,
+                prediction_method="elo_only",
+                last_updated=datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=2),
+            )
+        )
+        self.session.commit()
+
+        resp = self.client.get("/analytics/prediction-coverage")
+
+        self.assertEqual(resp.status_code, 200)
+        stale = resp.json()["stale_predictions"]
+        self.assertTrue(stale, "a two-day-old prediction must be reported as stale")
+        self.assertTrue(
+            stale[0]["last_updated"].endswith("+00:00"),
+            f"expected an explicit UTC offset, got {stale[0]['last_updated']!r}",
+        )
+
     def test_analytics_post_routes_require_write_key(self):
         paths = [
             "/analytics/result-fact-backfill?dry_run=true",

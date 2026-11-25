@@ -21307,3 +21307,167 @@ FastAPI 给绑定了模型的 200 响应发的是 `{"$ref": "#/components/schema
 下一个端点可以照着走，不需要再重新设计。
 
 **本节行数**：正文 **+91/−0**，连本段共 **+94/−0**；审计文档已入库 **+21230/−15**，加本节 **+21324/−15**。
+
+## §53.169 第二个端点：`/quality-loop`，和三个被手写接口挡住的键
+
+§53.168 结尾写的是「**这只是一个。**」这一节走第二个。
+
+菜单里这一项叫 `calibration-buckets`，而**侦察第一步就否掉了这个名字**：
+`world_cup_analytics.py` 里没有这条路由。`calibration` 在 events 侧有两条，且都已绑了
+`response_model`；组件里那个 `CalibrationBucket` 真正消费的是
+`/world-cup/quality-loop` → `overall.calibration_buckets`。
+
+这条纠错先记下来：**接口名 ≠ 端点名 ≠ 路由名。**按名字 grep 路由会落空，
+按「组件从哪个字段拿数据」去找，一次就中。
+
+### 规模：不是一个 6 键端点，是 11 个模型
+
+`/quality-loop` 返回 `build_quality_loop_report` 的一份聚合报告：10 个顶层键，
+下面挂 `counters` / `overall` / `by_engine` / `trends` / `consistency_issues` /
+`integrated_weight_suggestion` / `recommendations`。逐层数下来是 **11 个模型**：
+
+| 模型 | 键数 | 生产者 | 两条返回路径？ |
+|---|---|---|---|
+| `QualityCalibrationBucket` | 8 | `_calibration_buckets` | 空桶 / 非空桶，键相同 |
+| `QualitySummary` | 11 | `_summarize` | `total==0` 与 `total>0` 都写全 11 个 |
+| `QualityTrendPoint` | 6 | `_trend_points` | 单一路径 |
+| `QualityTrends` | 2 | `build_quality_loop_report` | 单一路径 |
+| `QualityConsistencyScore` | 2 | `detect_prediction_consistency_issues` | 单一路径 |
+| `QualityConsistencyVariant` | 5 | 同上 | 单一路径 |
+| `QualityConsistencyIssue` | 10 | 同上 | 单一路径 |
+| `QualityIntegratedWeightSuggestion` | 5 + 3 条件 | `_integrated_weight_payload` | **两条，键集不同** |
+| `QualityRecommendation` | 3 | `_recommendations` | 多个 append 点，键相同 |
+| `QualityCounters` | 4 | `collect_quality_samples` | 单一路径 |
+| `QualityLoopReportResponse` | 10 | `build_quality_loop_report` | 单一路径 |
+
+上一节挑的是「最小的那个」以证明链路能走通。这一节挑的是「最大的那个」以证明
+链路**不需要为规模改道**：11 个模型、一个条件键集、两个循环里生成的字典
+（`by_engine` / `trends.by_engine`），走的还是同一串动作。
+
+### 手写接口挡住的不是「没用上」，是「看不见」
+
+三处，都是本次才第一次出现在类型里：
+
+| 键 | 手写接口的情形 | 后果 |
+|---|---|---|
+| `generated_at` | 顶层 10 个键里没有它 | 客户端分不出「刚算的」与「缓存的」 |
+| `lower` / `upper` | 桶声明 6 个键，没有这两个 | 桶的边界丢了，只剩后端拼好的 `label` |
+
+`label` 是 `"80-100%"` 这种字符串。组件拿 `bucket.label` 当 key、显示 `count` 与
+`accuracy`，**从来没有读过边界——因为它读不到**。这不是「多余字段没人消费」，
+是消费侧**根本没有这个事实**：后端哪天真把最后一桶改成闭区间、或把桶从 5 个改成 6 个，
+客户端连「它变了」都表达不出来，界面只会安静地少画一格或错画一格。
+
+所以这一节的收益不是「类型更好看」，是**把三个已经存在、但被类型挡在门外的读数交回去**。
+`generated_at` 交回去之后这一节没有加显示——那是界面决策，不是契约决策，这里只把键交还。
+
+### 闭合模型的第一次翻车（本节最该记的一条）
+
+第一版把 11 个模型全写成 `BaseModel`。五个变异跑下来，**「桶模型删掉 `lower`」只有
+schema 断言红，线上仍然返回 8 个键**。
+
+原因不是断言写错，是**闭合模型让另一半断言变成空头**：`BaseModel` 默认
+`extra="ignore"`，模型少声明一个键时 pydantic 把它丢掉，线上键集恒等于模型字段集。
+于是「线上键集 == 模型字段集」两边都由模型决定，**相等也说明不了任何事**——
+和 §53.160 里 `body == model_fields` 是同一件事，只是这次换到了嵌套层。
+
+改成 `FlexibleResponse`（`extra="allow"`）之后，线上会**透传**模型没声明的键，
+第二个断言才有内容可断：
+
+- 模型缩水 → `components.schemas` 少一个 property（schema 那一半红）；
+- 生产者加键 → 线上多一个键（wire 那一半红）。
+
+**同一个变异，闭合版只能靠 schema，开放版两半都动。**这是 §2 那条规则的第三次重推：
+闭合模型的静默方向永远是「丢掉」，而「丢掉」在运行期不可观测。要么开放让键穿过去，
+要么别声称自己守住了。
+
+代价写在明处：开放模型的 TS 类型会带 `[k: string]: unknown` 尾巴（11 个 interface 全有），
+一个拼错的属性名不会再被立刻拒绝。换到的是「生产者加键」这个方向第一次可观测。
+
+### `predicted_score` 是 float，不是 `ScorePair`
+
+`detect_prediction_consistency_issues` 里的比分是
+`round(float(row.predicted_home_score), 3)`，可能是 `2.5`。
+`ScorePair` 声明的是 `home: int`，因为它自己的生产者读 `Integer` 列。
+
+直接复用的结果是**同名形状、不同取值域**：pydantic 在响应期拒绝非整数比分，
+即契约在生产者合法写出的数据上 500。所以另立 `QualityConsistencyScore`（两个 `float`），
+并把「为什么不是 `ScorePair`」写进 docstring——那句话会原样进 `generated-types.ts`，
+前端读到的是判断，不是一句「float」。
+
+### 三个条件键：默认值 + `exclude_unset`
+
+`_integrated_weight_payload` 有两条返回路径：
+
+| 路径 | 写的键 |
+|---|---|
+| 分量样本不足 | 前 5 个 + `reason` |
+| 样本足够 | 前 5 个 + `learned_elo_weight` + `blend` |
+
+三条路都试过：
+
+| 写法 | 结果 |
+|---|---|
+| 可空但无默认 | **两条路径都校验失败**（各自都缺一个键） |
+| 有默认、不加旗 | 线上多出两个 `null` —— 模型改了线上，却声称在描述线上 |
+| 有默认 + `response_model_exclude_unset=True` | schema 里三个键 optional，线上字节不变 |
+
+这是 §2 判据 ④ 的教科书形态，也是本节唯一一处锚在**路由**上的契约。守卫直接测它：
+空历史 → `source == "rule_default"` → 断言 `reason` 在、另外两个都不在。
+如果旗被删掉，这条会立刻红，而不是等某个前端在某天发现 `blend: null`。
+
+### 守卫五条，变异五个
+
+| 断言 | 边界上守什么 |
+|---|---|
+| 顶层线上 10 键 == 字面量；schema 10 个 property | 生产者漂移 / 模型缩水 |
+| 桶 schema 8 键且 `lower`/`upper` required；**线上桶键集 == schema** | 八键完整性；生产者加键 |
+| `QualitySummary` 11 个 property 且 `required == properties` | 少声明 / 给必填字段加默认 |
+| `route.response_model is QualityLoopReportResponse` 且 `exclude_unset` 为真 | 绑定被摘 / 旗被删 |
+| 空报告里 `reason` 在、`learned_elo_weight` / `blend` 不在 | 条件键不能变成 null |
+
+| 变异 | 结果 | 谁红的 |
+|---|---|---|
+| 路由去掉 `response_model=` | **4 failed** | 三条 schema 断言（`$ref` 没了）+ 绑定断言 |
+| 模型删掉 `generated_at` | **1 failed** | 只有第 1 条——线上仍有该键，只有 schema 看得见 |
+| 桶模型删掉 `lower` | **1 failed** | 桶那一条（schema 少 1；线上透传后 8≠7，两半都动） |
+| `samples` 加默认值 `= 0` | **1 failed** | `required == properties` 那一条 |
+| 生产者往桶里加第 9 个键 | **1 failed** | 桶那一条的线上断言——**闭合模型在这个变异下全绿** |
+
+最后两行是本节的两条判据：**加默认值**只有 `required` 断言抓得住（`properties` 数量不变），
+**生产者加键**只有开放模型 + 线上断言抓得住。少任何一条，对应的变异都留在绿里。
+
+### 一次自查：改 docstring 就是改生成物
+
+改完 11 个模型、跑完前四道门、全绿之后，我把包封模型的 docstring 补了一句
+「整棵树都是开放的」，然后只跑了前端检查——`generate_types --check` 红了。
+
+**docstring 会被生成器原样写进 JSDoc**，所以它和字段一样是生成物的输入。
+这条不是理论：报错现场就是 `export interface QualityLoopReportResponse {` 前面那段注释。
+重生成即绿。记下来是因为它反过来也成立——上一节把「判据 5」的注释搬进 docstring，
+正是利用了同一件事。
+
+### 门
+
+| 门 | 结果 |
+|---|---|
+| `ruff check .` | All checks passed |
+| `mypy app/` | **Success: no issues found in 334 source files** |
+| `generate_types --check` | up to date（中间因 docstring 红过一次，见上） |
+| `lint_scan_guard.py` | `[OK] ... 848 .py files, both directions` |
+| `pytest tests/`（全量） | **`tests=9522 failures=0 errors=0 skipped=11`**，6923 passed、2588 subtests |
+| `tests/test_world_cup_analytics_routes.py` | 49 passed（44 + 5 条新契约测试） |
+| 前端 `tsc` / `tsc -p tsconfig.test.json` / `eslint` | rc=0 ×3 |
+| `vitest analytics-dashboard.test.tsx` | 4 passed |
+
+`event.py` +257、`_frontend_export.py` +22、`world_cup_analytics.py` +11/−2、
+测试 +131、`api.ts` +19、生成物 +265、组件 +9/−87。
+
+组件 **34 → 29** 个 `interface`、**2 378 → 2 300** 行；`world_cup_analytics.py` 里
+`response_model` **1 → 2**。
+
+剩下 **17 个**路由仍是 `-> dict[str, Any]`，组件里还有 29 个手写 interface。
+这一节证明了链路能吃下「11 个模型 + 条件键集 + 循环生成的字典」，
+所以下一个端点的选择标准可以只看**它挡住多少读数**，不必再考虑规模。
+
+**本节行数**：正文 **+161/−0**，连本段共 **+164/−0**；审计文档已入库 **+21324/−15**，加本节 **+21488/−15**。

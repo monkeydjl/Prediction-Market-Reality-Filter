@@ -10,6 +10,7 @@ import { cn } from "@/lib/utils";
 // docstring, which the generator carries into the generated JSDoc.
 import type {
   AccuracyStats,
+  EngineStats,
   OddsCacheStatsResponse,
   QualityConsistencyIssue,
   QualityLoopReport,
@@ -21,18 +22,7 @@ import { fmtPct } from "@/lib/format";
 import { analyticsApi, type VerifiedResultCorrectionRequest } from "@/lib/world-cup/analytics-api";
 import { ChartFrame, DarkTooltip } from "@/components/ui/chart-lite";
 
-interface EngineStats {
-  total_predictions: number;
-  by_engine: Record<EngineKey, EngineUsage>;
-}
-
 type EngineKey = "elo_odds" | "hybrid" | "integrated" | "gbm";
-
-interface EngineUsage {
-  count: number;
-  percentage: number;
-  avg_confidence: number;
-}
 
 interface ConsistencyRepairItem {
   match_id: string;

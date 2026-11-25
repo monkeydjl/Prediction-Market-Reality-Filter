@@ -15,6 +15,7 @@ from app.api.security import require_write_key
 from app.memory import loop_run_store
 from app.models.event import (
     AccuracyStatsResponse,
+    EngineStatsResponse,
     OddsCacheStatsResponse,
     PredictionTimelineResponse,
     QualityLoopReportResponse,
@@ -297,7 +298,7 @@ def _enrich_knockout_fixture_payload(
     return enriched
 
 
-@router.get("/engine-stats")
+@router.get("/engine-stats", response_model=EngineStatsResponse)
 async def get_engine_stats(session: Session = Depends(get_prediction_session_dep)) -> dict[str, Any]:
     """Get prediction engine usage statistics."""
 
@@ -322,7 +323,7 @@ async def get_engine_stats(session: Session = Depends(get_prediction_session_dep
         )
         return {
             "count": count,
-            "percentage": (count / total * 100) if total > 0 else 0,
+            "percentage": (count / total * 100) if total > 0 else 0.0,
             "avg_confidence": round(avg_confidence, 3),
         }
 

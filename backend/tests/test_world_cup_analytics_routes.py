@@ -801,6 +801,119 @@ class WorldCupAnalyticsRouteAuthTests(unittest.TestCase):
         )
         self.assertIs(route.response_model, PredictionTimelineResponse)
 
+    ENGINE_STATS_KEYS = {"total_predictions", "by_engine"}
+    ENGINE_STATS_ENTRY_KEYS = {"count", "percentage", "avg_confidence"}
+
+    def _engine_stats_path_schema(self) -> dict:
+        spec = self.app.openapi()
+        entry = spec["paths"]["/analytics/engine-stats"]["get"]["responses"]["200"]["content"][
+            "application/json"
+        ]["schema"]
+        return self._component_schema(entry["$ref"].rsplit("/", 1)[-1])
+
+    def _add_engine_predictions(self) -> None:
+        """One prediction per bucket, plus a method no bucket is named after.
+
+        ``bucket_engine`` maps by substring and falls through to ``hybrid``, so
+        ``"mystery"`` has to land there -- if it ever landed nowhere, the
+        percentages would stop summing to 100 while ``total_predictions`` still
+        counted the row.
+        """
+        methods = ["elo_odds_fusion", "hybrid", "gbm", "integrated", "mystery"]
+        for index, method in enumerate(methods):
+            self.session.add(
+                MatchPrediction(
+                    match_id=f"engine-{index}",
+                    predicted_home_score=1.0,
+                    predicted_away_score=0.5,
+                    home_win_prob=0.5,
+                    draw_prob=0.3,
+                    away_win_prob=0.2,
+                    confidence=0.6,
+                    prediction_method=method,
+                )
+            )
+        self.session.commit()
+
+    def test_engine_stats_counts_every_row_into_a_bucket(self) -> None:
+        """Totality, not the key set -- the key set already has a better owner.
+
+        ``test_engine_stats_serves_one_bucket_per_runnable_engine`` compares the
+        buckets against the dispatch registry, which is the oracle this file
+        should use for membership. Re-asserting membership here against
+        ``ENGINE_NAMES`` would be the weaker copy of an existing guard.
+
+        What that test cannot see is a row counted into ``total_predictions``
+        and into no bucket: the keys stay correct, the total stays correct, and
+        the percentages quietly stop summing to 100. ``bucket_engine`` falls
+        through to ``hybrid`` for anything it does not recognise, so ``mystery``
+        has to land there.
+        """
+        self._add_engine_predictions()
+
+        resp = self.client.get("/analytics/engine-stats")
+
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(set(body), self.ENGINE_STATS_KEYS)
+        self.assertEqual(body["total_predictions"], 5)
+        for entry in body["by_engine"].values():
+            self.assertEqual(set(entry), self.ENGINE_STATS_ENTRY_KEYS)
+
+        self.assertEqual(body["by_engine"]["hybrid"]["count"], 2)
+        self.assertEqual(body["by_engine"]["gbm"]["count"], 1)
+        self.assertEqual(body["by_engine"]["hybrid"]["percentage"], 40.0)
+        total_percentage = sum(e["percentage"] for e in body["by_engine"].values())
+        self.assertAlmostEqual(total_percentage, 100.0, places=6)
+
+    def test_engine_stats_empty_table_reports_float_zeroes(self) -> None:
+        """`0` and `0.0` are the same JSON number and not the same Python value.
+
+        The producer used to write a bare ``0`` on this path. Declaring the
+        field as ``float`` makes pydantic coerce it, which changes the bytes
+        whether or not anyone intended it -- so the producer now writes ``0.0``
+        and this test pins it. A client using ``isinstance(x, int)`` is the only
+        thing that could ever tell the difference.
+        """
+        resp = self.client.get("/analytics/engine-stats")
+
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body["total_predictions"], 0)
+        for entry in body["by_engine"].values():
+            self.assertEqual(entry["count"], 0)
+            self.assertEqual(entry["avg_confidence"], 0.0)
+            self.assertIsInstance(
+                entry["percentage"],
+                float,
+                "the empty path must publish 0.0, not the int 0 it used to emit",
+            )
+
+    def test_engine_stats_schema_publishes_an_open_map(self) -> None:
+        """``additionalProperties`` and no ``properties`` -- that is the decision.
+
+        If this ever becomes a four-field model, the schema gains ``properties``
+        and loses ``additionalProperties``, and the fifth engine becomes a 500.
+        """
+        schema = self._engine_stats_path_schema()
+        self.assertEqual(set(schema["properties"]), self.ENGINE_STATS_KEYS)
+
+        by_engine = schema["properties"]["by_engine"]
+        self.assertNotIn("properties", by_engine)
+        self.assertIn("additionalProperties", by_engine)
+
+        entry = self._component_schema("EngineStatsEntry")
+        self.assertEqual(set(entry["properties"]), self.ENGINE_STATS_ENTRY_KEYS)
+        self.assertEqual(set(entry["required"]), self.ENGINE_STATS_ENTRY_KEYS)
+
+    def test_engine_stats_route_binds_the_named_model(self) -> None:
+        from app.models.event import EngineStatsResponse
+
+        route = next(
+            r for r in self.app.routes if getattr(r, "path", "") == "/analytics/engine-stats"
+        )
+        self.assertIs(route.response_model, EngineStatsResponse)
+
     def test_analytics_post_routes_require_write_key(self):
         paths = [
             "/analytics/result-fact-backfill?dry_run=true",

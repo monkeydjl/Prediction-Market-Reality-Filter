@@ -26,6 +26,7 @@ import type {
   CalibrationBucketCell as GeneratedCalibrationBucketCell,
   CalibrationBucketSummaryResponse as GeneratedCalibrationBucketSummaryResponse,
   AccuracyStatsResponse as GeneratedAccuracyStatsResponse,
+  EngineStatsResponse as GeneratedEngineStatsResponse,
   SystemHealthResponse as GeneratedSystemHealthResponse,
   OddsCacheStatsResponse as GeneratedOddsCacheStatsResponse,
   QualityLoopReportResponse as GeneratedQualityLoopReportResponse,
@@ -710,6 +711,15 @@ export type QualityConsistencyIssue = GeneratedQualityConsistencyIssue;
 // the component reading `AccuracyStats` while the model stays findable under
 // `AccuracyStatsResponse` in `event.py`.
 export type AccuracyStats = GeneratedAccuracyStatsResponse;
+
+// The engine-usage panel (audit 53.175). The component used to declare its own
+// `EngineStats` + `EngineUsage`, with `by_engine` as a closed
+// `Record<"elo_odds" | "hybrid" | "integrated" | "gbm", …>`. The generated type
+// is an index signature instead: `ENGINE_NAMES` is the backend's vocabulary and
+// a fifth engine must widen the map rather than break validation, so the closed
+// record was never something the wire promised. The key set is pinned by a test
+// on the wire instead.
+export type EngineStats = GeneratedEngineStatsResponse;
 
 // The World Cup dashboard's health banner (audit 53.171). Same naming split as
 // the accuracy envelope: the model keeps its `Response` suffix in `event.py`,

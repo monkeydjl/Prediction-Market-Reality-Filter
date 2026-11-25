@@ -1640,6 +1640,68 @@ export interface EngineComparisonStat {
   avg_score_error: number;
   predictions: EngineComparisonPrediction[];
 }
+/**
+ * One bucket of ``EngineStatsResponse.by_engine`` (audit 53.175).
+ *
+ * Three keys from the single ``engine_summary`` return. ``count`` mirrors
+ * ``len(...)``; ``avg_confidence`` is rounded to three places by the producer.
+ *
+ * ``percentage`` is the interesting one. The producer writes
+ * ``(count / total * 100) if total > 0 else 0`` -- an int zero on the empty
+ * path, a float everywhere else. Declaring ``float`` makes pydantic coerce
+ * that ``0`` to ``0.0``, i.e. binding this model **changes those bytes** even
+ * though no logic moved. The producer was changed to write ``0.0`` in the same
+ * commit so that the code and the contract say the same thing, rather than the
+ * model quietly doing the conversion (the same choice as audit 53.170's
+ * ``else 0`` -> ``else 0.0``).
+ *
+ * The change is confined to ``0`` versus ``0.0`` in JSON. Nothing in the tree
+ * can observe it: JavaScript has one numeric type, and ``JSON.parse`` gives the
+ * same value either way. A strict Python consumer using ``isinstance(x, int)``
+ * could, which is why it is written down rather than waved away.
+ */
+export interface EngineStatsEntry {
+  count: number;
+  percentage: number;
+  avg_confidence: number;
+  [k: string]: unknown;
+}
+/**
+ * Response for ``GET /api/analytics/engine-stats`` (audit 53.175).
+ *
+ * Two top-level keys, both written on the single return path.
+ *
+ * ``by_engine`` is a **map, not a four-field model**, even though the producer
+ * always emits exactly the four ``ENGINE_NAMES`` buckets (``grouped`` is
+ * seeded from that tuple and the return iterates it). A model with four named
+ * fields would publish ``additionalProperties: false`` and then **500 on the
+ * day a fifth engine joins the vocabulary** -- the map has to widen, not
+ * reject. Audit 53.169 made the same call for ``QualityTrends.by_engine``.
+ *
+ * The cost is the reverse of every other section in this run: ``dict[str, ...]``
+ * generates an index signature, so the TypeScript is **looser** than the
+ * hand-written ``Record<EngineKey, EngineUsage>`` it replaces. The narrowness
+ * that the removed interface expressed is not recoverable from the wire --
+ * ``EngineKey`` was four hardcoded strings in the component, not something the
+ * backend promised.
+ *
+ * Nothing had to move for it, either: the four-key guarantee already has an
+ * owner. ``test_engine_stats_serves_one_bucket_per_runnable_engine`` compares
+ * the wire against the dispatch registry (``app.services.world_cup_engines``),
+ * which is a stronger oracle than ``ENGINE_NAMES`` -- the latter is what the
+ * endpoint iterates, so comparing against it stays green while both sides
+ * shrink together. What was missing is the **totality** of the mapping: a row
+ * counted into ``total_predictions`` but into no bucket leaves the percentages
+ * summing to less than 100, and no key-set comparison can see that. That is
+ * the assertion this audit adds.
+ */
+export interface EngineStatsResponse {
+  total_predictions: number;
+  by_engine: {
+    [k: string]: EngineStatsEntry;
+  };
+  [k: string]: unknown;
+}
 export interface EventAnalysisRequest {
   event_question: string;
   baseline_probability?: number;

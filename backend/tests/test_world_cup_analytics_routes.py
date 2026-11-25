@@ -60,6 +60,7 @@ class WorldCupAnalyticsRouteAuthTests(unittest.TestCase):
 
         app.dependency_overrides[get_prediction_session_dep] = override_session
         app.include_router(world_cup_analytics.router)
+        self.app = app
         self.client = TestClient(app)
 
     def tearDown(self):
@@ -125,6 +126,95 @@ class WorldCupAnalyticsRouteAuthTests(unittest.TestCase):
         # Criterion 5: the non-empty branch must carry the explicit switch too.
         self.assertIs(body["has_entries"], True)
         self.assertIn("cache_hit_rate", body)
+
+    # ------------------------------------------------------------------
+    # The odds-cache envelope became a published contract in audit 53.168.
+    # These three reuse the route harness above; they are about the schema,
+    # not about behaviour, so they sit next to the endpoint they guard.
+    # ------------------------------------------------------------------
+    ODDS_CACHE_KEYS = {
+        "total_entries",
+        "fresh_count",
+        "stale_count",
+        "estimated_api_calls_saved",
+        "cache_hit_rate",
+        "has_entries",
+    }
+
+    def _odds_cache_path_schema(self) -> dict:
+        """The published schema for this route, with the ``$ref`` resolved.
+
+        FastAPI emits ``{"$ref": "#/components/schemas/<Model>"}`` for a bound
+        response model, so reading ``properties`` straight off the path entry
+        raises KeyError -- the model's own schema lives under ``components``.
+        """
+        spec = self.app.openapi()
+        entry = spec["paths"]["/analytics/odds-cache-stats"]["get"]["responses"]["200"][
+            "content"
+        ]["application/json"]["schema"]
+        ref = entry.get("$ref")
+        if not ref:
+            return entry
+        name = ref.rsplit("/", 1)[-1]
+        return spec["components"]["schemas"][name]
+
+    def test_odds_cache_stats_publishes_exactly_its_six_keys(self) -> None:
+        """The published schema is the contract the dashboard reads.
+
+        Comparing the wire keys to ``model_fields`` would be an empty
+        assertion: the response base is ``extra="allow"``, so a field the model
+        stops declaring is passed through as an extra and both sides stay
+        equal. The OpenAPI schema is the other side that does move -- a field
+        dropped from the model disappears from ``properties`` -- so one
+        comparison catches model shrinkage *and* producer drift.
+        """
+        now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+        self.session.add(
+            OddsCache(
+                match_key="wc_team_a_vs_team_b",
+                home_odds=2.1,
+                draw_odds=3.2,
+                away_odds=3.4,
+                source="test",
+                bookmakers_count=3,
+                cached_at=now_naive,
+            )
+        )
+        self.session.commit()
+
+        resp = self.client.get("/analytics/odds-cache-stats")
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(set(resp.json()), self.ODDS_CACHE_KEYS)
+        self.assertEqual(set(self._odds_cache_path_schema()["properties"]), self.ODDS_CACHE_KEYS)
+
+    def test_odds_cache_stats_empty_branch_publishes_the_same_six_keys(self) -> None:
+        """Both return paths write the same keys.
+
+        The empty branch is where a schema quietly diverges in practice: it is
+        written by hand, returns early, and no field is read from a column that
+        would make the difference visible.
+        """
+        resp = self.client.get("/analytics/odds-cache-stats")
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(set(resp.json()), self.ODDS_CACHE_KEYS)
+
+    def test_odds_cache_stats_route_binds_the_named_model(self) -> None:
+        """Binding the model is the half that is easy to lose silently.
+
+        Without ``response_model`` the endpoint still returns 200 and the body
+        still has six keys; only the published schema disappears. So the route
+        itself is asserted, not the response.
+        """
+        from app.models.event import OddsCacheStatsResponse
+
+        route = next(
+            r
+            for r in self.app.routes
+            if getattr(r, "path", "") == "/analytics/odds-cache-stats"
+        )
+        self.assertIs(route.response_model, OddsCacheStatsResponse)
 
     def test_odds_cache_stats_empty_table_reports_explicit_switch(self):
         """Criterion 5 (audit 53.102.7): zeros alone cannot distinguish "never

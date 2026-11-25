@@ -3222,6 +3222,31 @@ export interface MatchOriginalPrediction {
   confidence: number;
 }
 /**
+ * Response for GET /api/analytics/odds-cache-stats (audit 53.168).
+ *
+ * The route had no ``response_model``, so the endpoint published no schema and
+ * the dashboard carried its own ``OddsCacheStats`` interface -- the first of
+ * the 19 unmodelled routes in ``world_cup_analytics`` to be closed.
+ *
+ * Both return paths (the empty table and the non-empty one) write these six
+ * keys in this order. Nothing is optional and nothing carries a default:
+ * every value is computed here rather than read off a column, and both
+ * branches write all six, so a missing key would mean the producer changed
+ * shape -- which is what this model should make loud. ``has_entries`` is the
+ * §5 switch that keeps the five zeros of the empty branch from being
+ * ambiguous; ``cache_hit_rate`` is a float on both paths (``0.0`` vs
+ * ``round(..., 3)``), not an int on one of them.
+ */
+export interface OddsCacheStatsResponse {
+  total_entries: number;
+  fresh_count: number;
+  stale_count: number;
+  estimated_api_calls_saved: number;
+  cache_hit_rate: number;
+  has_entries: boolean;
+  [k: string]: unknown;
+}
+/**
  * Response for ``GET /events/decisions/open`` (audit 53.59).
  *
  * All six envelope keys are bare: ``get_open_decisions`` writes every one of

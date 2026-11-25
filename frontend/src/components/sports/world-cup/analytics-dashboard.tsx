@@ -4,6 +4,11 @@ import { useEffect, useState } from "react";
 import { BarChart3, Target, Database, Activity, TrendingUp, AlertCircle, Gauge, RefreshCw, ShieldCheck, ClipboardCheck } from "lucide-react";
 import { CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts";
 import { cn } from "@/lib/utils";
+// The odds-cache envelope is a generated contract as of audit 53.168 (the route
+// has a response_model now), so this component no longer declares it. The
+// "criterion 5" switch that used to live on the local copy is in the model's
+// docstring, which the generator carries into the generated JSDoc.
+import type { OddsCacheStatsResponse } from "@/lib/api";
 import { fmtPct } from "@/lib/format";
 import { analyticsApi, type VerifiedResultCorrectionRequest } from "@/lib/world-cup/analytics-api";
 import { ChartFrame, DarkTooltip } from "@/components/ui/chart-lite";
@@ -41,16 +46,6 @@ interface AccuracyStats {
   // Criterion 5: explicit switch separating "no finished matches yet" from
   // "refresh failed and stale data is also empty" (audit 53.102.7).
   has_results: boolean;
-}
-
-interface OddsCacheStats {
-  total_entries: number;
-  fresh_count: number;
-  stale_count: number;
-  estimated_api_calls_saved: number;
-  cache_hit_rate: number;
-  // Criterion 5: "never fetched any odds" vs "odds fetching disabled/failed".
-  has_entries: boolean;
 }
 
 interface SystemHealth {
@@ -1774,7 +1769,7 @@ function ResultConsistencyPanel({
 export function AnalyticsDashboard() {
   const [engineStats, setEngineStats] = useState<EngineStats | null>(null);
   const [accuracyStats, setAccuracyStats] = useState<AccuracyStats | null>(null);
-  const [cacheStats, setCacheStats] = useState<OddsCacheStats | null>(null);
+  const [cacheStats, setCacheStats] = useState<OddsCacheStatsResponse | null>(null);
   const [systemHealth, setSystemHealth] = useState<SystemHealth | null>(null);
   const [qualityLoop, setQualityLoop] = useState<QualityLoopReport | null>(null);
   const [resultConsistency, setResultConsistency] = useState<ResultConsistencyReport | null>(null);
@@ -1792,7 +1787,7 @@ export function AnalyticsDashboard() {
         const [engine, accuracy, cache, health, quality, result, repair] = await Promise.allSettled([
           analyticsApi.engineStats<EngineStats>(),
           analyticsApi.accuracyStats<AccuracyStats>(),
-          analyticsApi.oddsCacheStats<OddsCacheStats>(),
+          analyticsApi.oddsCacheStats<OddsCacheStatsResponse>(),
           analyticsApi.systemHealth<SystemHealth>(),
           analyticsApi.qualityLoop<QualityLoopReport>(),
           analyticsApi.resultConsistency<ResultConsistencyReport>(25),
@@ -1801,7 +1796,7 @@ export function AnalyticsDashboard() {
           results.map((r) => (r.status === "fulfilled" ? r.value : null)) as [
             EngineStats | null,
             AccuracyStats | null,
-            OddsCacheStats | null,
+            OddsCacheStatsResponse | null,
             SystemHealth | null,
             QualityLoopReport | null,
             ResultConsistencyReport | null,

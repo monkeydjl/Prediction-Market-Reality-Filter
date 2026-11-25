@@ -13,6 +13,7 @@ from typing import Any
 from app.api.audit_metadata import get_audit_metadata
 from app.api.security import require_write_key
 from app.memory import loop_run_store
+from app.models.event import OddsCacheStatsResponse
 from app.utils.prediction_db import get_prediction_session_dep
 from app.models.world_cup_prediction import (
     MatchFixture,
@@ -829,7 +830,7 @@ async def get_tournament_simulation(
     return result
 
 
-@router.get("/odds-cache-stats")
+@router.get("/odds-cache-stats", response_model=OddsCacheStatsResponse)
 async def get_odds_cache_stats(session: Session = Depends(get_prediction_session_dep)) -> dict[str, Any]:
     """Get odds API cache statistics."""
 

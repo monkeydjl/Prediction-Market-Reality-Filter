@@ -25,6 +25,7 @@ import type {
   OpenDecisionsResponse as GeneratedOpenDecisionsResponse,
   CalibrationBucketCell as GeneratedCalibrationBucketCell,
   CalibrationBucketSummaryResponse as GeneratedCalibrationBucketSummaryResponse,
+  OddsCacheStatsResponse as GeneratedOddsCacheStatsResponse,
   PredictionCalibrationResponse as GeneratedPredictionCalibrationResponse,
   DomainReliabilityRow as GeneratedDomainReliabilityRow,
   DomainReliabilityResponse as GeneratedDomainReliabilityResponse,
@@ -675,6 +676,13 @@ export type DomainReliabilityResponse = GeneratedDomainReliabilityResponse;
 // made pydantic drop the rest from the response without a sound.
 export type PredictionRecord = GeneratedRecentPredictionItem;
 export type RecentPredictionsResponse = GeneratedRecentPredictionsResponse;
+
+// The World Cup dashboard's odds-cache envelope. Declared inside
+// `sports/world-cup/analytics-dashboard.tsx` until audit 53.168 gave
+// GET /analytics/odds-cache-stats a response_model; that route was the first of
+// nineteen in `world_cup_analytics.py` to publish a schema, which is why the
+// interface block in that component is still long.
+export type OddsCacheStatsResponse = GeneratedOddsCacheStatsResponse;
 
 export interface EventListFilters {
   q?: string;

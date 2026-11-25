@@ -21708,3 +21708,168 @@ carries_an_offset` 立刻红——**这条断言是本节唯一为「改代码�
 五个键的名字和类型都对得上，其中一个一直在说八小时前的时刻。
 
 **本节行数**：正文 **+116/−0**，连本段共 **+119/−0**；审计文档已入库 **+21606/−15**，加本节 **+21725/−15**。
+
+## §53.172 同族的另外五处：一个 helper、四条守卫、一个诚实的存活者
+
+§53.171 结尾写「同族的还有三处，本节没有动」，并列了三条。那三条其实是**四个位置**——
+`predictions.py:636` 和 `:650` 写在同一条里。开工前先全量量了一遍，结果比「四个」还多一个：
+
+```text
+`grep -rn "\.isoformat()" app/`  ->  133 处（含 helper 自己那一次）
+```
+
+按字段名分类，`last_updated` / `last_update` 一族里仍是裸调用的：
+
+| 位置 | 读的列 | 消费者 |
+|---|---|---|
+| `world_cup_analytics.py:392`（`prediction-coverage` 的 **stale 分支**） | `MatchPrediction.last_updated` | 浏览器 `new Date(...)` |
+| `predictions.py:637`（`_engine_score_to_dict`） | `KernelEngineScore.last_updated` | 引擎表现面板 |
+| `predictions.py:651`（`_calibration_to_dict`） | `KernelCalibration.last_updated` | 校准面板 |
+| `world_cup_predictions.py:96`（`_serialize_prediction`） | `MatchPrediction.last_updated` | 预测列表 |
+| **`elo_ratings_service.py:248`**（`get_elo_rating` 缓存命中） | `EloRating.last_updated` | **没有** |
+
+最后一行是这次才发现的。它上方第 236 行正在做 `.replace(tzinfo=timezone.utc)` 算缓存年龄——
+和 §53.171 里 `/system-health` 的写法**逐字同形**：同一列，一半当 UTC 算数、一半原样发出去。
+**同一个形状出现两次，就不是笔误了，是缺一个共用出口。**
+
+（`elo_ratings_service.py` 里另有 4 处 `"last_updated"` 直调，那是 `datetime.now(timezone.utc)`，
+天生带偏移，不在这一族里。数一数比看一眼可靠。）
+
+### helper：两个决定都不是默认值
+
+```python
+def utc_isoformat(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    else:
+        value = value.astimezone(timezone.utc)
+    return value.isoformat()
+```
+
+- **naive 一律当 UTC**，不是猜的：写入侧全是 `datetime.now(timezone.utc)`，naive 只可能出现在
+  **读回来的那一侧**（SQLite 不兑现 `DateTime(timezone=True)`）。
+- **aware 走 `astimezone` 转换，不走 `replace` 重贴标签**。`replace` 保住墙上钟、挪动时刻。
+  今天两种写法在 SQLite 上**输出逐字相同**——这正是危险处：换成会还回偏移的驱动（Postgres/MySQL），
+  `replace` 会把 `+08:00` 的 12:00 贴成 `+00:00` 的 12:00，**错八小时且不报错**。
+  一个「今天等价、换驱动就错」的分支，只能现在写对。
+
+### §53.171 那个修法：在 SQLite 上对，在别的库上错
+
+顺带把上一节的内联表达式也换掉：
+
+```python
+# 53.171 的写法：只在 naive 输入时正确
+latest_prediction.last_updated.replace(tzinfo=timezone.utc).isoformat()
+# 现在
+utc_isoformat(latest_prediction.last_updated)
+```
+
+这不是改写，是**承认上一节修的是症状**。上一节的断言是「输出 `endswith("+00:00")`」，
+`replace` 在那个断言下**永远是绿的**——包括它把时刻说错的时候。守卫挑的是「带不带标记」，
+而缺陷是「标记对不对」，两者在这一个字段上恰好重合，所以当时没露。helper 把两件事合成一件：
+标记由 `astimezone` 产生，不由字符串拼出来。
+
+### 五条变异：四条红，一条诚实的绿
+
+| 变异 | 结果 | 谁红的 |
+|---|---|---|
+| helper 不再给 naive 贴 UTC | **RED（6 条）** | helper 1 + `predictions` 2 + `world_cup_predictions` 1 + `analytics` 2（其中一条是 §53.171 那条） |
+| helper 把 aware 改成 `replace` 重贴标签 | **RED（1 条）** | `test_aware_offset_is_converted_not_relabelled`（`+08:00` 的 12:00 没变成 `04:00+00:00`） |
+| `prediction-coverage` 撤回调 | **RED（1 条）** | 本节新加那条 |
+| kernel 校准撤回调 | **RED（1 条）** | 本节新加那条 |
+| `elo_ratings_service` 撤回调 | **GREEN（0 条）** | **没人红——这就是结论** |
+
+第一行的 6 条是**爆炸半径**读数：一处 helper 改动，四个文件同时红，说明出口真的共用；
+它同时也把 §53.171 那条测试重新变红了——**上一节的守卫自动被这一节接管，没有留下孤儿断言**。
+
+最后一行是**故意留的存活者**，不是漏测。`get_elo_rating` 的缓存命中分支只有
+`tests/manual/manual_elo_ratings_service.py` 这个手工脚本碰过，pytest 里没有用例走到它
+（要先塞一行 `EloRating`、再让 `match_key` 命中，且它上游会去抓网页）。
+**为这一点起 harness 是另一节的工作量**，所以记清楚：这一处改了，但**没有守卫**。
+改它的理由不是「有测试」，是「和前四处逐字同形状，留着就是下一个八小时」——
+**这个理由如果哪天站不住，它就该被回退，而不是被忘记**。
+
+### 三层测试，其中两层是新的
+
+| 层 | 文件 | 守什么 |
+|---|---|---|
+| helper 单元（5 条） | `tests/test_helpers.py`（新文件） | naive→带标记 / aware-UTC→不变 / `+08:00`→`04:00+00:00` / `None`→`None` / `utc_now()` 也带偏移 |
+| 序列化器（3 条） | `test_predictions_route.py` | 两个 `_to_dict` 的 `last_updated`、以及 `None` 仍是 `None` |
+| 路由载荷（2 条） | `test_world_cup_analytics_routes.py`、`test_world_cup_predictions_routes.py` | 走 TestClient 读真实响应 |
+| **不存在的层** | —— | `elo_ratings_service`（见上） |
+
+`prediction-coverage` 那条的夹具值得单独记：**`last_updated` 只在 stale 分支里写**。
+空表、新预测、没有预测——三个分支都不写这个键，所以任何「随便造一行」的夹具都会**绿着跳过被测行**：
+
+```python
+last_updated=datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=2)
+```
+
+**naive 的、两天前的行**是唯一能走进那一行的输入。夹具里保留 `.replace(tzinfo=None)` 而不是
+直接写 `datetime(2026, ...)`，是因为要的是「相对现在两天」，不是某个固定日期——
+固定日期会在某天以后自己变成「不 stale」而静默退出被测分支。
+
+### 两处同形状但不改：`get_cached_odds`
+
+`odds_cache_service.py:84` 和 `:134` 也在发 naive 的 `last_update`：
+
+```python
+"last_update": cached.last_updated_api.isoformat() if cached.last_updated_api else cached.cached_at.isoformat(),
+```
+
+**没改**，因为量过一个前提：这个键**没有消费者**。`odds.get("last_update")` 全仓 0 处命中
+（grep 到的那两处是 `fresh_odds.get("last_update")`，读的是 API 原始串，不是这个字典）。
+没有消费者 ⇒ 改它既不可观察也不可验证，等于往 diff 里加两行没人看的东西。
+**但它会在有消费者的那天变成同一个 bug**，所以写在这里而不是删掉不看。
+（`/odds-cache-stats` 不受影响：它只发计数，一个时间戳都不发。）
+
+### 门
+
+| 门 | 结果 |
+|---|---|
+| `ruff check .` | All checks passed |
+| `mypy app/` | **Success: no issues found in 334 source files** |
+| `generate_types --check` | up to date |
+| `lint_scan_guard.py` | `[OK] ... 849 .py files, both directions` |
+| `pytest`（全量） | **`tests=9540 failures=0 errors=0 skipped=11`**，6941 passed、2588 subtests |
+| `test_helpers` + `test_predictions_route` + `test_world_cup_predictions_routes` | 62 passed / 9 subtests |
+| `tests/test_world_cup_analytics_routes.py` | 58 passed |
+
+`tests` 从上一节的 **9530** 涨到 **9540**，正好 +10 = 5（helper）+ 3（序列化器）+ 1（`world-cup` 序列化）
+\+ 1（`prediction-coverage`）。**没有别的数自己动了**——这一句比「全绿」有信息量：
+新增的十条就是打算加的那十条，没有顺手多测、也没有哪条因为收集错误被静默吞掉。
+（`subtests` 2588 一条没变，也一致：这一节没有用 `subTest`。）
+
+`lint_scan_guard.py` 这次红过一次，方向正是它自己 §53.164 记的那个：**新文件没入库**
+（`tests/test_helpers.py`：`1 linted .py file(s) are NOT tracked`）。`git add` 之后 849 个文件过门。
+顺序是「先 add、再跑门」，不是反过来——反过来看到的红是操作问题，不是代码问题。
+
+### 一次行尾事故，和它的判据
+
+`test_predictions_route.py` 那 63 行是用 heredoc `cat >>` 追加的，**结果长出 63 个裸 LF**：
+
+```text
+before: crlf=462 bare_lf=0
+after : crlf=462 bare_lf=63        <- MIXED
+```
+
+`cat >>` 不看目标文件的行尾。修法走字节（`replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")`），
+断言 `bare_after == 0` 且 `crlf_after == 462 + 63 = 525`，再让 `git diff --numstat` 说话：**63 / 0**。
+**删除数是 0** 才说明只加了行、没有把既有行改写成别的行尾——这一条比「看起来对」可靠。
+
+### 行数
+
+`helpers.py` +28、`world_cup_analytics.py` +6/−14、`predictions.py` +3/−2、
+`world_cup_predictions.py` +2/−1、`elo_ratings_service.py` +2/−1；
+测试 `test_helpers.py` +51（新文件）、`test_predictions_route.py` +63、
+`test_world_cup_analytics_routes.py` +45、`test_world_cup_predictions_routes.py` +28；`README.md` +1/−1。
+
+这一节**没碰契约**：`response_model` 仍是 4/19，组件仍是 26 个手写 `interface`。
+它改的六处里只有一处（`/system-health`）在已建模的端点内，其余五处在 15 个未建模路由和服务层里——
+**「键集对齐」那套工具根本照不到它们**：它检查名字和类型，不检查一个字符串说的是哪个时刻。
+上一节那句「键集对齐不检查值的含义」在这里得到第二次验证，而且验证得更彻底：
+这五处的类型一直是 `str`，从来没有错过。
+
+**本节行数**：正文 **+162/−0**，连本段共 **+165/−0**；审计文档已入库 **+21725/−15**，加本节 **+21890/−15**。

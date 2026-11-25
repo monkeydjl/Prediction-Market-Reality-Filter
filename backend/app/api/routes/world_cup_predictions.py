@@ -130,7 +130,7 @@ def _serialize_history_entry(
 ) -> dict[str, Any]:
     data_quality, data_quality_notes = normalize_prediction_data_quality(None, None)
     payload: dict[str, Any] = {
-        "timestamp": history.timestamp.isoformat() if history.timestamp else None,
+        "timestamp": utc_isoformat(history.timestamp),
         "predicted_score": {
             "home": history.predicted_home_score,
             "away": history.predicted_away_score,
@@ -257,7 +257,7 @@ async def list_matches(
                     "fixture_id": m.fixture_id,
                     "home_team": m.home_team,
                     "away_team": m.away_team,
-                    "kickoff_utc": m.kickoff_utc.isoformat() if m.kickoff_utc else None,
+                    "kickoff_utc": utc_isoformat(m.kickoff_utc),
                     "venue": m.venue,
                     "stage": m.stage,
                     "group": m.group,
@@ -318,7 +318,7 @@ async def get_match(match_id: str) -> dict[str, Any]:
                 "fixture_id": match.fixture_id,
                 "home_team": match.home_team,
                 "away_team": match.away_team,
-                "kickoff_utc": match.kickoff_utc.isoformat() if match.kickoff_utc else None,
+                "kickoff_utc": utc_isoformat(match.kickoff_utc),
                 "venue": match.venue,
                 "stage": match.stage,
                 "group": match.group,
@@ -486,7 +486,7 @@ async def analyze_match_prediction(
                 "match_id": match_id,
                 "analysis": latest_analysis.analysis_text,
                 "cached": True,
-                "created_at": latest_analysis.created_at.isoformat()
+                "created_at": utc_isoformat(latest_analysis.created_at)
             }
 
         # Call AI analysis service
@@ -569,7 +569,7 @@ async def get_analysis_history(match_id: str) -> dict[str, Any]:
                     },
                     "confidence": h.confidence,
                     "prediction_method": h.prediction_method,
-                    "created_at": h.created_at.isoformat() if h.created_at else None
+                    "created_at": utc_isoformat(h.created_at)
                 }
                 for h in history
             ]
@@ -860,7 +860,7 @@ async def get_today_matches() -> dict[str, Any]:
                     "fixture_id": match.fixture_id,
                     "home_team": match.home_team,
                     "away_team": match.away_team,
-                    "kickoff_utc": match.kickoff_utc.isoformat() if match.kickoff_utc else None,
+                    "kickoff_utc": utc_isoformat(match.kickoff_utc),
                     "venue": match.venue,
                     "stage": match.stage,
                     "group": match.group,

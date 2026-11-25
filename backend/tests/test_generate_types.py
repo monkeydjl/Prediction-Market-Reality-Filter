@@ -7515,11 +7515,17 @@ class WorldCupPredictionHistoryContractTests(unittest.TestCase):
         start = source.index("def _serialize_history_entry(")
         body = source[start:source.index('@router.post("/init-db"', start)]
         self.assertIn(
-            "history.timestamp.isoformat() if history.timestamp else None",
+            '"timestamp": utc_isoformat(history.timestamp),',
             body,
-            "timestamp is no longer written behind a truthiness test; if it "
-            "became unconditional the str | None annotation is now too wide "
-            "(audit 53.77)",
+            "timestamp must be written through utc_isoformat (audit 53.176). "
+            "It used to be pinned here as the literal "
+            "'history.timestamp.isoformat() if history.timestamp else None', "
+            "which was the same criterion stated as text: the point was never "
+            "the truthiness test, it was that the write must not be "
+            "unconditional. utc_isoformat keeps that property -- it returns "
+            "None unchanged (pinned in tests/test_helpers.py), so the str | "
+            "None annotation stays right -- and it adds the UTC offset that a "
+            "bare .isoformat() drops from a column SQLite hands back naive",
         )
         self.assertIn(
             "_engine_used_from_method(history.prediction_method)",

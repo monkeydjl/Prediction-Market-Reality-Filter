@@ -4352,3 +4352,79 @@ class EngineStatsResponse(FlexibleResponse):
 
     total_predictions: int
     by_engine: dict[str, EngineStatsEntry]
+
+
+class PredictionCoverageFixture(FlexibleResponse):
+    """One element of ``PredictionCoverageResponse.missing_predictions`` (audit 53.176).
+
+    The seven keys ``_fixture_payload`` writes, in its insertion order. Every
+    member mirrors a ``MatchFixture`` column: ``kickoff_utc`` as a formatted
+    string (a ``DateTime`` column, NOT NULL, so no ``None`` is reachable even
+    though the producer still guards for it), ``status`` nullable because the
+    column is -- ``String(16), default="scheduled", nullable=True`` -- and the
+    rest non-null.
+
+    ``kickoff_utc`` used to be a bare ``.isoformat()`` on a value SQLite hands
+    back naive, i.e. a marker-less local-looking string for a field whose name
+    says UTC (audit 53.176, the sweep 53.172 left open).
+    """
+
+    match_id: str
+    fixture_id: str
+    home_team: str
+    away_team: str
+    kickoff_utc: str
+    stage: str
+    status: str | None
+
+
+class PredictionCoverageStaleEntry(PredictionCoverageFixture):
+    """One element of ``PredictionCoverageResponse.stale_predictions`` (audit 53.176).
+
+    The same seven keys plus the three the stale branch adds, in the order it
+    adds them. Declared as a subclass rather than as one model with three
+    optional fields, because the two arrays are different shapes: a model wide
+    enough for both would publish ``prediction_method?: ...`` on the *missing*
+    entries too, i.e. it would advertise keys that branch never writes.
+
+    ``prediction_method`` is nullable (column ``String(128), nullable=True``);
+    ``last_updated`` is **not** -- the column is ``nullable=False``, so the
+    producer's ``if last_updated else None`` guard is unreachable here and the
+    contract should not repeat it as if it were a fact. ``age_hours`` is
+    computed, and nullable only because the guard above it can never fire.
+    """
+
+    prediction_method: str | None
+    last_updated: str
+    age_hours: float | None
+
+
+class PredictionCoverageResponse(FlexibleResponse):
+    """Response for ``GET /api/analytics/prediction-coverage`` (audit 53.176).
+
+    Nine keys, all written on the single return path -- no defaults, no
+    conditional keys, nothing to exclude.
+
+    ``status`` is a plain ``str``, not ``Literal["ok"]``: the endpoint has no
+    branch that could return anything else (failures raise ``HTTPException``),
+    so a ``Literal`` here would be a constant pretending to be a vocabulary. The
+    two ``Literal``s elsewhere in this tree (``SystemHealthResponse.status``,
+    ``QualityRecommendation.level``) exist because a producer really does choose
+    between members.
+
+    ``missing_count`` / ``stale_count`` duplicate the list lengths on purpose --
+    they are the numbers a dashboard renders, and a client that reads them does
+    not have to walk two arrays to get them. ``coverage_ok`` is the conjunction
+    of both being empty, which is the one thing a caller usually wants and
+    cannot infer from either count alone.
+    """
+
+    status: str
+    coverage_ok: bool
+    scheduled_count: int
+    predicted_count: int
+    missing_count: int
+    stale_count: int
+    stale_after_hours: int
+    missing_predictions: list[PredictionCoverageFixture]
+    stale_predictions: list[PredictionCoverageStaleEntry]

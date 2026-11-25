@@ -914,6 +914,207 @@ class WorldCupAnalyticsRouteAuthTests(unittest.TestCase):
         )
         self.assertIs(route.response_model, EngineStatsResponse)
 
+    COVERAGE_KEYS = {
+        "status",
+        "coverage_ok",
+        "scheduled_count",
+        "predicted_count",
+        "missing_count",
+        "stale_count",
+        "stale_after_hours",
+        "missing_predictions",
+        "stale_predictions",
+    }
+    COVERAGE_FIXTURE_KEYS = {
+        "match_id",
+        "fixture_id",
+        "home_team",
+        "away_team",
+        "kickoff_utc",
+        "stage",
+        "status",
+    }
+    COVERAGE_STALE_KEYS = COVERAGE_FIXTURE_KEYS | {
+        "prediction_method",
+        "last_updated",
+        "age_hours",
+    }
+
+    def _coverage_path_schema(self) -> dict:
+        spec = self.app.openapi()
+        entry = spec["paths"]["/analytics/prediction-coverage"]["get"]["responses"]["200"][
+            "content"
+        ]["application/json"]["schema"]
+        return self._component_schema(entry["$ref"].rsplit("/", 1)[-1])
+
+    def _add_coverage_rows(self) -> None:
+        """One scheduled fixture with no prediction, one with a two-day-old one.
+
+        Both branches have to be populated in the same response: the two arrays
+        carry different item shapes, and a fixture that only exercises one of
+        them says nothing about the other.
+        """
+        for match_id in ("cov-missing", "cov-stale"):
+            self.session.add(
+                MatchFixture(
+                    match_id=match_id,
+                    fixture_id=match_id,
+                    home_team="Team A",
+                    away_team="Team B",
+                    kickoff_utc=datetime(2026, 7, 2, 18, 0, 0),
+                    venue="Test Stadium",
+                    stage="group_stage",
+                    status="scheduled",
+                )
+            )
+        self.session.add(
+            MatchPrediction(
+                match_id="cov-stale",
+                predicted_home_score=1.0,
+                predicted_away_score=0.5,
+                home_win_prob=0.5,
+                draw_prob=0.3,
+                away_win_prob=0.2,
+                confidence=0.6,
+                prediction_method="elo_only",
+                last_updated=datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=2),
+            )
+        )
+        self.session.commit()
+
+    def test_prediction_coverage_publishes_nine_keys_and_two_item_shapes(self) -> None:
+        """The two arrays are different shapes, and the model says so.
+
+        ``missing_predictions`` entries are seven keys; ``stale_predictions``
+        entries are the same seven plus three. One model wide enough for both
+        would advertise ``prediction_method`` on the missing entries -- keys that
+        branch never writes.
+        """
+        self._add_coverage_rows()
+
+        resp = self.client.get("/analytics/prediction-coverage")
+
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(set(body), self.COVERAGE_KEYS)
+        self.assertFalse(body["coverage_ok"])
+        self.assertEqual(body["scheduled_count"], 2)
+        self.assertEqual(body["predicted_count"], 1)
+        self.assertEqual(body["missing_count"], 1)
+        self.assertEqual(body["stale_count"], 1)
+        self.assertEqual(body["stale_after_hours"], 24)
+
+        self.assertEqual(len(body["missing_predictions"]), 1)
+        self.assertEqual(len(body["stale_predictions"]), 1)
+        self.assertEqual(set(body["missing_predictions"][0]), self.COVERAGE_FIXTURE_KEYS)
+        self.assertEqual(set(body["stale_predictions"][0]), self.COVERAGE_STALE_KEYS)
+        self.assertEqual(body["missing_predictions"][0]["match_id"], "cov-missing")
+        self.assertEqual(body["stale_predictions"][0]["prediction_method"], "elo_only")
+
+    def test_prediction_coverage_kickoff_carries_an_offset(self) -> None:
+        """`kickoff_utc` was the last bare `.isoformat()` in this module.
+
+        The column is `DateTime(timezone=True)` and SQLite ignores that, so the
+        field named `_utc` was emitting a marker-less string. This is the site
+        audit 53.176 fixed out of the sweep 53.172 listed as unexamined.
+        """
+        self._add_coverage_rows()
+
+        resp = self.client.get("/analytics/prediction-coverage")
+
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        for entry in body["missing_predictions"] + body["stale_predictions"]:
+            self.assertTrue(
+                entry["kickoff_utc"].endswith("+00:00"),
+                f"expected an explicit UTC offset, got {entry['kickoff_utc']!r}",
+            )
+
+    def _schema_types(self, prop: dict) -> set:
+        """The JSON-schema type names of one property, ``anyOf`` flattened.
+
+        ``str | None`` becomes ``{"anyOf": [{"type": "string"}, {"type": "null"}]}``,
+        so "is this field nullable" is a question about the type set, not about
+        ``required``: a nullable field is still required, it just admits null.
+        """
+        if "anyOf" in prop:
+            return {entry.get("type") for entry in prop["anyOf"]}
+        return {prop.get("type")}
+
+    def test_prediction_coverage_schema_mirrors_both_item_shapes(self) -> None:
+        schema = self._coverage_path_schema()
+        self.assertEqual(set(schema["properties"]), self.COVERAGE_KEYS)
+
+        fixture = self._component_schema("PredictionCoverageFixture")
+        self.assertEqual(set(fixture["properties"]), self.COVERAGE_FIXTURE_KEYS)
+        self.assertEqual(set(fixture["required"]), self.COVERAGE_FIXTURE_KEYS)
+
+        stale = self._component_schema("PredictionCoverageStaleEntry")
+        self.assertEqual(set(stale["properties"]), self.COVERAGE_STALE_KEYS)
+        self.assertEqual(set(stale["required"]), self.COVERAGE_STALE_KEYS)
+        self.assertTrue(
+            self.COVERAGE_FIXTURE_KEYS < set(stale["properties"]),
+            "the stale entry is an extension, not a separate shape",
+        )
+
+        # Nullability is a fact about the column, not a style choice: `status` is
+        # `nullable=True` on `MatchFixture`, `last_updated` is NOT NULL on
+        # `MatchPrediction`. Declaring either one wrong is a 500 waiting for the
+        # first row that disagrees, and `required` cannot express the difference.
+        self.assertIn("null", self._schema_types(fixture["properties"]["status"]))
+        self.assertNotIn("null", self._schema_types(stale["properties"]["last_updated"]))
+        self.assertNotIn("null", self._schema_types(fixture["properties"]["kickoff_utc"]))
+
+    def test_prediction_coverage_route_binds_the_named_model(self) -> None:
+        from app.models.event import PredictionCoverageResponse
+
+        route = next(
+            r
+            for r in self.app.routes
+            if getattr(r, "path", "") == "/analytics/prediction-coverage"
+        )
+        self.assertIs(route.response_model, PredictionCoverageResponse)
+
+    def test_world_cup_route_modules_never_format_a_row_timestamp_bare(self) -> None:
+        """A source-level rule, because eight call sites cannot each have a test.
+
+        ``.isoformat()`` on a value read out of a SQLite column is marker-less,
+        and the client reads it as local time. Audit 53.176 converted eight such
+        sites across these two modules; only the ``/prediction-coverage`` one is
+        reachable from this file's client, and the two modules carry no
+        DB-backed fixture to drive the other seven. Rather than leave them on
+        trust, the *shape* is banned here: any ``<row attribute>.isoformat()``
+        reappearing in either module fails this.
+
+        Deliberately an AST walk, not a regex: ``now.date().isoformat()`` is
+        legitimate (a date has no offset) and its receiver is an ``Attribute``
+        whose name is ``date``, which is not in the banned set.
+        """
+        import ast
+
+        from app.api.routes import world_cup_predictions as predictions_module
+
+        row_timestamps = {"kickoff_utc", "timestamp", "created_at", "last_updated", "last_update"}
+        offenders = []
+        for module in (world_cup_analytics, predictions_module):
+            source = Path(module.__file__).read_text(encoding="utf-8")
+            for node in ast.walk(ast.parse(source)):
+                if (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "isoformat"
+                    and isinstance(node.func.value, ast.Attribute)
+                    and node.func.value.attr in row_timestamps
+                ):
+                    offenders.append(f"{Path(module.__file__).name}:{node.lineno}")
+
+        self.assertEqual(
+            offenders,
+            [],
+            "these call sites format a stored timestamp without an offset; "
+            "use app.utils.helpers.utc_isoformat",
+        )
+
     def test_analytics_post_routes_require_write_key(self):
         paths = [
             "/analytics/result-fact-backfill?dry_run=true",

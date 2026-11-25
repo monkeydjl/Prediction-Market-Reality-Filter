@@ -17,6 +17,7 @@ from app.models.event import (
     AccuracyStatsResponse,
     EngineStatsResponse,
     OddsCacheStatsResponse,
+    PredictionCoverageResponse,
     PredictionTimelineResponse,
     QualityLoopReportResponse,
     SystemHealthResponse,
@@ -350,13 +351,13 @@ def _fixture_payload(fixture: MatchFixture) -> dict[str, Any]:
         "fixture_id": fixture.fixture_id,
         "home_team": fixture.home_team,
         "away_team": fixture.away_team,
-        "kickoff_utc": fixture.kickoff_utc.isoformat() if fixture.kickoff_utc else None,
+        "kickoff_utc": utc_isoformat(fixture.kickoff_utc),
         "stage": fixture.stage,
         "status": fixture.status,
     }
 
 
-@router.get("/prediction-coverage")
+@router.get("/prediction-coverage", response_model=PredictionCoverageResponse)
 async def get_prediction_coverage(
     stale_after_hours: int = Query(
         24,
@@ -747,7 +748,7 @@ async def get_tournament_simulation(
                 "away_team": fixture.away_team,
                 "home_score": fixture.home_score,
                 "away_score": fixture.away_score,
-                "kickoff_utc": fixture.kickoff_utc.isoformat() if fixture.kickoff_utc else "",
+                "kickoff_utc": utc_isoformat(fixture.kickoff_utc) or "",
             },
             match_result_facts.get(str(fixture.match_id or "").strip()),
         )

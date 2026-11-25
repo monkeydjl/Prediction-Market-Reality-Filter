@@ -21873,3 +21873,129 @@ after : crlf=462 bare_lf=63        <- MIXED
 这五处的类型一直是 `str`，从来没有错过。
 
 **本节行数**：正文 **+162/−0**，连本段共 **+165/−0**；审计文档已入库 **+21725/−15**，加本节 **+21890/−15**。
+
+## §53.173 把上一节那个「诚实的存活者」打穿
+
+§53.172 结尾留了一条欠账，写得比修还硬：`elo_ratings_service.get_elo_rating` 的缓存命中分支
+改了，但**没有守卫**——撤回去零条变红，因为 pytest 里从来没有用例走到那一行。
+这一节就是补那个缺口。**按只追加的规矩，§53.172 那段不改**：它记的是当时的事实，
+这一节记的是那条事实今天不再成立。
+
+### 先说清这个分支为什么一直没人测
+
+不是因为难写，是因为**一条看起来够用的断言在这里恰好是空头**。这个函数的四条出口发的时间戳：
+
+| 出口 | `last_updated` 从哪来 | 带偏移吗 |
+|---|---|---|
+| 缓存命中（被测的那条） | 列读回来 naive 的 `.isoformat()` | **不带** |
+| 硬编码 / FIFA 估算 / 兜底 | `datetime.now(timezone.utc).isoformat()` | 带 |
+
+所以只写 `assertTrue(payload["last_updated"].endswith("+00:00"))` 的测试，
+**缓存没命中时也是绿的**——它绿在三条本来就正确的出口上。这和 §53.169 那批闭合模型是同一形状：
+**断言被一个「不是被测对象」的用例满足了**，于是它永远不红。
+
+修法不是加断言，是**换观测点**：每个用例同时断言 `source`（`cached_wikipedia` / `default`），
+那是响应里唯一说明「谁回答的」的键。断言字符串只能说明「值长什么样」，
+两条出口的值长得一样，问题就出在这里。
+
+### harness 不长：复用隔壁已经有的形状
+
+`tests/test_odds_cache_service.py:39` 早就把形状写好了——内存 sqlite +
+`patch.object(<service module>, "get_prediction_session", return_value=self.session)`。
+`elo_ratings_service` 用的是同一套 `get_prediction_session`，所以照抄，不发明：
+
+```python
+self.engine = create_engine("sqlite:///:memory:")
+EloRating.__table__.create(self.engine)          # 只建这一张表，不抬整个 Base
+self.session = sessionmaker(bind=self.engine)()
+...
+with patch.object(elo_ratings_service, "get_prediction_session", return_value=self.session):
+    return await elo_ratings_service.get_elo_rating(UNKNOWN_TEAM, **kwargs)
+```
+
+三个细节是刻意的：
+
+- **只建 `EloRating.__table__`**，不 `Base.metadata.create_all`（隔壁那样做，但它图的是省事）；
+  这一节要证明的是这一张表的行为，多余的建表只会让夹具更慢、更容易被别人改坏。
+- **`UNKNOWN_TEAM = "Testlandia"`**：不在 `WORLD_CUP_2026_ELO_ESTIMATES` 里，也不是它的别名，
+  于是缓存未命中时落到 `default` 出口，而不是 `hardcoded` 出口——两条兜底只有一条能被廉价断言。
+- **`sessionmaker()` 默认 `expire_on_commit=True`**：`commit()` 之后再读属性会重新 SELECT，
+  这一点是前提，不是巧合（下面那条断言就是在测它）。
+
+### 前提本身也断言
+
+夹具写进去的是 **aware** 的值（`_save_to_cache` 写的就是 `datetime.now(timezone.utc)`），
+读回来再查一次 `tzinfo`：
+
+```python
+reloaded = self.session.query(EloRating).filter_by(team_name=UNKNOWN_TEAM).one()
+self.assertIsNone(reloaded.last_updated.tzinfo, "premise broken: ...")
+```
+
+这不是装饰。**如果哪天驱动把偏移还回来了，这一条先在前提上红**，
+而不是让后面那条「带不带 `+00:00`」的断言**用一个错误的理由继续保持绿**。
+上一节花了一整段讲的就是这件事（`replace` 与 `astimezone` 在 SQLite 上输出逐字相同），
+这里的处理是同一条原则放到夹具里。
+
+期望值也不是抄输入，而是**据数据库实际返回的那个 naive 值拼**：
+
+```python
+self.assertEqual(rating["last_updated"], f"{stored.isoformat()}+00:00")
+```
+
+### 三条用例、三个变异，全红，红的正是该红的那条
+
+| 用例 | 断言 |
+|---|---|
+| `test_cached_rating_carries_an_offset` | `source == "cached_wikipedia"`、`elo_rating == 1700.0`、`last_updated == <naive>+00:00` |
+| `test_a_stale_row_is_not_served_from_cache` | 存 8 天的行 → `source == "default"`、`elo_rating == 1500.0` |
+| `test_force_refresh_bypasses_the_cache` | 存 1 小时的行 + `force_refresh=True` → `source == "default"` |
+
+| 变异 | 结果 | 红的用例 |
+|---|---|---|
+| 缓存命中处撤回调（**§53.172 的存活者**） | **RED（1）** | `test_cached_rating_carries_an_offset` |
+| `age < 7` → `age < 0`（缓存永不命中） | **RED（1）** | 同上 |
+| `age < 7` → `age < 999`（陈旧的也发） | **RED（1）** | `test_a_stale_row_is_not_served_from_cache` |
+
+第一行是这一节的目的：**上一节那个 GREEN 现在红了**，存活者不再是存活者。
+
+第二行才是真正的「空头检查」，值得单说：「缓存永不命中」之后 `source` 变成 `default`，
+那条用例**仍然红**。如果它只断言 `endswith("+00:00")`，这个变异会把它留成绿的——
+因为兜底出口本来就带偏移。**变异选在这里，就是为了让「断言有没有锚在分支上」变得可测**，
+而不是靠读一遍代码相信它。
+
+### 这一节没有覆盖的
+
+- `_save_to_cache` / `bulk_import_elo_ratings`（写路径）——没测；
+- 两个 `datetime.now(timezone.utc).isoformat()` 出口：它们天生带偏移，不是缺陷；
+- Wikipedia 抓取（`fetch_elo_from_wikipedia`、`fetch_elo_from_web`）：要网络，这一节不碰。
+
+**也没有把这三个变异登记成 `mutation_verify` 的一套**。永久守卫是 `test_elo_ratings_service.py`
+本身——谁把 `utc_isoformat` 撤回去，它自己会红，不需要变异脚本在场；
+变异脚本只负责证明「这条测试确实会咬」，它住在 `.workbuddy/tmp`，从不入库。
+把一次性证据登记成常设套件是另一件事（要动 SETS、README 的那两个数、和套件总数），
+**这一节没做，也不假装做了**。
+
+### 门
+
+| 门 | 结果 |
+|---|---|
+| `ruff check .` | All checks passed |
+| `mypy app/` | **Success: no issues found in 334 source files** |
+| `generate_types --check` | up to date |
+| `lint_scan_guard.py` | `[OK] ... 850 .py files, both directions`（849 → 850，新文件已 `git add`） |
+| `pytest`（全量） | **`tests=9543 failures=0 errors=0 skipped=11`**，6944 passed、2588 subtests |
+| `tests/test_elo_ratings_service.py` | 3 passed |
+| `tests/test_readme_inventory.py` | 5 passed（README 445 → **446**） |
+
+`tests` 从上一节的 **9540** 涨到 **9543**，正好 +3 = 新文件的三条；`subtests` 仍 2588、
+`skipped` 仍 11——新增用例既没把哪条原本 skip 的测试挤成 pass，也没引入新的 skip。
+
+`README.md` 那个 445 是**有主的**：`tests/test_readme_inventory.py` 会拿它和
+`tests/test_*.py` 的实际个数比。新增一个测试文件不改 README，门会红——
+这次是先改数、再跑门，5 条全过。
+
+新文件 **111 行**、`README.md` **+1/−1**；`app/` 一行没动——这一节只加了一个观测点，
+没有改任何生产代码。
+
+**本节行数**：正文 **+123/−0**，连本段共 **+126/−0**；审计文档已入库 **+21890/−15**，加本节 **+22016/−15**。

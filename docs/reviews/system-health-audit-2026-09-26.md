@@ -22241,3 +22241,227 @@ self.assertEqual(set(body["by_engine"]), set(ENGINE_NAMES))     # 删了
 `response_model` **5 → 6**，剩 **13 个**路由仍返回 `dict[str, Any]`；组件 `interface` **26 → 24**。
 
 **本节行数**：正文 **+109/−0**，连本段共 **+112/−0**；审计文档已入库 **+22146/−15**，加本节 **+22258/−15**。
+
+## §53.176 第七个端点：`/prediction-coverage`，和一次没收在模块边界的清扫
+
+`response_model` **6 → 7 / 19**。这个端点在组件里没有手写类型（`interface` 停在 **24**），
+所以这一节没有可删的东西——它带出来的是另一件事：§53.172 把「`.isoformat()` 丢偏移」这一族
+收了五处，留了一句「同族还有别的」。这一节把普查做到底，先给结论：
+
+> **清扫不该按模块切。** 我按模块切了，切完之后全量跑红在一个我根本没想到的文件里，
+> 而普查本身量出：这一族在路由层还剩 **13** 处，在服务层还有 **48** 处待逐个判。
+
+### 两个数组，两种形状：用子类，不用一个宽模型
+
+`missing_predictions` 的元素是 `_fixture_payload(fixture)` 的 7 个键；`stale_predictions`
+在同样 7 个键后面**追加** 3 个（`prediction_method` / `last_updated` / `age_hours`）。
+最省事的写法是一个模型加三个可选字段。**不采用**：那样 `missing_predictions` 的元素会被
+声明成 `prediction_method?: string | null`——它永远不会有这个键，契约在描述一个不存在的形状。
+这与 §53.174 的 `total_updates` 不同：那个键是**真会缺席**（走另一条分支），
+这个键是**那个数组根本没有**（走的是另一个函数）。
+
+```python
+class PredictionCoverageStaleEntry(PredictionCoverageFixture):
+    prediction_method: str | None
+    last_updated: str
+    age_hours: float | None
+```
+
+生成物侧这是本族第一次出现的形状：同文件两个 interface，第二个 `extends` 第一个，
+10 个属性全部 required。数过 `generated-types.ts` 里的 `PredictionCoverageStaleEntry`，
+确实是 10 条，不多不少。
+
+### `last_updated` 不可空：一个「看着该加守卫」的分支其实到不了
+
+生产者里这三行很刺眼：
+
+```python
+last_updated = _utc_naive(prediction.last_updated)
+if last_updated is None or last_updated < stale_cutoff:
+    payload["last_updated"] = utc_isoformat(prediction.last_updated)
+```
+
+**进得了这个分支就说明 `last_updated` 可能是 `None`**，所以第一版模型我写的是
+`last_updated: str | None`，`age_hours` 也就顺理成章地可空。回读三处源码，它站不住：
+
+1. `_utc_naive` 只在入参为 `None` 时返回 `None`（不吞异常、不截断日期）；
+2. `MatchPrediction.last_updated` 是 `Mapped[datetime]` + `nullable=False`
+   （`app/models/world_cup_prediction.py:111`）；
+3. 所以 `last_updated is None` 这一支**永远不成立**，`age_hours` 的 `else None` 同样。
+
+改成 `last_updated: str`，并在 docstring 里写明「生产者的 `if ... else None` 守卫是死的，
+契约不该复述一个到不了的分支」。`age_hours: float | None` 保留可空，也同样注明理由——
+它可空**只是因为**上面那支到不了，不是因为算不出来。
+
+这是 §5 的镜像用法：那一节要求「读不出信息就别报 0」，这一节要求「到不了的分支别写进契约」。
+判据是同一条：**契约只描述能发生的事实。** 变异 4 把 `last_updated` 改回 `str | None` 会红，
+说明这个方向被钉住了，不是我随口挑的。
+
+顺带一个可空性的坑，和 §53.174 同形：schema 里 `status` 是
+`{"anyOf": [{"type": "string"}, {"type": "null"}]}`，而 `required` **看不见**这个差别——
+`status` 依然是 `required` 列表里的成员。所以测试里判可空性只能读 `anyOf`，不能读 `required`，
+`_schema_types(prop)` 这个 helper 就是为此写的。
+
+### 五发五中
+
+| # | 变异 | 结果 |
+|---|---|---|
+| 1 | 摘掉 `response_model` | 红 2（schema + 绑定） |
+| 2 | `kickoff_utc` 退回裸 `.isoformat()`（清扫前的原文） | 红 1（偏移） |
+| 3 | `status` 声明成非空 | 红 1（可空性） |
+| 4 | `last_updated` 声明成可空 | 红 1（同上，反方向） |
+| 5 | `stale_predictions` 退回基类 | 红 1（两种形状塌成一种） |
+
+变异 1 红两条是对的，不是重复：红的两条都是**读契约**的
+（`..._route_binds_the_named_model` 看 OpenAPI 里那个 `$ref`，
+`..._schema_mirrors_both_item_shapes` 看 `$defs` 里两个形状的 `properties` / `required`），
+而**读响应体的三条全绿**——摘掉 `response_model` 之后字节一个都不变，
+这正是「契约测试和线格式测试是两种测试」的最小证明。
+
+### 普查：八处，而不是一处；而且不止两个模块
+
+清掉的八处（`git diff` 逐行数的，不是估的）：
+
+```text
+world_cup_analytics.py   354  _fixture_payload            kickoff_utc
+world_cup_analytics.py   751  tournament_simulation        kickoff_utc  (or "")
+world_cup_predictions.py 133  _serialize_history_entry     timestamp
+world_cup_predictions.py 260                           kickoff_utc
+world_cup_predictions.py 321                           kickoff_utc   <- 见下
+world_cup_predictions.py 489  created_at  572  created_at  863  kickoff_utc
+```
+
+`321` 那行值得记一笔：我先用 `replace_all` 改了两处 `"kickoff_utc": match.kickoff_utc.isoformat() ...`，
+只命中一处——另一处缩进是 16 格（`match` 子字典），不是 12 格。**是重跑普查脚本报出来的**：
+
+```text
+world_cup_predictions.py:316  kickoff_utc <- match.kickoff_utc   [still bare]
+```
+
+`replace_all` 之后不做一次「按判据重扫」就等于赌自己看全了。同一次里我把正在跑的全量测试杀掉了，
+因为改的是被测模块。
+
+然后普查到底，范围是整个 `backend/app`，按接收者分类：
+
+```text
+total 121  {'aware-now': 31, 'aware-converted': 33, 'date-only': 9, 'row-or-unknown': 48}
+```
+
+- `aware-now`：接收者是 `now(tz)`，本来就带偏移，改了只是换个写法；
+- `date-only`：接收者以 `.date()` / `.today()` 结尾，日期没有偏移可言，**原样就是对的**（正则会把它们误判）；
+- `aware-converted`：接收者是 helper 的形参/局部量（`utc_isoformat` 一族），偏移在入口处就有了；
+- `row-or-unknown`：剩下 48 处，接收者看着像列。
+
+路由层的 13 处，逐个看过，**没有一处是误报**，全是同一个形状（`<行>.<列>.isoformat()` 塞进会被 return 的 dict）：
+
+```text
+predictions.py          :319 prediction_timestamp   :572/:589 kickoff_utc
+sport_edges.py          :52/:148/:189 captured_at   :88 prediction_timestamp   :120/:130 created_at
+sport_odds.py           :60/:95 captured_at   (snap["captured_at"] —— 字典取值，不是属性)
+sport_recommendations.py:61 prediction_timestamp   :65 captured_at
+```
+
+**这一批我没改**，理由要写清楚：它们分布在四个模块、四种前端消费方，各自有自己的测试文件
+（`test_sport_edge_routes.py` 里连一条时间串断言都没有，改完等于无人看守），
+塞进这一节会让「世界杯建模」这个提交跨到体育边缘服务的契约上。留作下一节，
+清单在上面，逐条可执行。
+
+服务层那 48 处还得逐个判「进不进响应」，不能一把梭。已经判掉两个方向相反的样本：
+
+- `world_cup_quality_service.py:143`（`_build_sample`）的 `timestamp` **进不了响应**：
+  样本 dict 只被 `_summarize` / `_trend_points` 消费，报告里只有聚合量，没有样本本身。
+- `world_cup_quality_service.py:560`（`preview_consistency_history_repair`）的 `timestamp`
+  **就是响应体**，和路由层那 13 处同级，只是它住在 service 里。
+
+所以「按模块切」这个做法本身就是错的：**缺陷跟着数据流走，不跟着文件目录走。**
+
+### 八处不能各有各的测试，所以钉形状
+
+这八处里只有 `/prediction-coverage` 那一处能被本文件的 client 驱动
+（`test_prediction_coverage_kickoff_carries_an_offset`），其余七处都在没有 DB fixture 的
+路由体里。逐个造 fixture 不值当，于是钉一条**源码级规则**：
+
+```python
+row_timestamps = {"kickoff_utc", "timestamp", "created_at", "last_updated", "last_update"}
+# 任何 <row attribute>.isoformat() 重新出现在这两个模块里，就红
+```
+
+故意用 AST 而不是正则：`now.date().isoformat()` 合法（日期没有偏移），它的接收者是
+`Attribute` 且名字是 `date`，不在禁集里；而正则要区分这两者只能靠更多正则。
+
+**「断言 `offenders == []`」这种测试必须自己先证明它会红**，否则它和一个空循环长得一模一样——
+AST 走错一步（比如 `Call.func.value` 不是 `Attribute` 而是嵌套 `Call`）就永远匹配不到任何东西。
+所以探针四阶段，报出来的失败文本要点名到行：
+
+```text
+[1/4] pre-mutation, test must pass         1 passed
+[2/4] mutated, CRLF delta=0
+[3/4] mutant, test must FAIL               AssertionError: Lists differ:
+                                           ['world_cup_predictions.py:863'] != []
+[4/4] restored, sha256 match=True          1 passed
+```
+
+中途它还 abort 过一次：
+
+```text
+target: world_cup_predictions.py  anchor hits=2
+ABORT: anchor is not unique
+```
+
+同一个调用在 321 行（16 格缩进）和 863 行（20 格缩进）各有一份，锚点不带上缩进就会命中两处。
+**这正是我前面漏掉 321 行的那个原因，探针替我又说了一遍。**
+
+### 全量跑红在一个别人的文件里
+
+四道门全绿、两个模块的 103 条测试全绿之后跑全量：
+
+```text
+FAILED tests/test_generate_types.py::WorldCupPredictionHistoryContractTests
+       ::test_the_history_entry_is_faithful_to_the_row
+1 failed, 6957 passed, 11 skipped, 2588 subtests passed in 720.02s (0:12:00)
+```
+
+它钉的是**生产者的字面文本**：
+
+```python
+self.assertIn("history.timestamp.isoformat() if history.timestamp else None", body, ...)
+```
+
+我在 `_serialize_history_entry` 里把这一行换成了 `utc_isoformat(history.timestamp)`，字面变了。
+但**它自己要判的那件事没有变**，测试的说明写得很清楚：
+
+> timestamp is no longer written behind a truthiness test; **if it became
+> unconditional the `str | None` annotation is now too wide**
+
+也就是：它判的是「写入必须保留 None」，`isoformat() if ... else None` 只是当时那句判据的**文字形式**。
+`utc_isoformat` 的契约第一条就是 `None` 原样返回（`tests/test_helpers.py:43` 钉着），
+所以 `str | None` 依然是对的。**改法是把文本钉换成同等强度的文本钉**，不是删：
+
+```python
+self.assertIn('"timestamp": utc_isoformat(history.timestamp),', body, ...)
+```
+
+留了三件事在测试说明里：为什么原来的字面能扔（那条判据的实质是「不能无条件写」）、
+新写法为什么仍然保住它（`utc_isoformat` 的 None 契约在 `test_helpers.py` 有业主）、
+以及这条文本钉现在的强度：**裸 `.isoformat()` 回来照样红**。
+
+三件教训，都只有全量能给出：
+
+1. **文本钉住在别人的文件里。** 改一个模块的序列化，红在 `test_generate_types.py`。
+   「只跑我这个模块的测试」在结构上就看不见。
+2. **全量的 rc 不可信，判据是 junit 的 failures。** 这次 `--junitxml` 给了
+   `tests=9557 failures=1 errors=0`，一条具体到方法名；而沙箱里进程 rc 恒 1，
+   用 rc 判会把这个红和「safe-delete 拦了临时目录清理」混成一件事。
+3. **红不是噪音，是没被登记的消费者。** 这一条红正好说明：清扫时改的 8 处里，
+   至少有一处被别处的断言当成了契约文本——所以「改实现前先回读断言行」（§4.2）适用于
+   **整个仓库**，不适用于你要改的那个文件。
+
+### 未决 / 明确不做
+
+- 路由层 13 处（清单在上面）——下一节，一个模块一个提交。
+- 服务层 48 处——逐个判「进不进响应」，已判的两个样本说明这一族预期是一半一半。
+- `world_cup_analytics.py` 还有 12 条路由没有 `response_model`；这一节只做了第七条。
+- 那条源码级规则只覆盖两个世界杯模块。**扩到全路由层**要在上面 13 处收完之后才可能绿，
+  现在扩等于给自己留一个必然红的门。
+
+**本节行数**：正文 **+221/−0**，连本段共 **+224/−0**；审计文档已入库 **+22258/−15**，加本节 **+22482/−15**。

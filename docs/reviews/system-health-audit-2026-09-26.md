@@ -21213,3 +21213,97 @@ export interface CalibrationBucket {
 | 复算 | 行数 `wc -l`；接口数 `^interface` 计数；路由模型 `grep -c response_model app/api/routes/world_cup_analytics.py` = 0 |
 
 **本节行数**：正文 **+105/−0**，连本段共 **+108/−0**；审计文档已入库 **+21122/−15**，加本节 **+21230/−15**。
+
+## §53.168 第一个被命名的端点：`/odds-cache-stats` 走通三件套
+
+§53.167 量出 `world_cup_analytics.py` **19 个路由 / 0 个 `response_model`**，这一节挑其中
+**形状最小**的一个（六个键、两条返回路径）走完整条链路，验证这条路通不通。
+选它的理由是可验证性：字段少到能逐个说出为什么必填，两条路径又能覆盖「生产者写全了吗」。
+
+### 三件套的执行顺序
+
+| # | 改动 | 文件 |
+|---|---|---|
+| 1 | `OddsCacheStatsResponse(FlexibleResponse)`，6 个必填字段按线上键序 | `app/models/event.py` |
+| 2 | 登记进导出（import + `__all__`，都按字母序插在 `OpenDecisionsResponse` 前） | `app/models/_frontend_export.py` |
+| 3 | `@router.get("/odds-cache-stats", response_model=OddsCacheStatsResponse)` | `app/api/routes/world_cup_analytics.py` |
+| 4 | `generate_types.py` 重生成 | `frontend/src/lib/generated-types.ts` |
+| 5 | `api.ts` 按既有约定 `X as GeneratedX` + `export type X = GeneratedX` | `frontend/src/lib/api.ts` |
+| 6 | 组件删掉本地 `interface OddsCacheStats`，改成 import 生成物 | `analytics-dashboard.tsx` |
+
+**第 4 步之前跑 `generate_types` 是不会产出东西的**——生成器只看 `_frontend_export` 里的名字；
+第 2 步漏了就会得到"改了模型但前端没变"，而且没有任何报错。
+
+### 模型里三个判断，逐条对得上生产者
+
+- **字段序 = 线上键序**：`total_entries / fresh_count / stale_count / estimated_api_calls_saved /
+  cache_hit_rate / has_entries`，与两条 `return` 字典的插入序逐字相同。
+- **全部必填、无默认值**：六个值**都是当场算出来的**（`len()` / 求和 / `round()` / 常量 `True` `False`），
+  没有一个是读列得到的。§2 的「镜像 NOT NULL 列不给默认值」在这里退化成更强的形式——
+  **没有任何字段有理由缺省**，缺一个就说明生产者改形状了。
+- **`cache_hit_rate` 两边都是 float**：空表写 `0.0`，非空写 `round(fresh/total, 3)`。
+  如果空表那条路写成整数 `0`，pydantic 会把它强转成 `0.0`——**类型上看不出差别，但生产者已经不一致了**，
+  所以模型里显式写 `float` 并把这件事记进 docstring。
+
+`has_entries` 是 §5 的开关（空表的五个 0 与「功能没开 / 读失败」的区分），docstring 里点名了这一点。
+
+### 前端：35 → 34，且注释没丢
+
+组件里那段本地接口还带着一条注释 `// Criterion 5: "never fetched any odds" vs "odds fetching
+disabled/failed".`。删接口时这条注释会一起消失——**它被搬进了模型 docstring**，而生成器会把
+docstring 原样写进 `generated-types.ts` 的 JSDoc（生成物那段注释里能读到同一句话，且更完整）。
+所以这不是"注释丢了"，是"注释挪到了唯一不会被删的那一侧"。
+
+改完：组件 **35 → 34** 个 `interface`；`world_cup_analytics.py` 里 `response_model` 出现 **0 → 1** 次。
+
+### 守卫为什么比 schema，不比 `model_fields`
+
+这是本节最值得记的一条。第一反应是写「线上键集 == `Model.model_fields` 键集」，但**它是空头**：
+`FlexibleResponse` 是 `extra="allow"`，模型少声明一个字段时，线上那个键会作为 extra **透传**出去，
+两边仍然相等。§53.160 已经为同一个原因重写过一次测试。
+
+换成**比 OpenAPI schema**：模型少一个字段，`components.schemas.<Model>.properties` 就少一个。
+一边是会自己变化的，另一边不会。三条断言：
+
+1. 线上键集 == 六个字面量（生产者漂移 / 重命名会红）；
+2. schema 的 `properties` == 同一组六个（**模型缩水会红**）；
+3. 路由的 `response_model is OddsCacheStatsResponse`（有人删掉绑定会红——此时响应仍然 200、
+   仍然是六个键，只有 schema 消失，所以它必须单独断言）。
+
+### 三个变异都杀掉了
+
+| 变异 | 结果 | 谁红的 |
+|---|---|---|
+| 路由去掉 `response_model=` | **2 failed** | 第 3 条 + 第 2 条（schema 没了） |
+| 模型删掉 `has_entries` | **1 failed** | **只有第 2 条**——这正是 `model_fields` 版本会全绿的那个变异 |
+| 生产者不再写 `has_entries` | **1 failed** | 第 1 条（线上 5 个键） |
+
+第二行是本节的重点：**同一个变异下，比 `model_fields` 会绿，比 schema 会红。**
+
+### 一个 API 细节值得留档
+
+FastAPI 给绑定了模型的 200 响应发的是 `{"$ref": "#/components/schemas/OddsCacheStatsResponse"}`，
+**不是内联的 properties**。第一版测试直接读 `responses["200"]...["schema"]["properties"]` 拿到
+`KeyError: 'properties'`。要顺着 `$ref` 去 `components` 里取；这一步写进测试的 helper 里，
+注释说明了为什么不能直接读。
+
+发布出来的 schema 本身：`required` 六个全在，`additionalProperties: true`（`extra="allow"` 的副作用）。
+
+### 门
+
+| 门 | 结果 |
+|---|---|
+| `ruff check .` | All checks passed |
+| `mypy app/` | **Success: no issues found in 334 source files** |
+| `generate_types --check` | up to date |
+| `lint_scan_guard.py` | `[OK] ... 848 .py files, both directions` |
+| `pytest tests/`（全量） | **failures=0 / errors=0**，6918 passed、11 skipped、2588 subtests（6915 + 3 条新测试） |
+| `tests/test_world_cup_analytics_routes.py` | 44 passed（含 3 条新契约测试） |
+| 前端 `tsc` / `tsc -p tsconfig.test.json` / `eslint` | rc=0 ×3 |
+| `vitest analytics-dashboard.test.tsx` | 4 passed（首个用例 1 722 ms，`timeout: 15_000` 仍够） |
+
+**这只是一个。**剩下 **18 个**路由仍是 `-> dict[str, Any]`，组件里还有 34 个手写 interface。
+这条路已经验证过（模型 → 登记 → 重生成 → 绑路由 → 前端删本地副本 → 三条守卫），
+下一个端点可以照着走，不需要再重新设计。
+
+**本节行数**：正文 **+91/−0**，连本段共 **+94/−0**；审计文档已入库 **+21230/−15**，加本节 **+21324/−15**。

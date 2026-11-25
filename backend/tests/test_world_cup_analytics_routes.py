@@ -509,6 +509,99 @@ class WorldCupAnalyticsRouteAuthTests(unittest.TestCase):
         self.assertIs(body["has_results"], True)
         self.assertEqual(body["total_matches"], 1)
 
+    # ------------------------------------------------------------------
+    # The health banner became a published contract in audit 53.171, and the
+    # timestamp it carries stopped being timezone-naive in the same commit.
+    # ------------------------------------------------------------------
+    SYSTEM_HEALTH_KEYS = {
+        "status",
+        "recent_predictions_24h",
+        "cache_entries",
+        "data_freshness_hours",
+        "last_update",
+    }
+
+    def _system_health_path_schema(self) -> dict:
+        spec = self.app.openapi()
+        entry = spec["paths"]["/analytics/system-health"]["get"]["responses"]["200"][
+            "content"
+        ]["application/json"]["schema"]
+        return self._component_schema(entry["$ref"].rsplit("/", 1)[-1])
+
+    def _add_recent_prediction(self) -> None:
+        self.session.add(
+            MatchPrediction(
+                match_id="health-1",
+                predicted_home_score=1.1,
+                predicted_away_score=0.9,
+                home_win_prob=0.4,
+                draw_prob=0.3,
+                away_win_prob=0.3,
+                confidence=0.6,
+                prediction_method="elo_only",
+            )
+        )
+        self.session.commit()
+
+    def test_system_health_publishes_exactly_its_five_keys(self) -> None:
+        """Five keys on the wire and in the schema, on the empty path.
+
+        The empty path is the whole path this time: there is one return
+        statement, so the only variability is the values, not the key set.
+        """
+        resp = self.client.get("/analytics/system-health")
+
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(set(body), self.SYSTEM_HEALTH_KEYS)
+        self.assertEqual(set(self._system_health_path_schema()["properties"]), self.SYSTEM_HEALTH_KEYS)
+        self.assertEqual(body["status"], "stale")
+        self.assertIsNone(body["last_update"])
+        self.assertEqual(body["data_freshness_hours"], 0.0)
+
+    def test_system_health_status_is_published_as_a_two_value_enum(self) -> None:
+        """The producer writes one conditional with two arms; the schema says so.
+
+        Without the ``Literal`` a typo in the third value would type-check on
+        the client and render neither banner colour.
+        """
+        schema = self._system_health_path_schema()
+        self.assertEqual(schema["properties"]["status"]["enum"], ["healthy", "stale"])
+        self.assertIn("status", schema["required"])
+
+    def test_system_health_timestamp_carries_an_offset(self) -> None:
+        """`last_update` must be unambiguous, not merely well formatted.
+
+        SQLite hands the column back naive, so `.isoformat()` used to emit
+        `2026-06-20T12:00:00` with no marker. The client renders it with
+        `new Date(...)`, which reads a marker-less string as *local* time -- in
+        UTC+8 that is an eight-hour error in the "last updated" line. The
+        dashboard's own test fixture had always fed `...Z`, i.e. the mock was
+        more correct than the producer and hid the difference.
+        """
+        self._add_recent_prediction()
+
+        resp = self.client.get("/analytics/system-health")
+
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body["status"], "healthy")
+        self.assertIsNotNone(body["last_update"])
+        self.assertTrue(
+            body["last_update"].endswith("+00:00"),
+            f"expected an explicit UTC offset, got {body['last_update']!r}",
+        )
+        self.assertIsNotNone(datetime.fromisoformat(body["last_update"]).tzinfo)
+
+    def test_system_health_route_binds_the_named_model(self) -> None:
+        """Without the binding the body is unchanged and only the schema goes."""
+        from app.models.event import SystemHealthResponse
+
+        route = next(
+            r for r in self.app.routes if getattr(r, "path", "") == "/analytics/system-health"
+        )
+        self.assertIs(route.response_model, SystemHealthResponse)
+
     def test_analytics_post_routes_require_write_key(self):
         paths = [
             "/analytics/result-fact-backfill?dry_run=true",

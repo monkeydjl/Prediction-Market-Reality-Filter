@@ -17,6 +17,7 @@ from app.models.event import (
     AccuracyStatsResponse,
     OddsCacheStatsResponse,
     QualityLoopReportResponse,
+    SystemHealthResponse,
 )
 from app.utils.prediction_db import get_prediction_session_dep
 from app.models.world_cup_prediction import (
@@ -947,7 +948,7 @@ async def get_prediction_timeline(
     }
 
 
-@router.get("/system-health")
+@router.get("/system-health", response_model=SystemHealthResponse)
 async def get_system_health(session: Session = Depends(get_prediction_session_dep)) -> dict[str, Any]:
     """Get overall system health metrics."""
 
@@ -983,5 +984,15 @@ async def get_system_health(session: Session = Depends(get_prediction_session_de
         "recent_predictions_24h": recent_predictions,
         "cache_entries": cache_entries,
         "data_freshness_hours": round(data_age_hours, 1),
-        "last_update": latest_prediction.last_updated.isoformat() if latest_prediction else None
+        # SQLite hands `last_updated` back naive, and the client parses this
+        # string with `new Date(...)` -- which reads a marker-less ISO string as
+        # *local* time, eight hours off in UTC+8. The line above already
+        # attaches UTC to compute the age; the emitted string has to carry the
+        # same offset, or the two halves of this response describe different
+        # instants (audit 53.171).
+        "last_update": (
+            latest_prediction.last_updated.replace(tzinfo=timezone.utc).isoformat()
+            if latest_prediction
+            else None
+        )
     }

@@ -1523,6 +1523,42 @@ class AccuracyStatsResponse(FlexibleResponse):
     has_results: bool
 
 
+class SystemHealthResponse(FlexibleResponse):
+    """Response for ``GET /api/analytics/system-health`` (audit 53.171).
+
+    One return path, five keys, in this order. Small enough to be the fourth
+    endpoint rather than a demonstration of anything -- except for
+    ``last_update``.
+
+    ``status`` is a ``Literal`` because the producer writes it with a single
+    conditional expression whose two arms are the whole vocabulary
+    (``"healthy" if recent_predictions_24h > 0 else "stale"``). ``cache_entries``
+    and ``recent_predictions_24h`` are counts and are therefore always real
+    zeros, not "unknown".
+
+    ``data_freshness_hours`` is ``float`` on both paths: ``0.0`` is the initial
+    value and the only thing written when there is no row at all, so a reader
+    must pair it with ``last_update is None`` to tell "no data" from "data from
+    one second ago". The two are always written together, which is what makes
+    the pairing possible.
+
+    ``last_update`` is an ISO 8601 string **with an offset**, or ``None`` when
+    no prediction row exists. It used to be emitted without one: the column
+    round-trips out of SQLite as a naive ``datetime``, and the route called
+    ``.isoformat()`` on it directly -- even though the line above it already
+    does ``.replace(tzinfo=timezone.utc)`` to compute the age. A consumer
+    parsing that string with ``new Date(...)`` reads it as local time, which in
+    UTC+8 reports a timestamp eight hours off. Fixed at the producer, not
+    papered over with a comment.
+    """
+
+    status: Literal["healthy", "stale"]
+    recent_predictions_24h: int
+    cache_entries: int
+    data_freshness_hours: float
+    last_update: str | None
+
+
 class LoopSchedulerState(BaseModel):
     """The one-key ``scheduler`` block of ``LoopStatusResponse`` (audit
     53.62). ``scheduler_running`` is ``bool | None`` at the producer (the

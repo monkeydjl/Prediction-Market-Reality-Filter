@@ -26,6 +26,7 @@ import type {
   CalibrationBucketCell as GeneratedCalibrationBucketCell,
   CalibrationBucketSummaryResponse as GeneratedCalibrationBucketSummaryResponse,
   AccuracyStatsResponse as GeneratedAccuracyStatsResponse,
+  SystemHealthResponse as GeneratedSystemHealthResponse,
   OddsCacheStatsResponse as GeneratedOddsCacheStatsResponse,
   QualityLoopReportResponse as GeneratedQualityLoopReportResponse,
   QualitySummary as GeneratedQualitySummary,
@@ -709,6 +710,11 @@ export type QualityConsistencyIssue = GeneratedQualityConsistencyIssue;
 // the component reading `AccuracyStats` while the model stays findable under
 // `AccuracyStatsResponse` in `event.py`.
 export type AccuracyStats = GeneratedAccuracyStatsResponse;
+
+// The World Cup dashboard's health banner (audit 53.171). Same naming split as
+// the accuracy envelope: the model keeps its `Response` suffix in `event.py`,
+// the component keeps `SystemHealth`.
+export type SystemHealth = GeneratedSystemHealthResponse;
 
 export interface EventListFilters {
   q?: string;

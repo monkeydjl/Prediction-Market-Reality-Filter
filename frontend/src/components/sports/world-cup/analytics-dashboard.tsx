@@ -15,6 +15,7 @@ import type {
   QualityLoopReport,
   QualitySummary,
   QualityTrendPoint,
+  SystemHealth,
 } from "@/lib/api";
 import { fmtPct } from "@/lib/format";
 import { analyticsApi, type VerifiedResultCorrectionRequest } from "@/lib/world-cup/analytics-api";
@@ -31,14 +32,6 @@ interface EngineUsage {
   count: number;
   percentage: number;
   avg_confidence: number;
-}
-
-interface SystemHealth {
-  status: "healthy" | "stale";
-  recent_predictions_24h: number;
-  cache_entries: number;
-  data_freshness_hours: number;
-  last_update: string | null;
 }
 
 interface ConsistencyRepairItem {

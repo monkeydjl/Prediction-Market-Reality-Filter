@@ -21999,3 +21999,133 @@ self.assertEqual(rating["last_updated"], f"{stored.isoformat()}+00:00")
 没有改任何生产代码。
 
 **本节行数**：正文 **+123/−0**，连本段共 **+126/−0**；审计文档已入库 **+21890/−15**，加本节 **+22016/−15**。
+
+## §53.174 第五个端点：`/prediction-timeline`，一个没有消费者的契约
+
+`response_model` **4 → 5 / 19**。这一节和前面四个不一样，先说清楚哪里不一样：
+前四个端点每个都有一份**手写的前端 interface** 可以删，删掉就是那一节的战果。
+这一个没有：
+
+```text
+grep -rn "prediction-timeline" frontend/src   ->  0 处
+```
+
+没有前端调用、没有测试、没有手写类型。所以这一节产出的不是「删掉一个副本」，
+而是**给一条没人调用的路由发布 schema**。这值得做，但理由得换一个：
+下次有人要用它时，键名、类型、哪个键是可选的，不用再从 40 行实现里读一遍。
+**而且没有消费者不等于没有缺陷**——它有一个，见下。
+
+### 条件键：三种写法的取舍
+
+空分支（`match_id` 没有任何历史行）只写两个键，非空分支写三个。`total_updates` 是条件键：
+
+| 写法 | 空分支 | schema | 结论 |
+|---|---|---|---|
+| 声明为必填 | **校验失败** | 必填 | 直接排除 |
+| 有默认值 + 正常序列化 | 多出 `"total_updates": null` | 可选 | **改了 wire**，契约在描述它自己造的形状 |
+| **有默认值 + `exclude_unset=True`** | 原样两键 | 可选 | 采用 |
+
+§2 判据 4 说的就是这个组合，`QualityIntegratedWeightSuggestion`（§53.169）是同一个先例。
+默认值选 `None` 而不是 `0`：空分支在**计数之前**就返回了，它没有量过任何东西，
+`0` 是一个断言（「这个 match 没有快照」），而这个分支只能说「没什么可报的」——
+`snapshots: []` 加上一个缺席的 `total_updates` 是实话，`0` 不是（§5）。
+
+### 三个命名判断，其中一个和上一节的取舍相反
+
+- **`PredictionTimelineActualScore` 新建，不复用 `ScorePair`**。`ScorePair` 的成员是
+  非空 `int`（§53.71，给引擎对比用的，那里两个比分都由 `Integer` 列的守卫保证非空）。
+  这里生产者的守卫**只看 home**：
+
+  ```python
+  "actual_score": {...} if entry.actual_home_score is not None else None
+  ```
+
+  两列各自 nullable ⇒ 「有 home、没 away」是合法状态。照抄 `ScorePair` 会在这种行上直接 500。
+- **`predicted_score` / `outcome_probabilities` 复用** 53.75 / 53.76 已有的
+  `PredictedScorePair` / `MatchOutcomeProbabilities`，不另写一份同形状的。
+- **`trigger` 声明为 `str | None`**，镜像列（`String(32), nullable=True`）而不是镜像习惯：
+  今天每个写入点都会设它，模型描述的应该是列。
+
+### 一处主动放弃的覆盖，和它能被反证出来的边界
+
+复用的那两个模型是**闭合** `BaseModel`（`extra="ignore"`）。把它俩嵌进来的后果是：
+在 `predicted_score` / `outcome_probabilities` **这两个对象内部**，wire 的键集由模型决定，
+生产者往里加一个键会被静默丢掉，本节任何断言都看不见。
+
+这不是疏忽，是取舍写在这里：要么复用（少一份同形状副本，代价是那两层看不见漂移），
+要么再声明一份开的副本（能看见，但一个形状有了两个所有者，将来必分叉）。**选了复用。**
+
+边界是可测的，不是嘴上说说：
+
+- `snapshot` 自己是开的（`FlexibleResponse`），所以**在 snapshot 层加第 8 个键，wire 断言会红**——
+  变异 5 反证了这一点；
+- 在 `predicted_score` 里加键，同一套断言看不见。**这一条没有变异能证明**，
+  因为它本来就是「测不到」，只能写清楚。
+
+### 顺带修掉的第四个裸 `.isoformat()`
+
+`"timestamp": entry.timestamp.isoformat()`。§53.172 收尾时列了「`captured_at` / `kickoff_utc` /
+`prediction_timestamp` 等 20+ 处形状相同，**没验过**」，`timestamp` 是其中之一，这一节验了：
+
+```text
+column read back: datetime.datetime(2026, 6, 20, 13, 0) tzinfo: None
+bare .isoformat(): 2026-06-20T13:00:00
+utc_isoformat():   2026-06-20T13:00:00+00:00
+```
+
+判据用的是 §53.172 立的那条：**这个值进不进 HTTP 响应**。进 ⇒ 可观察 ⇒ 修（这里）；
+`get_cached_odds` 里那两个不进任何响应、也没有消费者 ⇒ 不改（仍记在 §53.172）。
+
+### 五条用例、六个变异，每个变异红在不同的组合上
+
+| 用例 | 守什么 |
+|---|---|
+| `test_prediction_timeline_publishes_seven_snapshot_keys` | 线上 3 键 + 每条快照 7 键 + 两个嵌套形状 + 可空列（`trigger`/`match_minute`/`actual_score` 为 `None` 不 500） |
+| `test_prediction_timeline_empty_branch_does_not_gain_total_updates` | 空分支**只有两个键**——`exclude_unset` 买的就是这一条 |
+| `test_prediction_timeline_schema_marks_total_updates_optional` | schema：3 个 property、`required` 只有 2 个；快照 7 个全必填 |
+| `test_prediction_timeline_timestamp_carries_an_offset` | 时区标记 |
+| `test_prediction_timeline_route_binds_the_named_model` | 绑定被摘 |
+
+| 变异 | 结果 | 红的用例 |
+|---|---|---|
+| `exclude_unset=False` | **RED（1）** | 空分支多出 `total_updates: null` |
+| 撤掉 `utc_isoformat` | **RED（1）** | 时间戳那条 |
+| `total_updates` 改必填 | **RED（2）** | 空分支（校验失败）+ schema |
+| `response_model=None` | **RED（2）** | 绑定 + schema |
+| 生产者加第 8 个快照键 | **RED（1）** | 7 键那条 |
+| `trigger: str`（非空） | **RED（2）** | 一条 NULL 触发值的行直接 500 |
+
+覆盖矩阵值得写全，因为它能看出哪条断言是多余的：
+
+| 用例 | 被哪些变异打红 |
+|---|---|
+| 7 键那条 | 加第 8 键、`trigger` 非空 |
+| 空分支两键 | `exclude_unset=False`、`total_updates` 必填 |
+| schema | `total_updates` 必填、`response_model=None` |
+| 时间戳 | 撤 `utc_isoformat`、`trigger` 非空 |
+| 绑定 | `response_model=None` |
+
+**四条行为断言每条都被至少两个变异打过，每个变异至少打红一条**——没有唯一守卫，
+也没有哪个变异只靠一条 schema 断言就红。例外是绑定那条：它只被 `response_model=None` 打中，
+因为「摘掉绑定」就是它唯一可能的施工方式；这一条不需要第二个变异，需要的是它自己存在。
+
+这是「每个决定都有自己的守卫」的最低标准，也是这一节唯一值得夸口的地方。
+
+### 门
+
+| 门 | 结果 |
+|---|---|
+| `ruff check .` | All checks passed |
+| `mypy app/` | **Success: no issues found in 334 source files** |
+| `generate_types --check` | up to date（先重生成、再校验） |
+| `lint_scan_guard.py` | `[OK] ... 850 .py files, both directions` |
+| `pytest`（全量） | **`tests=9548 failures=0 errors=0 skipped=11`**，6949 passed、2588 subtests |
+| `tests/test_world_cup_analytics_routes.py` | **63 passed**（58 + 5 条新契约测试） |
+
+`event.py` **+85**、`_frontend_export.py` **+6**、`world_cup_analytics.py` **+10/−2**、
+测试 **+155/−1**（那 1 行删除是 import 改成多行）、`generated-types.ts` **+85**。
+
+组件的 interface 数**没变**（26）：这个端点从来没有前端类型，所以也没有副本可删。
+`response_model` **4 → 5**，剩 **14 个**路由仍返回 `dict[str, Any]`。
+
+**本节行数**：正文 **+127/−0**，连本段共 **+130/−0**；审计文档已入库 **+22016/−15**，加本节 **+22146/−15**。

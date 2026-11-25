@@ -21471,3 +21471,121 @@ schema 断言红，线上仍然返回 8 个键**。
 所以下一个端点的选择标准可以只看**它挡住多少读数**，不必再考虑规模。
 
 **本节行数**：正文 **+161/−0**，连本段共 **+164/−0**；审计文档已入库 **+21324/−15**，加本节 **+21488/−15**。
+
+## §53.170 第三个端点：`/accuracy-stats`，和一句被两处抄错的话
+
+§53.169 的收尾说「下一个端点只需要看它挡住多少读数」。这一节走 `accuracy-stats`：
+8 个顶层键、一个 6 键的 `by_stage`、两个手写 interface。
+
+### 一句注释，两个载体，零条能发现它错的断言
+
+路由空分支的注释写的是：
+
+> Shape mirrors the non-empty branch (adds predicted_matches/exact_score_correct,
+> drops the dead `by_engine` key no consumer reads)
+
+前半句是**历史事实**：`ed2ede3`（criterion 5 那次改造）确实加了
+`predicted_matches` / `exact_score_correct`；后半句也是那次的**历史事实**，diff 里有
+`-            "by_engine": {},`。
+
+问题不在它曾经错，在它**读起来像在描述现在两个分支的差异**。而现在两个分支都写全 8 个键，
+`by_engine` 在这条路由里一个字都没有——`grep` 只命中注释自身和隔壁 `/engine-stats`。
+
+两个载体：路由注释，加上测试 docstring（`test_accuracy_stats_empty_table_reports_explicit_switch`
+把整句抄了一遍）。守卫是一条 `assertNotIn("by_engine", body)`——**它永远通过**，因为那个键
+从来不会出现。断言空头、注释失实，两者互为证据：谁也没有能力发现对方。
+
+修法不是删注释，是让断言变成能看见差异的那一条：`set(body)` 等于 8 个字面量，
+并且**两个分支各断一次**。第二处断言此前根本不存在——`has_results=True` 那个测试只看两个键。
+
+### `git log -S` 被那句注释骗了
+
+查历史时我先跑 `git log -S "by_engine"`，只列出初始提交 `413362a`，读起来像
+「这个键从没被删过」。而 `git show ed2ede3` 的 diff 里明确有 `-  "by_engine": {},`。
+
+原因：`-S` 数的是**出现次数**。同一笔提交里注释写进了 `by_engine` 这个词，
+删掉一处字符串、加上一处同名注释，计数不变 ⇒ 不报。
+
+**`-S` 是启发式，diff 是事实。**尤其当注释里提到代码里的名字时，两者必然分叉——
+这一节的标题句就是那个名字。
+
+### 两分支同形，但两侧的类型不同
+
+键集一样，类型不一样：
+
+```python
+"outcome_accuracy": round(outcome_correct / predicted_count, 3) if predicted_count > 0 else 0,
+```
+
+四处 `else 0`：顶层 `outcome_accuracy`，以及 `by_stage` 里的 `exact_score_pct` /
+`goal_diff_pct` / `outcome_accuracy`。模型声明 `float` ⇒ pydantic 把 `0` 变成 `0.0`。
+**这就是「模型改了线上却声称在描述线上」的最小形态**，和 §53.168 里 `cache_hit_rate`
+那条是同一个坑，只是那次两边本来就都是 float，这次不是。
+
+处理：把生产者写成 `0.0`（四处、八个字符）。理由不是好看，是让 schema 与代码说同一句话；
+否则哪天有人把模型"清理"成 `int | float`，线上会在无人察觉时变回 `0`。
+
+**这一处不可由测试守卫。**把 `0.0` 改回 `0`，pydantic 在序列化前就变回 `0.0`，API 上完全一样。
+所以它被作为**预期幸存者**写进变异表——不是"漏杀了一个"，是量出「这个方向测试看不见」。
+改它买到的是读者不必再猜哪条路径写的是 int，不是运行期行为。
+
+### `by_stage` 的 `[]` 有三种意思
+
+第一版测试用现成夹具（finished fixture + 一条 `MatchResult`），`by_stage` 返回 `[]`。
+不是路由坏了：`refresh_prediction_accuracy` 只聚合 `brier_score IS NOT NULL` 的行。
+夹具没设 `brier_score`，聚合为空，路由把异常吞掉、`[]` 照常返回。
+
+所以 `by_stage == []` 至少三义：**没有完赛比赛 / 有比赛但没有 Brier 分数 / 聚合表还没刷新**。
+§5 的开关只加在顶层（`has_results`），这一层没有。本节没有动它——加开关是行为改动，
+超出契约工作的范围——但记下来：前端拿到空 `by_stage` 时分不出是哪一种。
+
+### 守卫四条，变异五个（含一个预期幸存者）
+
+| 断言 | 边界上守什么 |
+|---|---|
+| 顶层线上 8 键 == 字面量；schema 8 个 property | 生产者漂移 / 模型缩水 |
+| populated 分支的线上键集 == 同一组 8 个 | **两个分支是一份契约**（这句此前没人断过） |
+| `by_stage` 行的线上键集 == schema 六键，且 `required == properties` | 嵌套形状 |
+| `route.response_model is AccuracyStatsResponse` | 绑定被摘 |
+
+| 变异 | 结果 | 谁红的 |
+|---|---|---|
+| 路由去掉 `response_model=` | **3 failed** | 三条 schema 断言 + 绑定断言 |
+| 模型删掉 `has_results` | **1 failed** | 只有第 1 条——线上仍透传该键，只有 schema 看得见 |
+| 模型删掉 `by_stage` | **2 failed** | 第 1 条（schema 7 vs 线上 8）+ 嵌套那条 |
+| 生产者往空分支加第 9 个键 | **2 failed** | 第 1 条 + 空分支那条 |
+| 生产者把空分支的 `0.0` 改回 `0` | **GREEN（预期）** | 没有——pydantic 在序列化前就把它变回 `0.0` |
+
+最后一行是刻意保留的：变异表里出现一个绿的，比声称「全都守住了」更可信。
+
+### 一次小收窄
+
+组件一度 `import type { AccuracyByStage }`，eslint 报未使用——它只通过生成的父类型
+`AccuracyStatsResponse.by_stage` 被引用，从没在组件里直接出现过。`AccuracyByStage` 的
+`api.ts` 别名同样没有消费者，一起删掉。**收窄不只发生在类型上，也发生在 import 上**：
+声明一个没人用的名字，和不声明它，读起来是两件事。
+
+### 门
+
+| 门 | 结果 |
+|---|---|
+| `ruff check .` | All checks passed |
+| `mypy app/` | **Success: no issues found in 334 source files** |
+| `generate_types --check` | up to date |
+| `lint_scan_guard.py` | `[OK] ... 848 .py files, both directions` |
+| `pytest tests/`（全量） | **`tests=9526 failures=0 errors=0 skipped=11`**，6927 passed、2588 subtests |
+| `tests/test_world_cup_analytics_routes.py` | 53 passed（49 + 4 条新契约测试） |
+| 前端 `tsc` / `tsc -p tsconfig.test.json` / `eslint` | rc=0 ×3 |
+| `vitest analytics-dashboard.test.tsx` | 4 passed |
+
+`event.py` +58、`_frontend_export.py` +4、`world_cup_analytics.py` +20/−9、
+测试 +113/−3、`api.ts` +7、生成物 +58、组件 +1/−22。
+
+组件 **29 → 27** 个 `interface`、**2 300 → 2 279** 行；`world_cup_analytics.py` 里
+`response_model` **2 → 3**。
+
+剩下 **16 个**路由仍是 `-> dict[str, Any]`，组件里还有 27 个手写 interface。
+这一节的净收益是一个**判据**而不是两个类型：**注释里的名字会把 `git log -S` 骗过去，
+所以历史要读 diff，不要读 `-S` 的摘要。**
+
+**本节行数**：正文 **+115/−0**，连本段共 **+118/−0**；审计文档已入库 **+21488/−15**，加本节 **+21606/−15**。

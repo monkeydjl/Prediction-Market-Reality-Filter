@@ -13,7 +13,7 @@ from typing import Any
 from app.api.audit_metadata import get_audit_metadata
 from app.api.security import require_write_key
 from app.memory import loop_run_store
-from app.models.event import OddsCacheStatsResponse
+from app.models.event import OddsCacheStatsResponse, QualityLoopReportResponse
 from app.utils.prediction_db import get_prediction_session_dep
 from app.models.world_cup_prediction import (
     MatchFixture,
@@ -406,7 +406,16 @@ async def get_prediction_coverage(
     }
 
 
-@router.get("/quality-loop")
+@router.get(
+    "/quality-loop",
+    response_model=QualityLoopReportResponse,
+    # `_integrated_weight_payload` writes `reason` on one branch and
+    # `learned_elo_weight` / `blend` on the other, never all three. Those three
+    # are the only defaulted fields in the tree, and without this flag their
+    # default `None` would be emitted on the branch that omits them -- the model
+    # would change the wire while claiming to describe it (audit 53.169).
+    response_model_exclude_unset=True,
+)
 async def get_quality_loop(session: Session = Depends(get_prediction_session_dep)) -> dict[str, Any]:
     """Get prediction quality metrics and confidence calibration buckets."""
     return build_quality_loop_report(session=session)

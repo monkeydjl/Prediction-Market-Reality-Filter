@@ -26,6 +26,10 @@ import type {
   CalibrationBucketCell as GeneratedCalibrationBucketCell,
   CalibrationBucketSummaryResponse as GeneratedCalibrationBucketSummaryResponse,
   OddsCacheStatsResponse as GeneratedOddsCacheStatsResponse,
+  QualityLoopReportResponse as GeneratedQualityLoopReportResponse,
+  QualitySummary as GeneratedQualitySummary,
+  QualityTrendPoint as GeneratedQualityTrendPoint,
+  QualityConsistencyIssue as GeneratedQualityConsistencyIssue,
   PredictionCalibrationResponse as GeneratedPredictionCalibrationResponse,
   DomainReliabilityRow as GeneratedDomainReliabilityRow,
   DomainReliabilityResponse as GeneratedDomainReliabilityResponse,
@@ -683,6 +687,21 @@ export type RecentPredictionsResponse = GeneratedRecentPredictionsResponse;
 // nineteen in `world_cup_analytics.py` to publish a schema, which is why the
 // interface block in that component is still long.
 export type OddsCacheStatsResponse = GeneratedOddsCacheStatsResponse;
+
+// The World Cup dashboard's quality-loop envelope and the three nested shapes it
+// names directly (audit 53.169). Same story as the odds-cache envelope above,
+// one endpoint further in: `GET /analytics/quality-loop` returned a dict with no
+// `response_model`, so the component carried five hand-written interfaces.
+//
+// The aliases keep the component's vocabulary rather than the schema's -- note
+// `QualityLoopReport` for `QualityLoopReportResponse` -- because the shorter name
+// is what the component's props and state already say, and only the envelope
+// carries the `Response` suffix. The generated names stay one keystroke away in
+// the import above, so a reader can still find the model in `event.py`.
+export type QualityLoopReport = GeneratedQualityLoopReportResponse;
+export type QualitySummary = GeneratedQualitySummary;
+export type QualityTrendPoint = GeneratedQualityTrendPoint;
+export type QualityConsistencyIssue = GeneratedQualityConsistencyIssue;
 
 export interface EventListFilters {
   q?: string;

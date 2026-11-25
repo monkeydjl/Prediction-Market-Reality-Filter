@@ -230,6 +230,137 @@ class WorldCupAnalyticsRouteAuthTests(unittest.TestCase):
         self.assertIn("cache_hit_rate", body)
         self.assertEqual(body["total_entries"], 0)
 
+    # ------------------------------------------------------------------
+    # The quality-loop report became a published contract in audit 53.169.
+    # It is the endpoint that owns the confidence buckets, so the bucket
+    # schema is guarded separately: the dashboard's hand-written copy
+    # declared six keys and silently dropped `lower` / `upper`.
+    # ------------------------------------------------------------------
+    QUALITY_LOOP_KEYS = {
+        "status",
+        "generated_at",
+        "sample_policy",
+        "counters",
+        "overall",
+        "by_engine",
+        "trends",
+        "consistency_issues",
+        "integrated_weight_suggestion",
+        "recommendations",
+    }
+
+    def _component_schema(self, name: str) -> dict:
+        """One ``components.schemas`` entry, fetched by model name.
+
+        The path entry only carries ``{"$ref": ...}`` for a bound model, and
+        nested models never appear on the path at all -- so these assertions
+        have to read ``components`` directly.
+        """
+        return self.app.openapi()["components"]["schemas"][name]
+
+    def test_quality_loop_publishes_exactly_its_ten_keys(self) -> None:
+        """The wire and the schema must name the same ten keys.
+
+        ``model_fields`` would be an empty comparison here: the base is
+        ``extra="allow"``, so a field the model stops declaring still reaches
+        the wire and both sides stay equal. The schema is the side that moves.
+        """
+        resp = self.client.get("/analytics/quality-loop")
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(set(resp.json()), self.QUALITY_LOOP_KEYS)
+        entry = self.app.openapi()["paths"]["/analytics/quality-loop"]["get"]["responses"]["200"][
+            "content"
+        ]["application/json"]["schema"]
+        ref = entry["$ref"].rsplit("/", 1)[-1]
+        self.assertEqual(set(self._component_schema(ref)["properties"]), self.QUALITY_LOOP_KEYS)
+
+    def test_quality_loop_bucket_declares_all_eight_keys(self) -> None:
+        """Eight, not six: ``lower`` / ``upper`` are the bucket's identity.
+
+        The hand-written interface in the dashboard declared ``label``,
+        ``count``, ``avg_confidence``, ``accuracy``, ``gap`` and ``is_usable``
+        -- it dropped the two boundaries. Nothing noticed, because a narrower
+        type still compiles: the extra keys were simply never reachable.
+        """
+        bucket = self._component_schema("QualityCalibrationBucket")
+
+        self.assertEqual(
+            set(bucket["properties"]),
+            {
+                "label",
+                "lower",
+                "upper",
+                "count",
+                "avg_confidence",
+                "accuracy",
+                "gap",
+                "is_usable",
+            },
+        )
+        self.assertIn("lower", bucket["required"])
+        self.assertIn("upper", bucket["required"])
+
+        # The wire, not just the schema. The bucket model is open, so a key the
+        # producer adds would survive validation and change this count -- which
+        # is the only way producer growth can be seen at all. A closed model
+        # would have dropped it and left both sides at eight.
+        resp = self.client.get("/analytics/quality-loop")
+        self.assertEqual(resp.status_code, 200)
+        buckets = resp.json()["overall"]["calibration_buckets"]
+        self.assertTrue(buckets, "the empty report still writes every bucket")
+        self.assertEqual(set(buckets[0]), set(bucket["properties"]))
+
+    def test_quality_loop_summary_declares_all_eleven_keys(self) -> None:
+        """Both ``_summarize`` paths write all eleven keys, so none is optional.
+
+        The empty path is the one worth pinning: it writes the same dict with
+        ``None`` / ``0`` / ``False`` values instead of returning a short one.
+        """
+        summary = self._component_schema("QualitySummary")
+
+        self.assertEqual(len(summary["properties"]), 11)
+        self.assertEqual(set(summary["required"]), set(summary["properties"]))
+
+        resp = self.client.get("/analytics/quality-loop")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(set(resp.json()["overall"]), set(summary["properties"]))
+
+    def test_quality_loop_route_binds_the_named_model(self) -> None:
+        """Without the binding the body is unchanged and only the schema goes.
+
+        ``response_model_exclude_unset`` is part of the same contract: the
+        integrated-weight block writes ``reason`` on one branch and
+        ``learned_elo_weight`` / ``blend`` on the other, so a route that
+        serialized defaults would add two nulls to the wire.
+        """
+        from app.models.event import QualityLoopReportResponse
+
+        route = next(
+            r for r in self.app.routes if getattr(r, "path", "") == "/analytics/quality-loop"
+        )
+        self.assertIs(route.response_model, QualityLoopReportResponse)
+        self.assertTrue(route.response_model_exclude_unset)
+
+    def test_quality_loop_empty_report_omits_the_unset_weight_keys(self) -> None:
+        """The conditional three are absent, not null, on the insufficient path.
+
+        An empty history gives every engine zero samples, so
+        ``_integrated_weight_payload`` takes its rule-default branch: it writes
+        ``reason`` and never writes ``learned_elo_weight`` / ``blend``. With
+        defaults declared on the model, ``exclude_unset`` is what keeps those
+        two off the wire -- without it the model would be describing a contract
+        the producer does not write.
+        """
+        resp = self.client.get("/analytics/quality-loop")
+
+        self.assertEqual(resp.status_code, 200)
+        suggestion = resp.json()["integrated_weight_suggestion"]
+        self.assertEqual(suggestion["source"], "rule_default")
+        self.assertIn("reason", suggestion)
+        self.assertNotIn("learned_elo_weight", suggestion)
+        self.assertNotIn("blend", suggestion)
+
     def test_accuracy_stats_empty_table_reports_explicit_switch(self):
         """Criterion 5: an empty MatchResult table must be distinguishable from
         a refresh failure with empty stale data. The all-zero response carries

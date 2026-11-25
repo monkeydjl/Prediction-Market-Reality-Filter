@@ -8,7 +8,13 @@ import { cn } from "@/lib/utils";
 // has a response_model now), so this component no longer declares it. The
 // "criterion 5" switch that used to live on the local copy is in the model's
 // docstring, which the generator carries into the generated JSDoc.
-import type { OddsCacheStatsResponse } from "@/lib/api";
+import type {
+  OddsCacheStatsResponse,
+  QualityConsistencyIssue,
+  QualityLoopReport,
+  QualitySummary,
+  QualityTrendPoint,
+} from "@/lib/api";
 import { fmtPct } from "@/lib/format";
 import { analyticsApi, type VerifiedResultCorrectionRequest } from "@/lib/world-cup/analytics-api";
 import { ChartFrame, DarkTooltip } from "@/components/ui/chart-lite";
@@ -54,90 +60,6 @@ interface SystemHealth {
   cache_entries: number;
   data_freshness_hours: number;
   last_update: string | null;
-}
-
-interface CalibrationBucket {
-  label: string;
-  count: number;
-  avg_confidence: number | null;
-  accuracy: number | null;
-  gap: number | null;
-  is_usable: boolean;
-}
-
-interface QualitySummary {
-  samples: number;
-  outcome_accuracy: number | null;
-  exact_score_rate: number | null;
-  avg_score_mae: number | null;
-  avg_brier_score: number | null;
-  avg_log_loss: number | null;
-  avg_confidence: number | null;
-  confidence_bias: number | null;
-  expected_calibration_error: number | null;
-  is_calibratable: boolean;
-  calibration_buckets: CalibrationBucket[];
-}
-
-interface QualityTrendPoint {
-  date: string;
-  samples: number;
-  outcome_accuracy: number | null;
-  avg_brier_score: number | null;
-  avg_log_loss: number | null;
-  expected_calibration_error: number | null;
-}
-
-interface ConsistencyIssue {
-  type: string;
-  severity: "warn" | "error" | string;
-  match_id: string;
-  engine: EngineKey | string;
-  timestamp: string;
-  rows: number;
-  variant_count: number;
-  variants: Array<{
-    predicted_score: { home: number; away: number };
-    count: number;
-    history_ids?: number[];
-    triggers: string[];
-    methods: string[];
-  }>;
-  has_unknown_method?: boolean;
-  message: string;
-}
-
-interface QualityLoopReport {
-  status: string;
-  sample_policy: string;
-  counters: {
-    finished_matches: number;
-    matches_without_history: number;
-    history_rows_excluded_after_kickoff: number;
-    history_rows_excluded_comparison: number;
-  };
-  overall: QualitySummary;
-  by_engine: Record<EngineKey, QualitySummary>;
-  trends?: {
-    overall: QualityTrendPoint[];
-    by_engine: Record<EngineKey, QualityTrendPoint[]>;
-  };
-  consistency_issues?: ConsistencyIssue[];
-  integrated_weight_suggestion: {
-    elo_weight: number;
-    hybrid_weight: number;
-    source: "rule_default" | "historical_brier";
-    reason?: string;
-    samples: Record<"elo_odds" | "hybrid", number>;
-    brier: Record<"elo_odds" | "hybrid", number | null>;
-    learned_elo_weight?: number;
-    blend?: number;
-  };
-  recommendations: Array<{
-    level: "ok" | "info" | "warn";
-    title: string;
-    message: string;
-  }>;
 }
 
 interface ConsistencyRepairItem {
@@ -452,7 +374,7 @@ function methodLabel(method: string): string {
   return method === "unknown" ? "未知方法" : method;
 }
 
-function consistencyIssueMessage(issue: ConsistencyIssue): string {
+function consistencyIssueMessage(issue: QualityConsistencyIssue): string {
   if (issue.engine === "unknown") {
     return "缺失方法的历史行同一秒出现不同预测比分。";
   }
@@ -686,7 +608,7 @@ function ConsistencyIssuesPanel({
   repairPreview,
   onQualityRefresh,
 }: {
-  issues: ConsistencyIssue[];
+  issues: QualityConsistencyIssue[];
   repairPlan: ConsistencyRepairPlan | null;
   repairPreview: ConsistencyRepairPreview | null;
   onQualityRefresh: (quality: QualityLoopReport) => void;

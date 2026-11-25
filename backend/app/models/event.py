@@ -1208,6 +1208,263 @@ class OddsCacheStatsResponse(FlexibleResponse):
     has_entries: bool
 
 
+class QualityCalibrationBucket(FlexibleResponse):
+    """One confidence bucket of ``QualitySummary.calibration_buckets``
+    (audit 53.169), built by ``world_cup_quality_service._calibration_buckets``.
+
+    **Eight** keys, and the two the dashboard never saw are the point.
+    ``_calibration_buckets`` writes ``label / lower / upper / count /
+    avg_confidence / accuracy / gap / is_usable``; the hand-written
+    ``CalibrationBucket`` in ``analytics-dashboard.tsx`` declared six and
+    silently dropped ``lower`` / ``upper``. Those two are not decoration --
+    they are the bucket's identity, the confidence interval the label
+    abbreviates. A consumer that only has the label cannot tell whether
+    ``"80-100%"`` still means what it meant last release.
+
+    ``label`` is ``str`` (``CONFIDENCE_BUCKETS`` is a literal table) while
+    ``count`` is ``int`` (``int(bucket["count"])``): both are produced on
+    every path. The three statistics are ``None`` for an empty bucket --
+    ``_calibration_buckets`` sets all three to ``None`` together rather than
+    dividing by zero -- so they are nullable *without* a default. ``is_usable``
+    is ``count >= MIN_BUCKET_SAMPLES`` on both paths, i.e. ``False`` is a real
+    reading, not an absent one.
+    """
+
+    label: str
+    lower: float
+    upper: float
+    count: int
+    avg_confidence: float | None
+    accuracy: float | None
+    gap: float | None
+    is_usable: bool
+
+
+class QualitySummary(FlexibleResponse):
+    """One ``overall`` / ``by_engine[engine]`` block of the quality-loop report
+    (audit 53.169), built by ``world_cup_quality_service._summarize``.
+
+    Both return paths -- ``total == 0`` and ``total > 0`` -- write all eleven
+    keys, in this order. The empty path is not a truncated dict: it writes the
+    same keys with nine ``None`` / ``0`` / ``False`` values, so nothing here is
+    optional and nothing carries a default. ``is_calibratable`` is ``False`` on
+    the empty path because ``0 >= MIN_CALIBRATION_SAMPLES`` is false, which is
+    the same reason a reader must not treat it as "not computed".
+
+    The five ``None``-able rates are nullable because there is nothing to
+    average when ``samples == 0``; they are *not* defaults. ``samples`` is the
+    §5 switch that tells the two states apart.
+    """
+
+    samples: int
+    outcome_accuracy: float | None
+    exact_score_rate: float | None
+    avg_score_mae: float | None
+    avg_brier_score: float | None
+    avg_log_loss: float | None
+    avg_confidence: float | None
+    confidence_bias: float | None
+    expected_calibration_error: float | None
+    is_calibratable: bool
+    calibration_buckets: list[QualityCalibrationBucket]
+
+
+class QualityTrendPoint(FlexibleResponse):
+    """One day of ``trends.overall`` / ``trends.by_engine[engine]`` (audit
+    53.169), built by ``_trend_points`` from the same ``_summarize`` output.
+
+    Six keys, all written unconditionally. The four statistics are copies of
+    ``QualitySummary`` fields, so they inherit its nullability: a date whose
+    single sample has no log loss still produces a point, with ``None`` in that
+    field rather than a missing key.
+    """
+
+    date: str
+    samples: int
+    outcome_accuracy: float | None
+    avg_brier_score: float | None
+    avg_log_loss: float | None
+    expected_calibration_error: float | None
+
+
+class QualityTrends(FlexibleResponse):
+    """The ``trends`` block of the quality-loop report (audit 53.169).
+
+    Two keys, both always written by ``build_quality_loop_report``; only
+    ``by_engine`` is a map, and its keys are ``ENGINE_NAMES`` rather than an
+    open vocabulary. Typed as ``dict`` because the report is a data table, not
+    a closed record: adding a fifth engine should widen the map, not fail
+    validation.
+    """
+
+    overall: list[QualityTrendPoint]
+    by_engine: dict[str, list[QualityTrendPoint]]
+
+
+class QualityConsistencyScore(FlexibleResponse):
+    """The ``predicted_score`` of one ``QualityConsistencyVariant`` (audit
+    53.169).
+
+    **Both members are ``float``, not ``int``**, and that is why this is not
+    ``ScorePair``. ``detect_prediction_consistency_issues`` builds the key as
+    ``round(float(row.predicted_home_score), 3)`` -- a history row may hold
+    ``2.5``. ``ScorePair`` declares ``home: int`` because *its* producer reads
+    ``Integer`` fixture columns; reusing it here would make pydantic reject a
+    non-integral score at response time, i.e. the contract would 500 on data
+    the producer legitimately writes. Same name-shaped pair, different body --
+    the trap 53.69 closed for ``FlexibleResponse``.
+    """
+
+    home: float
+    away: float
+
+
+class QualityConsistencyVariant(FlexibleResponse):
+    """One distinct score of a same-second conflict (audit 53.169).
+
+    Five keys, all written by the single ``variants.append`` call. ``count`` is
+    the number of history rows that agree on this score; ``history_ids``,
+    ``triggers`` and ``methods`` are sorted lists, so the order is stable and
+    the consumer can diff two runs.
+    """
+
+    predicted_score: QualityConsistencyScore
+    count: int
+    history_ids: list[int]
+    triggers: list[str]
+    methods: list[str]
+
+
+class QualityConsistencyIssue(FlexibleResponse):
+    """One element of ``consistency_issues`` (audit 53.169).
+
+    Ten keys, all written by the single ``issues.append`` call. ``type`` is the
+    literal ``"conflicting_same_timestamp_score"`` and ``severity`` the literal
+    ``"warn"`` at the only producer, but both are left as ``str``: they are
+    already consumed as display strings, and narrowing them here would make a
+    future second issue type a validation error rather than a new row.
+
+    ``has_unknown_method`` is always written (``any("unknown" in ...)``). The
+    dashboard's hand-written interface marked it -- and ``history_ids`` --
+    optional, which is the harmless direction: code that guards for absence
+    still works when the key is always present. It is recorded here so the
+    narrowing is not mistaken for a wire fact.
+    """
+
+    type: str
+    severity: str
+    match_id: str
+    engine: str
+    timestamp: str
+    rows: int
+    variant_count: int
+    has_unknown_method: bool
+    variants: list[QualityConsistencyVariant]
+    message: str
+
+
+class QualityIntegratedWeightSuggestion(FlexibleResponse):
+    """The ``integrated_weight_suggestion`` block (audit 53.169).
+
+    **The only model in this tree with defaulted fields, and the reason the
+    route serializes with ``response_model_exclude_unset=True``.**
+    ``_integrated_weight_payload`` has two return paths:
+
+    * insufficient component samples -- writes ``reason``;
+    * enough samples -- writes ``learned_elo_weight`` and ``blend`` instead.
+
+    The five leading keys are on both paths. Declaring the three conditional
+    keys as nullable *without* defaults would reject both paths (each omits
+    one); declaring them with defaults and serializing normally would add
+    ``null`` where the producer wrote nothing, i.e. the contract would change
+    the wire while claiming to describe it. Defaults plus ``exclude_unset`` is
+    the only combination that keeps the published schema optional and the bytes
+    unchanged (§2 criterion 4).
+
+    ``source`` is a ``Literal`` because the two branches are the whole
+    vocabulary; ``samples`` / ``brier`` are keyed by engine and always have
+    both ``elo_odds`` and ``hybrid`` (read through ``.get``), so the *values*
+    are the contract and ``brier`` values are nullable when a component has no
+    samples.
+    """
+
+    elo_weight: float
+    hybrid_weight: float
+    source: Literal["rule_default", "historical_brier"]
+    samples: dict[str, int]
+    brier: dict[str, float | None]
+    reason: str | None = None
+    learned_elo_weight: float | None = None
+    blend: float | None = None
+
+
+class QualityRecommendation(FlexibleResponse):
+    """One element of ``recommendations`` (audit 53.169).
+
+    Three string keys from a single ``recommendations.append`` family. ``level``
+    is a closed vocabulary at the producer (``"ok"`` / ``"info"`` / ``"warn"``)
+    and the dashboard already switches on it, so it is a ``Literal``: a fourth
+    level should fail here rather than fall through the tone helper.
+    """
+
+    level: Literal["ok", "info", "warn"]
+    title: str
+    message: str
+
+
+class QualityCounters(FlexibleResponse):
+    """The ``counters`` block of the quality-loop report (audit 53.169).
+
+    Four ``int`` keys, all initialized in ``collect_quality_samples`` and all
+    written on the single return. The three exclusion counters legitimately
+    stay ``0``; ``finished_matches`` is the denominator that makes those zeros
+    readable (§5), which is why it is not optional either.
+    """
+
+    finished_matches: int
+    matches_without_history: int
+    history_rows_excluded_after_kickoff: int
+    history_rows_excluded_comparison: int
+
+
+class QualityLoopReportResponse(FlexibleResponse):
+    """Response for ``GET /api/analytics/quality-loop`` (audit 53.169).
+
+    Ten top-level keys, all written by ``build_quality_loop_report``'s single
+    return. The dashboard's hand-written ``QualityLoopReport`` declared nine:
+    it dropped ``generated_at``, so nothing on the client could tell a fresh
+    report from a cached one. That key is restored here, not added to the model
+    for symmetry.
+
+    ``trends`` and ``consistency_issues`` are declared required even though the
+    hand-written interface marked them optional -- the producer writes both
+    unconditionally (``_trend_points`` returns ``[]`` for an empty sample set,
+    ``detect_prediction_consistency_issues`` returns ``[]`` for no conflicts).
+    Marking them present is the point of the exercise: an empty list and a
+    missing key mean different things, and only the schema can say which one
+    the wire carries.
+
+    Kept open (``extra="allow"``) rather than closed: a closed model would
+    silently *drop* a key the producer starts writing, which is the failure
+    direction this audit keeps paying for. Every model in this tree is open for
+    that reason -- including the nested ones, which is what lets the tests
+    compare key sets at the wire as well as in the schema. A closed nested model
+    would make the wire comparison empty by construction: the extra key would be
+    dropped before anyone could count it.
+    """
+
+    status: str
+    generated_at: str
+    sample_policy: str
+    counters: QualityCounters
+    overall: QualitySummary
+    by_engine: dict[str, QualitySummary]
+    trends: QualityTrends
+    consistency_issues: list[QualityConsistencyIssue]
+    integrated_weight_suggestion: QualityIntegratedWeightSuggestion
+    recommendations: list[QualityRecommendation]
+
+
 class LoopSchedulerState(BaseModel):
     """The one-key ``scheduler`` block of ``LoopStatusResponse`` (audit
     53.62). ``scheduler_running`` is ``bool | None`` at the producer (the

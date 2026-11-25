@@ -4207,3 +4207,88 @@ class TradeStats(FlexibleResponse):
     edge_definition: dict[str, str] = Field(default_factory=dict)
     by_direction: dict[str, TradeStatBucket] = Field(default_factory=dict)
     by_decision: dict[str, TradeStatBucket] = Field(default_factory=dict)
+
+
+class PredictionTimelineActualScore(FlexibleResponse):
+    """The ``actual_score`` block of one prediction-history snapshot (audit 53.174).
+
+    The producer writes the whole block as ``None`` when
+    ``actual_home_score`` is unset, so the field that holds it is nullable. The
+    two members are **independently** nullable: ``actual_home_score`` and
+    ``actual_away_score`` are separate nullable ``Integer`` columns, and the
+    producer's guard only tests the home one. A row with a home score and no
+    away score is therefore representable, and this model has to allow it.
+
+    ``ScorePair`` cannot be reused here: its members are non-nullable ``int``
+    (audit 53.71), which would reject that row at response time.
+    """
+
+    home: int | None
+    away: int | None
+
+
+class PredictionTimelineSnapshot(FlexibleResponse):
+    """One element of ``PredictionTimelineResponse.snapshots`` (audit 53.174).
+
+    Seven keys, all written by the single ``snapshots.append`` in
+    ``get_prediction_timeline``; none of them carries a default, so a producer
+    that stops writing one fails validation instead of publishing a hole.
+
+    ``timestamp`` is a ``str``, not a ``datetime``: the producer formats it, and
+    until this audit it formatted it with a bare ``.isoformat()`` on a value
+    SQLite hands back naive -- no offset marker, which a browser's
+    ``new Date(...)`` reads as local time. It now goes through
+    ``utc_isoformat`` like every other stored timestamp (audit 53.172/53.174).
+
+    ``predicted_score`` and ``outcome_probabilities`` **reuse** the models that
+    audits 53.75 / 53.76 already own (``PredictedScorePair``,
+    ``MatchOutcomeProbabilities``) rather than declaring a second copy of the
+    same shape. The cost is stated rather than hidden: both are closed
+    ``BaseModel``s, so inside those two objects the wire is defined by the model
+    and a producer adding a key there would be dropped silently -- this
+    section's wire-level assertion cannot see it. Every level above them stays
+    open for exactly that reason.
+
+    ``trigger`` mirrors a nullable column (``String(32), nullable=True``) even
+    though every writer in the tree sets it today. The model describes the
+    column, not the habit.
+    """
+
+    timestamp: str
+    predicted_score: PredictedScorePair
+    outcome_probabilities: MatchOutcomeProbabilities
+    confidence: float
+    trigger: str | None
+    match_minute: int | None
+    actual_score: PredictionTimelineActualScore | None
+
+
+class PredictionTimelineResponse(FlexibleResponse):
+    """Response for ``GET /api/analytics/prediction-timeline`` (audit 53.174).
+
+    Two return paths. The non-empty one writes three keys; the early return for
+    a ``match_id`` with no history rows writes ``match_id`` and an empty
+    ``snapshots`` and nothing else -- so ``total_updates`` is a **conditional
+    key**, and this is the one place in this section where the model has to
+    choose between describing the wire and changing it.
+
+    Chosen: declare ``total_updates`` with a default and serialize the route
+    with ``response_model_exclude_unset=True``. That publishes the key as
+    optional in the schema while leaving the empty branch's bytes exactly as
+    they are now (``§2`` criterion 4; same combination as
+    ``QualityIntegratedWeightSuggestion`` in audit 53.169). Declaring it
+    required rejects the empty branch; declaring it required with a default and
+    serializing normally would *add* ``"total_updates": null`` to a response that
+    does not carry it today, i.e. the contract would change the wire while
+    claiming to describe it.
+
+    The default is ``None`` and not ``0`` on purpose. ``0`` is a measurement --
+    "this match has no snapshots" -- and the empty branch does not measure it:
+    it returns before counting anything. ``snapshots: []`` plus an absent
+    ``total_updates`` says "nothing to report", which is the truth here; a
+    ``0`` would assert a fact the producer never checked (``§5``).
+    """
+
+    match_id: str
+    snapshots: list[PredictionTimelineSnapshot]
+    total_updates: int | None = None

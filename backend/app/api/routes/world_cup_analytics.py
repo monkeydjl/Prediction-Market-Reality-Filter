@@ -16,6 +16,7 @@ from app.memory import loop_run_store
 from app.models.event import (
     AccuracyStatsResponse,
     OddsCacheStatsResponse,
+    PredictionTimelineResponse,
     QualityLoopReportResponse,
     SystemHealthResponse,
 )
@@ -898,7 +899,14 @@ async def get_odds_cache_stats(session: Session = Depends(get_prediction_session
     }
 
 
-@router.get("/prediction-timeline")
+@router.get(
+    "/prediction-timeline",
+    response_model=PredictionTimelineResponse,
+    # `total_updates` is absent on the empty branch; see the model docstring for
+    # why defaults plus `exclude_unset` is the only combination that publishes it
+    # as optional without changing the bytes (§2 criterion 4, audit 53.174).
+    response_model_exclude_unset=True,
+)
 async def get_prediction_timeline(
     match_id: str,
     session: Session = Depends(get_prediction_session_dep)
@@ -921,7 +929,7 @@ async def get_prediction_timeline(
     snapshots = []
     for entry in history:
         snapshots.append({
-            "timestamp": entry.timestamp.isoformat(),
+            "timestamp": utc_isoformat(entry.timestamp),
             "predicted_score": {
                 "home": entry.predicted_home_score,
                 "away": entry.predicted_away_score

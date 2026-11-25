@@ -15,7 +15,13 @@ from sqlalchemy.pool import StaticPool
 from app.api.routes import world_cup_analytics
 from app.core.config import settings
 from app.memory import loop_run_store
-from app.models.world_cup_prediction import Base, MatchFixture, MatchPrediction, MatchResult
+from app.models.world_cup_prediction import (
+    Base,
+    MatchFixture,
+    MatchPrediction,
+    MatchResult,
+    PredictionHistory,
+)
 from app.services.odds_cache_service import OddsCache
 from app.services.sports_fact_service import (
     WORLD_CUP_TOURNAMENT,
@@ -646,6 +652,154 @@ class WorldCupAnalyticsRouteAuthTests(unittest.TestCase):
             stale[0]["last_updated"].endswith("+00:00"),
             f"expected an explicit UTC offset, got {stale[0]['last_updated']!r}",
         )
+
+    TIMELINE_SNAPSHOT_KEYS = {
+        "timestamp",
+        "predicted_score",
+        "outcome_probabilities",
+        "confidence",
+        "trigger",
+        "match_minute",
+        "actual_score",
+    }
+
+    def _timeline_path_schema(self) -> dict:
+        spec = self.app.openapi()
+        entry = spec["paths"]["/analytics/prediction-timeline"]["get"]["responses"]["200"][
+            "content"
+        ]["application/json"]["schema"]
+        return self._component_schema(entry["$ref"].rsplit("/", 1)[-1])
+
+    def _add_history(self, match_id: str = "tl-1") -> None:
+        """Two snapshots, an hour apart, exercising the nullable columns.
+
+        The first row leaves ``trigger`` and ``match_minute`` at ``NULL`` and
+        carries no actual score; the second has all three. That is the only way
+        to tell "the model mirrors the nullable column" from "the model declared
+        what today's writer happens to produce".
+        """
+        self.session.add_all(
+            [
+                PredictionHistory(
+                    match_id=match_id,
+                    timestamp=datetime(2026, 6, 20, 13, 0, 0),
+                    predicted_home_score=1.0,
+                    predicted_away_score=0.5,
+                    home_win_prob=0.5,
+                    draw_prob=0.3,
+                    away_win_prob=0.2,
+                    confidence=0.6,
+                ),
+                PredictionHistory(
+                    match_id=match_id,
+                    timestamp=datetime(2026, 6, 20, 14, 0, 0),
+                    predicted_home_score=1.5,
+                    predicted_away_score=1.0,
+                    home_win_prob=0.4,
+                    draw_prob=0.35,
+                    away_win_prob=0.25,
+                    confidence=0.7,
+                    trigger="goal_event",
+                    match_minute=63,
+                    actual_home_score=1,
+                    actual_away_score=1,
+                ),
+            ]
+        )
+        self.session.commit()
+
+    def test_prediction_timeline_publishes_seven_snapshot_keys(self) -> None:
+        """The wire, key by key, including the two conditional shapes.
+
+        ``total_updates`` is written only on this path -- the empty branch
+        returns before counting anything, so it omits the key (asserted
+        separately below, which is the only test that can tell the two
+        serializations apart).
+        """
+        self._add_history()
+
+        resp = self.client.get("/analytics/prediction-timeline", params={"match_id": "tl-1"})
+
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(set(body), {"match_id", "snapshots", "total_updates"})
+        self.assertEqual(body["total_updates"], 2)
+        self.assertEqual(len(body["snapshots"]), 2)
+        for snapshot in body["snapshots"]:
+            self.assertEqual(set(snapshot), self.TIMELINE_SNAPSHOT_KEYS)
+
+        first, second = body["snapshots"]
+        self.assertEqual(first["predicted_score"], {"home": 1.0, "away": 0.5})
+        self.assertEqual(
+            first["outcome_probabilities"], {"home_win": 0.5, "draw": 0.3, "away_win": 0.2}
+        )
+        self.assertIsNone(first["trigger"])
+        self.assertIsNone(first["match_minute"])
+        self.assertIsNone(first["actual_score"])
+        self.assertEqual(second["actual_score"], {"home": 1, "away": 1})
+
+    def test_prediction_timeline_empty_branch_does_not_gain_total_updates(self) -> None:
+        """Two keys, not three. This is what `exclude_unset` is buying.
+
+        Declaring the field with a default and serializing normally would add
+        ``"total_updates": null`` to a response that has never carried it --
+        a contract that changes the wire while claiming to describe it.
+        """
+        resp = self.client.get("/analytics/prediction-timeline", params={"match_id": "absent"})
+
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(set(body), {"match_id", "snapshots"})
+        self.assertEqual(body["snapshots"], [])
+        self.assertEqual(body["match_id"], "absent")
+
+    def test_prediction_timeline_schema_marks_total_updates_optional(self) -> None:
+        schema = self._timeline_path_schema()
+
+        self.assertEqual(set(schema["properties"]), {"match_id", "snapshots", "total_updates"})
+        self.assertEqual(set(schema["required"]), {"match_id", "snapshots"})
+
+        snapshot = self._component_schema("PredictionTimelineSnapshot")
+        self.assertEqual(set(snapshot["properties"]), self.TIMELINE_SNAPSHOT_KEYS)
+        self.assertEqual(
+            set(snapshot["required"]),
+            self.TIMELINE_SNAPSHOT_KEYS,
+            "every snapshot key is written unconditionally by the producer",
+        )
+
+        actual = self._component_schema("PredictionTimelineActualScore")
+        self.assertEqual(set(actual["properties"]), {"home", "away"})
+        self.assertEqual(set(actual["required"]), {"home", "away"})
+
+    def test_prediction_timeline_timestamp_carries_an_offset(self) -> None:
+        """`timestamp` was the fourth bare `.isoformat()` found in 53.172's sweep.
+
+        The column is declared `DateTime(timezone=True)` and SQLite ignores that,
+        so the string came out marker-less -- `new Date(...)` reads it as local
+        time, eight hours off in UTC+8, exactly like `last_update` in 53.171.
+        Nothing in the frontend consumes this route, which is why no rendering
+        ever disagreed with it.
+        """
+        self._add_history()
+
+        resp = self.client.get("/analytics/prediction-timeline", params={"match_id": "tl-1"})
+
+        self.assertEqual(resp.status_code, 200)
+        for snapshot in resp.json()["snapshots"]:
+            self.assertTrue(
+                snapshot["timestamp"].endswith("+00:00"),
+                f"expected an explicit UTC offset, got {snapshot['timestamp']!r}",
+            )
+
+    def test_prediction_timeline_route_binds_the_named_model(self) -> None:
+        from app.models.event import PredictionTimelineResponse
+
+        route = next(
+            r
+            for r in self.app.routes
+            if getattr(r, "path", "") == "/analytics/prediction-timeline"
+        )
+        self.assertIs(route.response_model, PredictionTimelineResponse)
 
     def test_analytics_post_routes_require_write_key(self):
         paths = [

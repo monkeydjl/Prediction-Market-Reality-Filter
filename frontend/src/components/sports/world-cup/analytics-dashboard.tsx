@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 // "criterion 5" switch that used to live on the local copy is in the model's
 // docstring, which the generator carries into the generated JSDoc.
 import type {
+  AccuracyStats,
   OddsCacheStatsResponse,
   QualityConsistencyIssue,
   QualityLoopReport,
@@ -30,28 +31,6 @@ interface EngineUsage {
   count: number;
   percentage: number;
   avg_confidence: number;
-}
-
-interface AccuracyByStage {
-  stage: string;
-  matches_evaluated: number;
-  exact_score_pct: number;
-  goal_diff_pct: number;
-  outcome_accuracy: number;
-  score_mae: number | null;
-}
-
-interface AccuracyStats {
-  total_matches: number;
-  predicted_matches: number;
-  outcome_accuracy: number;
-  avg_score_mae: number;
-  avg_brier_score: number;
-  exact_score_correct: number;
-  by_stage?: AccuracyByStage[];
-  // Criterion 5: explicit switch separating "no finished matches yet" from
-  // "refresh failed and stale data is also empty" (audit 53.102.7).
-  has_results: boolean;
 }
 
 interface SystemHealth {

@@ -52,6 +52,8 @@ Do NOT import models that should not leak to the frontend:
 - world_cup_prediction SQLAlchemy ORM (not Pydantic)
 """
 from app.models.event import (
+    AccuracyByStage,
+    AccuracyStatsResponse,
     ActionableRecommendation,
     AIOptimization,
     AnalysisHistoryEntry,
@@ -259,6 +261,8 @@ from app.models.event import (
 )
 
 __all__ = [
+    "AccuracyByStage",
+    "AccuracyStatsResponse",
     "ActionableRecommendation",
     "AIOptimization",
     "AnalysisHistoryEntry",

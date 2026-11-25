@@ -13,7 +13,11 @@ from typing import Any
 from app.api.audit_metadata import get_audit_metadata
 from app.api.security import require_write_key
 from app.memory import loop_run_store
-from app.models.event import OddsCacheStatsResponse, QualityLoopReportResponse
+from app.models.event import (
+    AccuracyStatsResponse,
+    OddsCacheStatsResponse,
+    QualityLoopReportResponse,
+)
 from app.utils.prediction_db import get_prediction_session_dep
 from app.models.world_cup_prediction import (
     MatchFixture,
@@ -581,7 +585,7 @@ async def get_post_match_backfill_runs(
     return list_post_match_backfill_runs(limit=limit)
 
 
-@router.get("/accuracy-stats")
+@router.get("/accuracy-stats", response_model=AccuracyStatsResponse)
 async def get_accuracy_stats(session: Session = Depends(get_prediction_session_dep)) -> dict[str, Any]:
     """Get prediction accuracy statistics."""
     # Refresh PredictionAccuracy table from live MatchResult data
@@ -596,9 +600,11 @@ async def get_accuracy_stats(session: Session = Depends(get_prediction_session_d
     if not results:
         # Criterion 5 (audit 53.102.7): all-zero accuracy must say it comes from
         # an empty MatchResult table — the same zeros also appear when refresh
-        # fails and stale data is empty. Shape mirrors the non-empty branch
-        # (adds predicted_matches/exact_score_correct, drops the dead `by_engine`
-        # key no consumer reads) plus an explicit has_results switch.
+        # fails and stale data is empty. Both branches write the same eight keys;
+        # the switch is has_results. (This comment used to claim the empty
+        # branch "adds predicted_matches/exact_score_correct, drops the dead
+        # `by_engine` key" -- `by_engine` is not in either branch, so that
+        # sentence described an older shape and is corrected here, audit 53.170.)
         return {
             "total_matches": 0,
             "predicted_matches": 0,
@@ -630,9 +636,14 @@ async def get_accuracy_stats(session: Session = Depends(get_prediction_session_d
         {
             "stage": r.stage,
             "matches_evaluated": r.matches_evaluated,
-            "exact_score_pct": round(r.exact_score_correct / r.matches_evaluated, 3) if r.matches_evaluated and r.exact_score_correct else 0,
-            "goal_diff_pct": round(r.goal_diff_correct / r.matches_evaluated, 3) if r.matches_evaluated and r.goal_diff_correct else 0,
-            "outcome_accuracy": round(r.outcome_accuracy, 3) if r.outcome_accuracy else 0,
+            # `0.0`, not `0`: the model declares these as float, and pydantic
+            # would coerce an int zero into `0.0` anyway -- i.e. the contract
+            # would change the wire from `0` to `0.0` while claiming to describe
+            # it. Writing the float here keeps the producer and the schema
+            # saying the same thing (audit 53.170).
+            "exact_score_pct": round(r.exact_score_correct / r.matches_evaluated, 3) if r.matches_evaluated and r.exact_score_correct else 0.0,
+            "goal_diff_pct": round(r.goal_diff_correct / r.matches_evaluated, 3) if r.matches_evaluated and r.goal_diff_correct else 0.0,
+            "outcome_accuracy": round(r.outcome_accuracy, 3) if r.outcome_accuracy else 0.0,
             "score_mae": round(r.score_mae, 2) if r.score_mae else None,
         }
         for r in stage_rows
@@ -641,7 +652,7 @@ async def get_accuracy_stats(session: Session = Depends(get_prediction_session_d
     return {
         "total_matches": total,
         "predicted_matches": predicted_count,
-        "outcome_accuracy": round(outcome_correct / predicted_count, 3) if predicted_count > 0 else 0,
+        "outcome_accuracy": round(outcome_correct / predicted_count, 3) if predicted_count > 0 else 0.0,
         "avg_score_mae": round(avg_mae, 2),
         "avg_brier_score": round(avg_brier, 3),
         "exact_score_correct": sum(1 for r in predicted if abs(r.home_error or 0) < 0.5 and abs(r.away_error or 0) < 0.5),

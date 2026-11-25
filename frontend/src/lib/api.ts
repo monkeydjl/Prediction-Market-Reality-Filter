@@ -25,6 +25,7 @@ import type {
   OpenDecisionsResponse as GeneratedOpenDecisionsResponse,
   CalibrationBucketCell as GeneratedCalibrationBucketCell,
   CalibrationBucketSummaryResponse as GeneratedCalibrationBucketSummaryResponse,
+  AccuracyStatsResponse as GeneratedAccuracyStatsResponse,
   OddsCacheStatsResponse as GeneratedOddsCacheStatsResponse,
   QualityLoopReportResponse as GeneratedQualityLoopReportResponse,
   QualitySummary as GeneratedQualitySummary,
@@ -702,6 +703,12 @@ export type QualityLoopReport = GeneratedQualityLoopReportResponse;
 export type QualitySummary = GeneratedQualitySummary;
 export type QualityTrendPoint = GeneratedQualityTrendPoint;
 export type QualityConsistencyIssue = GeneratedQualityConsistencyIssue;
+
+// The World Cup dashboard's accuracy envelope (audit 53.170). The schema's name
+// carries a `Response` suffix and the component's does not, so the alias keeps
+// the component reading `AccuracyStats` while the model stays findable under
+// `AccuracyStatsResponse` in `event.py`.
+export type AccuracyStats = GeneratedAccuracyStatsResponse;
 
 export interface EventListFilters {
   q?: string;

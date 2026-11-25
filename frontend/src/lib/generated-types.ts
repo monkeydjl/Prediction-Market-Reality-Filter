@@ -89,6 +89,64 @@ export interface MatchOutcomeProbabilities {
   away_win: number;
 }
 /**
+ * One element of ``AccuracyStatsResponse.by_stage`` (audit 53.170).
+ *
+ * Built by the list comprehension in ``get_accuracy_stats`` from
+ * ``PredictionAccuracy`` rows. Six keys, all written on every row.
+ *
+ * Three of them are floats that the producer used to write as *integers* on
+ * one branch: ``else 0`` rather than ``else 0.0`` for ``exact_score_pct``,
+ * ``goal_diff_pct`` and ``outcome_accuracy``. pydantic would coerce those to
+ * ``0.0`` and change the wire from ``0`` to ``0.0`` without a word, so the
+ * producer was made to write ``0.0`` in the same commit. The model describes
+ * the wire; it does not get to revise it.
+ *
+ * ``score_mae`` is the one nullable key, and its nullability is *truthiness*,
+ * not presence: ``round(r.score_mae, 2) if r.score_mae else None``. A stored
+ * ``0.0`` therefore reads as ``None``. Recorded rather than "fixed" --
+ * changing the test would change which value the dashboard shows.
+ */
+export interface AccuracyByStage {
+  stage: string;
+  matches_evaluated: number;
+  exact_score_pct: number;
+  goal_diff_pct: number;
+  outcome_accuracy: number;
+  score_mae: number | null;
+  [k: string]: unknown;
+}
+/**
+ * Response for ``GET /api/analytics/accuracy-stats`` (audit 53.170).
+ *
+ * Both return paths -- the empty ``MatchResult`` table and the normal one --
+ * write the same eight keys in this order. The route's own comment claimed the
+ * empty branch "adds predicted_matches/exact_score_correct, drops the dead
+ * ``by_engine`` key"; that described an older shape. Both branches have
+ * written all eight for a while, and the sentence is corrected here rather
+ * than left in place to be trusted.
+ *
+ * ``has_results`` is the §5 switch: the same seven zeros appear when no match
+ * has finished and when the refresh failed on an empty table, so the zeros
+ * alone cannot say which one happened. ``by_stage`` is required even though
+ * the hand-written interface marked it optional -- the empty branch writes
+ * ``[]``, and "no rows" and "no key" are different facts.
+ *
+ * Kept open so the tests can compare key sets at the wire as well as in the
+ * schema (53.169): a closed model would drop a key the producer starts
+ * writing before any assertion could count it.
+ */
+export interface AccuracyStatsResponse {
+  total_matches: number;
+  predicted_matches: number;
+  outcome_accuracy: number;
+  avg_score_mae: number;
+  avg_brier_score: number;
+  exact_score_correct: number;
+  by_stage: AccuracyByStage[];
+  has_results: boolean;
+  [k: string]: unknown;
+}
+/**
  * Structured actionable conclusion for an event (Stage 3).
  *
  * Surfaces the already-computed legacy signal as an event-vocabulary

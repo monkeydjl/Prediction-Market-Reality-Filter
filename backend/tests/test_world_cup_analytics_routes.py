@@ -364,9 +364,10 @@ class WorldCupAnalyticsRouteAuthTests(unittest.TestCase):
     def test_accuracy_stats_empty_table_reports_explicit_switch(self):
         """Criterion 5: an empty MatchResult table must be distinguishable from
         a refresh failure with empty stale data. The all-zero response carries
-        has_results=False and mirrors the non-empty branch's shape (adds
-        predicted_matches/exact_score_correct, drops the dead by_engine key no
-        consumer reads).
+        has_results=False and writes the same eight keys as the populated
+        branch -- the docstring here used to repeat the route's claim that the
+        empty branch "adds predicted_matches/exact_score_correct, drops the dead
+        by_engine key", which described an older shape (audit 53.170).
         """
         resp = self.client.get("/analytics/accuracy-stats")
 
@@ -377,6 +378,115 @@ class WorldCupAnalyticsRouteAuthTests(unittest.TestCase):
         self.assertIn("exact_score_correct", body)
         self.assertNotIn("by_engine", body)
         self.assertEqual(body["total_matches"], 0)
+        self.assertEqual(set(body), self.ACCURACY_KEYS)
+
+    # ------------------------------------------------------------------
+    # The accuracy envelope became a published contract in audit 53.170.
+    # Both return paths write the same eight keys; the second test is the one
+    # that would have failed against the shape the route's own comment
+    # described.
+    # ------------------------------------------------------------------
+    ACCURACY_KEYS = {
+        "total_matches",
+        "predicted_matches",
+        "outcome_accuracy",
+        "avg_score_mae",
+        "avg_brier_score",
+        "exact_score_correct",
+        "by_stage",
+        "has_results",
+    }
+
+    def _accuracy_path_schema(self) -> dict:
+        spec = self.app.openapi()
+        entry = spec["paths"]["/analytics/accuracy-stats"]["get"]["responses"]["200"][
+            "content"
+        ]["application/json"]["schema"]
+        return self._component_schema(entry["$ref"].rsplit("/", 1)[-1])
+
+    def _add_finished_result_for_accuracy(self) -> None:
+        self._add_finished_fixture()
+        self.session.add(
+            MatchResult(
+                match_id="m1",
+                final_home_score=2,
+                final_away_score=1,
+                outcome="home_win",
+                finished_at=datetime(2026, 6, 20, 20, 0, 0),
+                predicted_home_score=2.0,
+                predicted_away_score=1.0,
+                outcome_correct=1,
+                # `refresh_prediction_accuracy` only aggregates results whose
+                # brier_score is set -- without it the by_stage table stays
+                # empty and the route silently reports no stage rows.
+                brier_score=0.15,
+                score_mae=0.5,
+                home_error=0.0,
+                away_error=0.0,
+            )
+        )
+        self.session.commit()
+
+    def test_accuracy_stats_publishes_exactly_its_eight_keys(self) -> None:
+        """The wire and the schema must name the same eight keys.
+
+        ``model_fields`` would be an empty comparison (the base is open); the
+        published schema moves when the model shrinks, the wire moves when the
+        producer grows.
+        """
+        resp = self.client.get("/analytics/accuracy-stats")
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(set(resp.json()), self.ACCURACY_KEYS)
+        self.assertEqual(set(self._accuracy_path_schema()["properties"]), self.ACCURACY_KEYS)
+
+    def test_accuracy_stats_populated_branch_writes_the_same_eight_keys(self) -> None:
+        """The two branches are one contract, not two shapes.
+
+        This is the assertion the stale comment would have made fail: it said
+        the empty branch "adds predicted_matches/exact_score_correct, drops the
+        dead by_engine key". `by_engine` is in neither branch, and both write
+        all eight keys -- so the comment had been describing a shape that no
+        longer existed, and nothing compared the two branches until now.
+        """
+        self._add_finished_result_for_accuracy()
+
+        resp = self.client.get("/analytics/accuracy-stats")
+
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertIs(body["has_results"], True)
+        self.assertEqual(body["total_matches"], 1)
+        self.assertEqual(set(body), self.ACCURACY_KEYS)
+
+    def test_accuracy_stats_by_stage_rows_publish_six_keys(self) -> None:
+        """``by_stage`` rows are the endpoint's only nested shape.
+
+        ``refresh_prediction_accuracy`` runs inside the route, so a finished
+        fixture with a result is enough to produce one row. The wire and the
+        schema are compared together: six keys each, all required.
+        """
+        self._add_finished_result_for_accuracy()
+
+        resp = self.client.get("/analytics/accuracy-stats")
+
+        self.assertEqual(resp.status_code, 200)
+        rows = resp.json()["by_stage"]
+        self.assertTrue(rows, "a finished group-stage fixture should produce a row")
+
+        schema = self._component_schema("AccuracyByStage")
+        self.assertEqual(set(rows[0]), set(schema["properties"]))
+        self.assertEqual(len(rows[0]), 6)
+        self.assertEqual(set(schema["required"]), set(schema["properties"]))
+
+    def test_accuracy_stats_route_binds_the_named_model(self) -> None:
+        """Without the binding the body is unchanged and only the schema goes."""
+        from app.models.event import AccuracyStatsResponse
+
+        route = next(
+            r for r in self.app.routes if getattr(r, "path", "") == "/analytics/accuracy-stats"
+        )
+        self.assertIs(route.response_model, AccuracyStatsResponse)
 
     def test_accuracy_stats_with_results_reports_has_results_true(self):
         self._add_finished_fixture()

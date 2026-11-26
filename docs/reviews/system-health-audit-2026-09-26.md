@@ -22465,3 +22465,181 @@ self.assertIn('"timestamp": utc_isoformat(history.timestamp),', body, ...)
   现在扩等于给自己留一个必然红的门。
 
 **本节行数**：正文 **+221/−0**，连本段共 **+224/−0**；审计文档已入库 **+22258/−15**，加本节 **+22482/−15**。
+
+## §53.177 路由层第一批：`sport_edges` 六处，和一条被变异的规则
+
+§53.176 的普查留了 13 处路由层站点。这一节收其中 6 处（`sport_edges.py`），还剩 7 处
+（`predictions.py` 3、`sport_odds.py` 2、`sport_recommendations.py` 2）。
+
+做法和上一批不同，先说为什么：**这个文件有真的 SQLite fixture**
+（`tests/test_sport_edge_routes.py` 用 `init_kernel_db(tmp_path / ...)` 建库、用 ORM 播种），
+六处**都能端到端驱动**，不用再靠源码级规则兜底。§53.176 那八个里七个驱动不了才只能钉形状；
+能驱动的时候就不该退而求其次。
+
+### 同一个键，两个生产者
+
+`captured_at` 有两个来源，形状不一样：
+
+```text
+detect 路径   EdgeResult(captured_at=now)                 ← 内存里的 aware 值
+读路径        EdgeResult(captured_at=row["captured_at"])  ← SQLite 回读，naive
+```
+
+`edge_detector_service.py:203` 是 `captured_at=now`，`:310` 是 `captured_at=row["captured_at"]`。
+同一个 dataclass、同一个键、出口两副面孔。**只修一半就自相矛盾**：`POST /detect` 返回
+`...+00:00`，紧接着 `GET /latest` 返回裸串，前端拿到同一个键的两种格式。
+
+所以除了逐端点的偏移断言，另写一条钉这件事的：
+
+```python
+def test_the_write_path_and_the_read_paths_agree_on_one_shape(client, monkeypatch):
+    data = client.post("/api/sport-edges/m1/detect").json()
+    assert data["outcomes"][0]["captured_at"] == utc_isoformat(
+        _db_stamp(KernelSportEdge, "captured_at", match_id="m1")
+    )
+```
+
+左边是写路径吐出来的串，右边是从库里回读、按新 helper 算出来的串。变异 6 只红这一条
+（在规则改成家族判据之前），说明它守的东西别的测试看不见。
+
+顺带钉住一个容易被误当成原因的事实：`KernelSportEdge.captured_at` 声明的是
+`DateTime`（`kernel_db.py:304`），**连 `timezone=True` 都没有**，而 `MatchPrediction.last_updated`
+是有 `timezone=True` 的。两者在 SQLite 上一样回读成 naive——**那个 flag 跟这个缺陷无关，
+序列化才是**。§53.174 量过一次，这是同一结论的第二个样本。
+
+### 一条 grep 起来像被覆盖、其实没读那个键的分支
+
+`GET /{match_id}/latest` 有三条出口，其中 `no_verified_links`（`:117`）那条：
+`grep -rn no_verified_links tests/` 有 **5 处命中**，看着挺踏实。逐条读断言——全部读的是
+`skip_reason`，或者只把它写在 docstring 里，**没有一条读那条出口的 `prediction_timestamp`**。
+而它恰好是最常见的真实状态：预测有了，市场链接没验证通过。
+
+补了一条端到端测试（构造「有预测、无链接」的库，断言 `skipped=true` 且时间串带偏移）。
+补完之后变异 4 红两条：新测试 + 规则。**判据：grep 命中数不是覆盖率，必须回读断言行。**
+这条 MEMORY 里早有，这次是一个干净的新样本。
+
+### 规则的第一版按名字列举，变异把它自己揭了
+
+规则从 `test_world_cup_analytics_routes.py` 搬出来单独立户
+（`tests/test_row_timestamp_serialization.py`），因为**它守的是模块，不是那个文件的端点**，
+而现在是第三个模块了。被判模块进 `MODULE_NAMES` 元组，扫描集合的增长由这个元组表达。
+
+搬完写的第一版禁集是这样的：
+
+```python
+ROW_TIMESTAMP_ATTRIBUTES = frozenset(
+    {"kickoff_utc", "timestamp", "created_at", "last_updated", "last_update", "captured_at"}
+)
+```
+
+跑变异时露了：变异 6 把 `/detect` 的 `prediction_timestamp` 退回裸 `.isoformat()`，
+**规则一声不响**——那个名字不在列表里。也就是说这条规则的实际覆盖是「我记得列进去的名字」，
+而我刚刚在同一节里手工数了六处、漏掉的正是这一个。改成家族判据：
+
+```python
+def _is_row_timestamp(name: str) -> bool:
+    return (
+        name.endswith("_at")
+        or name.endswith("_timestamp")
+        or name in {"timestamp", "last_updated", "last_update", "kickoff_utc"}
+    )
+```
+
+`kickoff_utc` 是唯一两条后缀规则都套不上的名字，所以显式留着。改完变异 6 红两条。
+**枚举名字的守卫，每加一处新站点都是一个静默的洞；判据要写成谓词。**
+
+顺带核了三处「看着像漏网」的残留，都不是：
+
+```text
+world_cup_analytics.py:145   kickoff.isoformat()          ← _parse_fixture_kickoff 保证 aware
+world_cup_analytics.py:835   datetime.now(tz).isoformat() ← 本来就带偏移
+world_cup_predictions.py:887 now.date().isoformat()       ← 日期没有偏移，AST 走 attribute 名 date
+```
+
+第一处的接收者是 `Name` 不是 `Attribute`，规则看不见它——所以是**回读源码**判的，不是靠规则绿的。
+`_parse_fixture_kickoff` 在 `:97` 无条件 `replace(tzinfo=utc)`，aware 是它的返回值契约。
+
+### 防空的第二条测试
+
+`MODULE_NAMES` 为空、模块名拼错、或者哪天有人把 `utc_isoformat` 全撤了——上面那条
+`assert offenders == []` 统统是绿的。所以补：
+
+```python
+def test_every_swept_module_is_really_swept() -> None:
+    """Guard the guard: an empty or wrong ``MODULE_NAMES`` walks nothing."""
+```
+
+它要求每个列出的模块真的在 `app.api.routes.*` 下、文件名与模块名对得上、并且**至少有一处
+`utc_isoformat(...)` 调用**。一条写错的注册比一条漏掉的注册更危险，因为它长得像已完成。
+
+搬完顺手撞了一次门：`scripts/lint_scan_guard.py` 直接红——
+
+```text
+[FAIL] 1 linted .py file(s) are NOT tracked by git -- local and CI disagree
+    tests/test_row_timestamp_serialization.py
+```
+
+新文件没 `git add`，ruff 扫到的 `.py` 集合（851）就比 git 跟踪的多一个。**这是守卫在做它该做的事**：
+否则「本地绿、CI 红」这一族只能等 CI 告诉你。
+
+### 然后全量又红在第二份清点里
+
+四道门绿、两个受影响的测试文件 18 条绿之后跑全量：
+
+```text
+tests=9563 failures=1
+  - tests.test_readme_inventory.ReadmeInventoryTests::test_backend_test_file_count_matches_the_directory
+```
+
+README 里写着「后端（446 个测试文件）」，实际 447。**新增一个测试文件会同时动两份清单**：
+README 的计数（`_count_backend_test_files()`）和 ruff 的扫描集合（851）。两份都在同一个提交里对齐，
+否则「本地绿」只是「还没跑到那条清点」。改法就是把 446 改成 447——这个数字没有别的来源，
+它是 `len(list((backend/tests).glob("test_*.py")))`，和测试里那个函数同一个定义。
+
+这一节因此有三处「别人家的红」，性质完全不同，值得并排放：
+
+| 红在哪 | 为什么只有全量能看见 |
+|---|---|
+| §53.176 `test_generate_types` 的文本钉 | 断言的是**别的模块**的源码字面 |
+| 本节 `lint_scan_guard` | 比较 ruff 集合与 `git ls-files`，本地未 tracked 也算差 |
+| 本节 `test_readme_inventory` | 数的是**目录里的文件个数**，新增文件即触发 |
+
+### 七发七中
+
+| # | 变异 | 红的测试 |
+|---|---|---|
+| 1 | `_edge_to_dict` 的 `captured_at` 退回裸 `.isoformat()` | `/latest` 断言 + 规则（2） |
+| 2 | `/history` 快照的 `captured_at` | history 断言 + 规则（2） |
+| 3 | `/discrepancies` 的 `captured_at` | discrepancies 断言 + 规则（2） |
+| 4 | `no_verified_links` 分支的 `created_at` | 该分支新测试 + 规则（2） |
+| 5 | `/latest` 主路径的 `created_at` | latest 断言 + 规则（2） |
+| 6 | `/detect` 的 `prediction_timestamp` | 写读一致性断言 + 规则（2，规则是改家族判据之后才红的） |
+| 7 | 反向：把一处**世界杯**站点退回 | 搬过家的规则（1） |
+
+1–6 都多红一条规则，这是粒度差而不是重复：端点测试回答「哪个路由错了」，规则回答「哪个文件第几行错了」。
+变异 7 是给「搬家」这个动作本身的证据——规则在新家照样会响。七发全部 `restored=True`、`crlf delta +0`。
+
+### 前端：wire 多了六个字符，而夹具早就假设它在那儿
+
+加 `+00:00` 之后最直接的担心是「会不会显示出一串丑东西」。查了一遍：
+
+- 边相关组件把 `captured_at` 交给 recharts 的 `XAxis` / 表格原样渲染，只有
+  `edgedetailpanel.tsx:288` 是 `预测时间: {data.prediction_timestamp}` 直接插字符串——
+  那一个从 `2026-07-16T10:00:00` 变成 `...T10:00:00+00:00`，长 6 个字符，无解析、无断言。
+- 更有意思的是**前端夹具早就写了 `Z`**：`edgedetailpanel.test.tsx` 里
+  `prediction_timestamp: "2026-07-16T10:00:00Z"`、`captured_at: "2026-07-16T10:00:00Z"`。
+  夹具假设的是一个**带偏移的契约**，而后端从来没发过——夹具比实现更对。
+- 真正被这个 bug 伤到的是**会 `new Date()` 的消费者**：`match-detail-panel.tsx:99` 用
+  `new Date(prediction.prediction_timestamp).toLocaleString("zh-CN")`，拿裸串按本机时区解释，
+  UTC+8 差八小时。
+
+### 未决 / 下一批
+
+- 路由层还剩 7 处：`predictions.py:319`（`prediction_timestamp`）、`:572`/`:589`（`kickoff_utc`）、
+  `sport_odds.py:60`/`:95`（`snap["captured_at"]`，字典取值不是属性）、
+  `sport_recommendations.py:61`/`:65`。`predictions.py` 那三处最可能有真 DB fixture。
+- 服务层 48 处仍未逐条判「进不进响应」。
+- `MODULE_NAMES` 现在三个模块；把剩下三个路由模块收完才能把规则扩到「整个路由层」。
+  另外那两个用**字典取值**的站点（`snap["captured_at"]`）规则天生看不见，只能靠端点测试。
+
+**本节行数**：正文 **+175/−0**，连本段共 **+178/−0**；审计文档已入库 **+22482/−15**，加本节 **+22660/−15**。

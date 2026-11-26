@@ -117,3 +117,74 @@ def test_history_filtered_by_outcome(client):
     data = res.json()
     assert len(data["series"]) == 1
     assert data["series"][0]["mapped_outcome"] == "home_win"
+
+
+def _row_stamp(match_id="m1", outcome="home_win"):
+    """Read ``captured_at`` straight from the row, asserting it comes back naive.
+
+    These routes were never broken (audit 53.178): ``snap["captured_at"]`` is
+    *already* aware because ``TraditionalOddsStore`` re-attaches the offset
+    (``_ensure_utc``, traditional_odds_store.py:24). The column carries none --
+    which is what the assertion below pins. If SQLite ever starts round-tripping
+    an offset, this fails first, and the offset assertions in the route tests
+    would then be measuring the writer instead of the route.
+    """
+    from app.kernel.kernel_db import KernelTraditionalOddsSnapshot, get_kernel_session
+
+    session = get_kernel_session()
+    try:
+        row = (
+            session.query(KernelTraditionalOddsSnapshot)
+            .filter_by(match_id=match_id, mapped_outcome=outcome)
+            .order_by(KernelTraditionalOddsSnapshot.captured_at.asc())
+            .first()
+        )
+    finally:
+        session.close()
+    assert row is not None, "seed wrote no row to read back"
+    assert row.captured_at is not None
+    assert row.captured_at.tzinfo is None, (
+        "premise broken: SQLite now round-trips the offset, so an offset in the "
+        "response no longer proves anything about the route or the store"
+    )
+    return row.captured_at
+
+
+def test_latest_captured_at_carries_the_utc_offset(client):
+    from app.utils.helpers import utc_isoformat
+
+    _seed_odds(match_id="m1")
+    data = client.get("/api/sport-odds/m1/latest").json()
+    home = next(o for o in data["outcomes"] if o["mapped_outcome"] == "home_win")
+
+    assert home["captured_at"] == utc_isoformat(_row_stamp())
+    assert home["captured_at"].endswith("+00:00"), home["captured_at"]
+
+
+def test_history_captured_at_carries_the_utc_offset(client):
+    from app.utils.helpers import utc_isoformat
+
+    _seed_odds(match_id="m1")
+    data = client.get("/api/sport-odds/m1/history").json()
+    home = next(s for s in data["series"] if s["mapped_outcome"] == "home_win")
+
+    assert home["snapshots"][0]["captured_at"] == utc_isoformat(_row_stamp())
+    assert home["snapshots"][0]["captured_at"].endswith("+00:00")
+
+
+def test_the_offset_comes_from_the_store_not_the_column(client):
+    """The property that made these two routes correct all along.
+
+    ``captured_at`` reaches the route aware because ``TraditionalOddsStore``
+    re-attaches it -- unlike ``edge_store._row_to_dict``, which hands the column
+    value through untouched and left the same-looking code in ``sport_edges``
+    emitting naive strings. Pinning the converter here localises a regression:
+    delete ``_ensure_utc`` and this fails, naming the layer that dropped it,
+    instead of only the two endpoints going bare.
+    """
+    _seed_odds(match_id="m1")
+    naive = _row_stamp()
+    stored = TraditionalOddsStore().get_snapshots(match_id="m1")[0]["captured_at"]
+
+    assert stored.tzinfo is not None, "the store no longer re-attaches the offset"
+    assert stored == naive.replace(tzinfo=timezone.utc)

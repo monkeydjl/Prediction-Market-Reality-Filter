@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 from fastapi import APIRouter, HTTPException, Query
 
 from app.core import config
+from app.utils.helpers import utc_isoformat
 
 if TYPE_CHECKING:
     # Import-time only for the checker; the runtime import stays inside _store()
@@ -57,7 +58,7 @@ def get_history(
             "decimal_odds": snap["decimal_odds"],
             "bookmaker": snap["bookmaker"],
             "bookmakers_count": snap["bookmakers_count"],
-            "captured_at": snap["captured_at"].isoformat() if snap["captured_at"] else None,
+            "captured_at": utc_isoformat(snap["captured_at"]),
         })
 
     series = [
@@ -92,7 +93,7 @@ def get_latest(match_id: str) -> dict:
             "decimal_odds": snap["decimal_odds"],
             "bookmaker": snap["bookmaker"],
             "bookmakers_count": snap["bookmakers_count"],
-            "captured_at": snap["captured_at"].isoformat() if snap["captured_at"] else None,
+            "captured_at": utc_isoformat(snap["captured_at"]),
         }
 
     return {

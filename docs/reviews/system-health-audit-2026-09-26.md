@@ -22643,3 +22643,285 @@ README 的计数（`_count_backend_test_files()`）和 ruff 的扫描集合（85
   另外那两个用**字典取值**的站点（`snap["captured_at"]`）规则天生看不见，只能靠端点测试。
 
 **本节行数**：正文 **+175/−0**，连本段共 **+178/−0**；审计文档已入库 **+22482/−15**，加本节 **+22660/−15**。
+
+## §53.178 `sport_odds` 两处：它们本来就不是缺陷
+
+上一节结尾写「路由层还剩 7 处」，其中两处是 `sport_odds.py:60/95`，接收者是**字典取值**
+（`snap["captured_at"]`）。选它们做这一批的理由是：**AST 规则天生看不见这种写法**，
+只能靠端点测试，正好当「规则覆盖不到」的样本。
+
+做完的结论和预期相反：**这两处从来没有 bug。** 这一节因此没有 bug 可修，只有三件事需要记。
+
+### 判据错在哪：接收者的形状 ≠ 值的来源
+
+§53.176 的普查按**接收者形状**分类（`.attr` / `<expr>` / `$name`），把
+`snap["captured_at"].isoformat()` 归进 `row-or-unknown` —— 「unknown」这个词是对的。
+但写正文时我把它**升级**成了「13 处真缺陷，逐条看过，无一是误报」。**这一步没有依据**：
+我查的是它长什么样，没查这个值是**谁造的**。
+
+`TraditionalOddsStore._row_to_dict`（`traditional_odds_store.py:44`）写的是：
+
+```python
+"captured_at": _ensure_utc(row.captured_at),
+```
+
+而 `_ensure_utc`（:25）就是「SQLite 把 tzinfo 抹了，这里补回去」。所以
+`snap["captured_at"]` 到路由手上**已经是 aware**，`.isoformat()` 本来就带 `+00:00`。
+
+同族的 `edge_store._row_to_dict`（`edge_store.py:44`）**没有**这一步，原样透传
+`row.captured_at`。于是：
+
+| 模块 | store 有没有补 tz | 路由里长得一样的代码 | 是不是缺陷 |
+|---|---|---|---|
+| `sport_edges` | 没有 | `edge.captured_at.isoformat()` | 是（§53.177 修了） |
+| `sport_odds` | 有（`_ensure_utc`） | `snap["captured_at"].isoformat()` | **不是** |
+
+**同一句代码，两个结论，差别在隔壁文件的一个 helper 里。** 计数修正：13 处 → **11 处**。
+
+### 那这两行还改不改？改，但理由不是修 bug
+
+`utc_isoformat(aware)` 与 `aware.isoformat()` 在 UTC 下产出**同一个字节串**
+（helper 只在 `tzinfo is None` 时补，否则 `astimezone(utc)` 是恒等）。变异 2/3 存活就是这条的证明。
+
+改的理由是另一件事：**把「偏移从哪来」从 store 的私有约定，变成路由自己的保证。**
+今天靠 `_ensure_utc`，明天有人重构 store 或新写一个 store 忘了这一步，路由就静默变回裸串——
+`edge_store` 就是那个「忘了」的先例。改完之后全路由层一个写法，下一批也不用每次去查 producer。
+
+### 五发，三红两绿，两绿是**必须**绿的
+
+| # | 变异 | 结果 |
+|---|---|---|
+| 1 | `_ensure_utc` 不再补 tz（只有 store 退化） | 红 1：只有前提测试 |
+| 2 | `/history` 的 `captured_at` 退回裸 `.isoformat()` | **绿**（store 补上了，字节不变） |
+| 3 | `/latest` 的 `captured_at` 退回裸 `.isoformat()` | **绿**（同上） |
+| 4 | store 退化 **且** latest 退回裸串 | 红 2：latest 偏移 + 前提 |
+| 5 | store 退化 **且** history 退回裸串 | 红 2：history 偏移 + 前提 |
+
+变异 2/3 存活**不是**断言太弱，而是**这两行改不出字节差**——一条改不出字节差的变异，
+定义上就杀不掉。这正是「不是缺陷」的可测形式：我不是论证它没问题，是让它**无法失败**。
+
+### 双层归一化 ⇒ 单层变异全被对面遮住
+
+看变异 1：只有 store 退化时，路由的 `utc_isoformat` **替它补上了**，所以两条端点测试全绿，
+只有那条断言「store 返回值带 tz」的前提测试红。反过来只有路由退化时，store 替它补上。
+**两层各自都能遮住对方。**
+
+这就是「假存活」的另一种成因（§4.2 那张表里的 (a)「夹具锁死」的近亲）：**不是断言太弱，
+是这个缺陷需要两处同时退化才能复现**。所以这里必须有一发复合变异（4/5）。
+如果没有，矩阵会给出「五发里三绿」的读数，而正确结论是「这个特征有两道防线，
+要么证明两道都在，要么证明只剩一道时没人看得见」——前者是现在的状态。
+
+前提测试守的就是「两道都在」这件事：
+
+```python
+def test_the_offset_comes_from_the_store_not_the_column(client):
+    naive = _row_stamp()                      # 列里回读是 naive（断言过）
+    stored = TraditionalOddsStore().get_snapshots(match_id="m1")[0]["captured_at"]
+    assert stored.tzinfo is not None, "the store no longer re-attaches the offset"
+    assert stored == naive.replace(tzinfo=timezone.utc)
+```
+
+没有它，变异 1 会全绿——因为路由把 store 的退化补上了，而从响应里**看不出**是谁补的。
+
+### 顺手发现、但明确不在这里修的：这个文件的两个读方法吞异常
+
+`get_snapshots`（`traditional_odds_store.py:118`）和 `get_latest_snapshot`（:102）都是：
+
+```python
+except Exception:
+    return []
+```
+
+后果是 §5 的老问题：库坏了 → `200 {"series": [], "skipped": true, "skip_reason": "no_odds"}`，
+和「今天确实没有赔率」给出**同一个答案**。同族 `edge_store` 已经改成向上抛，模块 docstring
+把理由写死了：
+
+> Query failures propagate. Every read here has an empty result as its *normal*
+> answer — a match with no edges detected yet — so returning empty on failure made
+> a degraded DB indistinguishable from a match nobody had looked at.
+
+**为什么不在这里修。** AST 数了一遍 `app/kernel/*.py`：只做 `return` / `pass` / `continue`
+的 `except Exception` 有 **16 处，散在 11 个文件**（另有 22 处是 `rollback(); raise` 的写路径）。
+改其中一处 = 「16 处里改 1 处」，正是 §53.176 已经踩过一次的「按文件切」。
+哪些是「正常空答案」（例如可选配置查不到就返回 `None`）、哪些是缺陷，要一次家族普查 +
+一个能同时判两类的判据，还得处理 `market_liquidity.py:190` 这个第三个调用方
+（它对空列表可能是容忍的）。这是下一节的材料，不是这一节的尾巴。
+
+### 未决
+
+- 路由层真正待收 **5 处**：`predictions.py:319`（`prediction_timestamp`）、`:572`/`:589`（`kickoff_utc`）、
+  `sport_recommendations.py:61`（`prediction_timestamp`）、`:65`（`captured_at`）。
+- 那 16 处吞异常的家族普查（见上）。
+- 服务层 48 处仍未逐条判「进不进响应」。
+- AST 规则看不见**字典取值**接收者（`snap["captured_at"]`），这是它的已知边界；
+  想让规则覆盖这种写法，得让它认识「这个 dict 是 store 造的」——那是数据流分析，不是 AST 遍历。
+
+**本节行数**：正文 **+111/−0**，连本段共 **+114/−0**；审计文档已入库 **+22660/−15**，加本节 **+22774/−15**。
+
+## §53.179 吞异常家族普查：先找业主，再数人头
+
+§53.178 结尾写的是「`app/kernel/*.py` 里只做 `return/pass/continue` 的 `except Exception`
+有 **16 处、散在 11 个文件**」，并说那是下一节的材料。本节把它数清楚了，结论是：
+**16 这个数字错了两次，而且这个家族早就有人管。**
+
+### 业主先找到了：`app/utils/failure_policy.py`
+
+翻 `docs/reviews/open-issues-verified-2026-06-21.md` 时撞见一条已划掉的 P2：
+
+> ~~P2-9 异常处理模式不统一~~（`failure_policy.py` 统一 fail-closed empty-list / None /
+> fallback 日志语义，主要外部源与可选 LLM 辅助路径已接入）
+
+对应的模块有三个具名策略，**三个都 `logger.warning`**：
+
+```python
+FAIL_CLOSED_EMPTY_LIST = "fail_closed_empty_list"      # -> []
+FAIL_CLOSED_NONE       = "fail_closed_none"            # -> None
+DETERMINISTIC_FALLBACK = "deterministic_fallback"      # -> fallback
+```
+
+所以这个家族的判据**不是「有没有吞异常」**，而是「**失败有没有留下痕迹**」——
+因为返回值本身注定不可区分（§5 说的那件事），能把两者分开的只有日志和开关。
+按这个判据，「失败时返回空」是**被允许的**，前提是它被命名并记录。
+
+这正是 §53.175 那条「写新断言之前先看有没有业主」的第二次应用：**差一点把一件已经定过
+方向的事重新论证一遍。** 区别只在于这次业主不是一条测试，而是一个模块 + 一条 registry 记录。
+
+### 数人头：806 / 97 / 17 / 307 / 385
+
+AST 扫 `backend/app` 全部 `except` handler（`rglob`，含子包），按「有没有痕迹」四分类：
+
+| 类别 | 数量 | 含义 |
+|---|---|---|
+| `raised` | 97 | 捕获后 `rollback(); raise`（写路径） |
+| `policy` | 17 | 走 `failure_policy.*`（具名 + 记录） |
+| `logs` | 307 | 自己 `logger.warning(...)` 之后返回/落下 |
+| **`silent`** | **385** | **既不上报也不抛出** |
+
+806 个 handler 里 385 个（47.8%）失败时**不留任何痕迹**。这 385 个 silent 里 **202 个会返回一个
+非 `None` 的业务值**，其余是 `pass` / `continue` / 赋值这类控制流。
+
+分布（silent / logs / policy / raised）：
+
+```text
+services   187 / 113 /  17 /  31        kernel      43 /  18 /   0 /  22
+sports      66 /  91 /   0 /  11        api         48 /  14 /   0 /  18
+memory      18 /   7 /   0 /   1        utils       16 /  15 /   0 /   7
+core         4 /  40 /   0 /   2        main/replay/realtime 3
+```
+
+头部文件：`api/routes/events.py` **39 个**（导入/预览样板），其次
+`football_multi_factor_engine.py` 9、`market_totals_service.py` 8。
+
+**policy 的采用度是 17，silent 是 385。** 那条 P2-9 写的是「已修」，实际是**试点**：
+`failure_policy` 落地了语义和日志格式，但只有 17 个 handler 接进去。这不是「记录说谎」，
+是「已修」这两个字被读成了「全仓完成」——**登记表的措辞和它的覆盖面是两件事。**
+
+### 「16 处」错在哪：口径三重窄化
+
+```python
+for p in sorted(root.glob("*.py")):                 # ① 只扫顶层，漏 kernel/engines、kernel/backtest
+    if not all(isinstance(s, (ast.Return, ast.Pass, ast.Continue)) for s in node.body):
+        continue                                     # ② 漏掉 Assign / Expr 体的 handler
+    if any(isinstance(s, ast.Raise) for s in ast.walk(node)):
+        continue                                     # ③ 当时没有「有没有 log」这一维
+```
+
+第 ③ 条最关键：上一节把「307 个有日志的」和「385 个没日志的」当成同一类数了，
+于是数出来的是「不抛异常的 handler 里、体只含 return/pass/continue 的那一小撮」。
+换成正确口径：**kernel 43（不是 16），app 全量 385。**
+
+这是同一类错误的第二次：§53.176 的教训是「普查不按模块切」，这一条是它的前置条件——
+**先定分母，再谈分类**。分母没定时，「逐条看过、无一是误报」这种话是不能说的
+（§53.178 已经为同一句话付过一次账）。
+
+### 复现：两副面孔给出同样的字节
+
+判据要落到响应上才算数。把 `kernel_traditional_odds_snapshots` 整张表删掉，
+再打那两个赔率路由：
+
+```text
+healthy, no rows:
+  /api/sport-odds/m1/latest  -> 200 {'match_id': 'm1', 'outcomes': [], 'skipped': True, 'skip_reason': 'no_odds'}
+  /api/sport-odds/m1/history -> 200 {'match_id': 'm1', 'series': [],   'skipped': True, 'skip_reason': 'no_odds'}
+
+table dropped (every query now fails):
+  /api/sport-odds/m1/latest  -> 200 {'match_id': 'm1', 'outcomes': [], 'skipped': True, 'skip_reason': 'no_odds'}
+  /api/sport-odds/m1/history -> 200 {'match_id': 'm1', 'series': [],   'skipped': True, 'skip_reason': 'no_odds'}
+
+log records emitted while degrading: 4
+  DEBUG asyncio: Using proactor: IocpProactor
+  INFO  httpx: HTTP Request: GET http://testserver/api/sport-odds/m1/latest "HTTP/1.1 200 OK"
+  DEBUG asyncio: ...
+  INFO  httpx: HTTP Request: GET http://testserver/api/sport-odds/m1/history "HTTP/1.1 200 OK"
+```
+
+**逐字节相同。** 那 4 条日志全是 asyncio/httpx 自己发的，**应用自己一条都没有**。
+「库没了」和「今天没赔率」在响应、在日志，两处都不可区分。
+
+### 判据：四象限，再加一道「到不到响应」
+
+|  | 产出业务值（`return <v>`） | 只控制流（`pass`/`continue`/赋值） |
+|---|---|---|
+| 有痕迹（`policy` 或 `logs`） | 合规——空答案 + 一条日志 | 合规 |
+| **无痕迹（`silent`）** | **缺陷候选**：读者无法分辨 | 卫生问题：失败吞掉但没伪造事实 |
+
+第二道筛子决定要不要动手：**这个值到不到响应或决策**。到了就是承重，没到（只在内部参与计算）
+就是「错得不显眼」——例如 `group_liquidity_factor` 返回 `None` 只会让某个系数偏保守，
+不会让界面陈述一个假事实。
+
+### 最值得记的一处：§5 的开关已经写对了，喂给它的却是假值
+
+`MarketSnapshotStore.audit_summary` 是这一族里做得最好的一段代码，它**已经实现了 §5**：
+
+```python
+snaps = self.get_snapshots(link_id=link_id)
+if not snaps:
+    return {"link_id": link_id, "available": False, "snapshot_count": 0, ...}
+...
+return {..., "available": True, ...}
+```
+
+`available` 就是那个「开关」，经 `api/routes/sport_markets.py:151` 直接进响应。
+问题在于**它读的 `snaps` 来自一个会吞异常的 `get_snapshots`**：查询失败也返回 `[]`，
+于是 `available: False` 同时代表「没有快照」和「读不出来」——**§5 想把这两种零分开，
+数据层又把它们合上了。** 开关层做对了不算收口，**上游的输入必须是它以为的那个东西**
+（§53.126 的「开关齐了 ≠ 收口」，这是它的一条新变体：不是没人读开关，是开关被喂了假值）。
+
+### 命名清单：本节只命名，不改
+
+按「silent + 产出业务值 + 到达响应」筛，`app/kernel/` 里承重的是这四个读方法：
+
+| 所在 | 方法 | 到响应的路径 |
+|---|---|---|
+| `traditional_odds_store.py:118` | `get_snapshots` → `[]` | `/sport-odds/{id}/latest`、`/history`（上面已复现） |
+| `traditional_odds_store.py:102` | `get_latest_snapshot` → `None` | 暂无路由调用点（同 store，一起改） |
+| `market_snapshot_store.py:109` | `get_snapshots` → `[]` | `audit_summary` → `/sport-markets/...`（`available` 被喂假值） |
+| `market_snapshot_store.py:135` | `get_latest_snapshot` → `None` | `sport_markets.py:81` → 响应字段 `latest_snapshot: None` |
+
+另有两处「内部消费、错得不显眼」，不进这一批：`sport_market_bridge_service.fetch_current_price:586`
+（只有自调用）、`market_liquidity.group_liquidity_factor:93`。
+
+### 为什么不在这里改
+
+四个方法的改法是**行为变更**，不是修字面：`edge_store` 的先例是「向上抛」，那会让
+`/sport-odds/...` 从 `200 no_odds` 变成 `500`。而这两条路由的空是**正常答案**，
+所以正确改法不是抛，而是**让响应带上第三个名字**（§5：功能没开 `enabled` / 真没有 /
+读失败 `available`）——这要先定响应形状，再改实现，再补测试。
+
+顺序反了就会变成「修掉了吞异常，换来一堆 500，前端还不知道怎么判读」。
+
+### 收口的形态（下一节）
+
+1. 四个读方法：`except` 里走 `failure_policy.fail_closed_*`（**保留**现在的返回值），
+   或改成抛出 + 路由把「读失败」翻译成 `available: false`。二选一，先定。
+2. 两条路由的测试照 `tests/test_sport_edge_routes.py::test_a_degraded_read_is_not_reported_as_no_edges`
+   的模板：删表 → 断言响应**不再**是那个「安静的一天」的形状。
+3. 然后才是守卫：`app/kernel/**/*_store.py` 里非 `raise` 的 handler 必须有 logging 或 policy，
+   **起步豁免 0**（只这四个方法要改，改完就空）。现在写这条守卫只能带一份 43 条的豁免清单，
+   而豁免清单会立刻过期（§53.176 的教训）。
+
+**明确不做**：385 → 0 不是一节的事。`services` 187 + `sports` 66 + `api` 48 里，大多数需要
+各自的判据（SSE 循环里的 `continue`、可选配置的 `None`、best-effort 清理的 `pass`），
+按目录批量改就是第三次「按文件切」。
+
+**本节行数**：正文 **+165/−0**，连本段共 **+168/−0**；审计文档已入库 **+22774/−15**，加本节 **+22942/−15**。

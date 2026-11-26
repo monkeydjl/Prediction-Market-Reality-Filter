@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.security import require_write_key
 from app.core import config
+from app.utils.helpers import utc_isoformat
 
 if TYPE_CHECKING:
     # Kernel imports stay inside the helpers at runtime (lazy); these are here
@@ -49,7 +50,7 @@ def _edge_to_dict(edge: EdgeResult) -> dict[str, Any]:
         "review_priority": getattr(edge, "review_priority", "normal"),
         "factor_drivers": getattr(edge, "factor_drivers", None),
         "factor_attribution": getattr(edge, "factor_attribution", None),
-        "captured_at": edge.captured_at.isoformat() if edge.captured_at else None,
+        "captured_at": utc_isoformat(edge.captured_at),
         "sources": [
             {
                 "link_id": s.link_id,
@@ -84,11 +85,7 @@ def detect_edges_now(
         "outcomes": [_edge_to_dict(e) for e in summary.outcomes],
         "engine_name": summary.engine_name,
         "competition": summary.competition,
-        "prediction_timestamp": (
-            summary.prediction_timestamp.isoformat()
-            if summary.prediction_timestamp
-            else None
-        ),
+        "prediction_timestamp": utc_isoformat(summary.prediction_timestamp),
         "skipped": summary.skipped,
         "skip_reason": summary.skip_reason,
     }
@@ -117,7 +114,7 @@ def get_latest_edges(match_id: str) -> dict[str, Any]:
         return {
             "match_id": match_id, "outcomes": [],
             "engine_name": pred.engine, "competition": pred.competition,
-            "prediction_timestamp": pred.created_at.isoformat() if pred.created_at else None,
+            "prediction_timestamp": utc_isoformat(pred.created_at),
             "skipped": True, "skip_reason": "no_verified_links",
         }
     from app.kernel.kernel_db import get_latest_prediction
@@ -127,7 +124,7 @@ def get_latest_edges(match_id: str) -> dict[str, Any]:
         "outcomes": [_edge_to_dict(e) for e in edges],
         "engine_name": pred.engine if pred else None,
         "competition": pred.competition if pred else None,
-        "prediction_timestamp": pred.created_at.isoformat() if pred and pred.created_at else None,
+        "prediction_timestamp": utc_isoformat(pred.created_at) if pred else None,
         "skipped": False,
         "skip_reason": None,
     }
@@ -145,7 +142,7 @@ def get_edge_history(
     by_outcome: dict[str, list[dict[str, Any]]] = {}
     for edge in edges:
         by_outcome.setdefault(edge.mapped_outcome, []).append({
-            "captured_at": edge.captured_at.isoformat() if edge.captured_at else None,
+            "captured_at": utc_isoformat(edge.captured_at),
             "model_prob": edge.model_prob,
             "market_prob": edge.market_prob,
             "raw_edge": edge.raw_edge,
@@ -186,7 +183,7 @@ def get_discrepancies(
             "liquidity_factor": getattr(e, "liquidity_factor", None),
             "sources_count": getattr(e, "sources_count", None),
             "review_priority": getattr(e, "review_priority", None) or "normal",
-            "captured_at": e.captured_at.isoformat() if e.captured_at else None,
+            "captured_at": utc_isoformat(e.captured_at),
         }
         for e in edges
     ]

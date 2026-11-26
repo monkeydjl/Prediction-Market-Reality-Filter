@@ -262,3 +262,149 @@ def test_a_degraded_read_surfaces_as_500(kernel_db, monkeypatch):
     ):
         res = client.get(url)
         assert res.status_code == 500, url
+
+
+def _db_stamp(model, column, **filters):
+    """Read one timestamp column back through SQLite, and assert the premise.
+
+    SQLite drops ``tzinfo`` from ``DateTime`` columns even when the writer
+    passed ``datetime.now(timezone.utc)``, so every read path in these routes
+    serializes a naive value. If that ever stops being true this helper fails
+    first -- and the offset assertions below would then be measuring the writer
+    instead of the route.
+    """
+    from app.kernel.kernel_db import get_kernel_session
+
+    session = get_kernel_session()
+    try:
+        row = session.query(model).filter_by(**filters).first()
+    finally:
+        session.close()
+    assert row is not None, f"no {model.__name__} row matched {filters}"
+    stamp = getattr(row, column)
+    assert stamp is not None
+    assert stamp.tzinfo is None, (
+        "premise broken: the column now round-trips with an offset, so an "
+        "offset in the response no longer proves the route added one"
+    )
+    return stamp
+
+
+def test_latest_serializes_both_stamps_with_the_utc_offset(client):
+    """``/latest`` carries the edge snapshot and the prediction timestamps.
+
+    Both are read back from columns written as aware datetimes, so both reach
+    the route naive; without an explicit offset the browser's ``new Date()``
+    reads them as local time (audit 53.177).
+    """
+    from app.kernel.edge_detector_service import EdgeDetectorService
+    from app.kernel.kernel_db import KernelPrediction, KernelSportEdge
+    from app.utils.helpers import utc_isoformat
+
+    _seed_prediction_and_link(match_id="m1", implied=0.58)
+    EdgeDetectorService().detect_edges("m1")
+
+    data = client.get("/api/sport-edges/m1/latest").json()
+    edge_stamp = data["outcomes"][0]["captured_at"]
+    pred_stamp = data["prediction_timestamp"]
+
+    assert edge_stamp == utc_isoformat(
+        _db_stamp(KernelSportEdge, "captured_at", match_id="m1")
+    )
+    assert pred_stamp == utc_isoformat(
+        _db_stamp(KernelPrediction, "created_at", match_id="m1")
+    )
+    assert edge_stamp.endswith("+00:00"), edge_stamp
+    assert pred_stamp.endswith("+00:00"), pred_stamp
+
+
+def test_history_snapshots_carry_an_offset(client):
+    from app.kernel.edge_detector_service import EdgeDetectorService
+    from app.kernel.kernel_db import KernelSportEdge
+    from app.utils.helpers import utc_isoformat
+
+    _seed_prediction_and_link(match_id="m1", implied=0.58)
+    EdgeDetectorService().detect_edges("m1")
+
+    data = client.get("/api/sport-edges/m1/history").json()
+    snapshots = data["series"][0]["snapshots"]
+    assert len(snapshots) == 1
+    assert snapshots[0]["captured_at"] == utc_isoformat(
+        _db_stamp(KernelSportEdge, "captured_at", match_id="m1")
+    )
+
+
+def test_discrepancies_carry_an_offset(client):
+    from app.kernel.edge_detector_service import EdgeDetectorService
+    from app.kernel.kernel_db import KernelSportEdge
+    from app.utils.helpers import utc_isoformat
+
+    _seed_prediction_and_link(match_id="m1", implied=0.50)
+    EdgeDetectorService().detect_edges("m1")
+
+    data = client.get("/api/sport-edges/discrepancies").json()
+    assert data["items"][0]["captured_at"] == utc_isoformat(
+        _db_stamp(KernelSportEdge, "captured_at", match_id="m1")
+    )
+
+
+def test_the_write_path_and_the_read_paths_agree_on_one_shape(client, monkeypatch):
+    """``detect`` serializes an aware value held in memory; the GETs serialize a
+    naive one read from SQLite. Both must produce the same string.
+
+    This is the two-producer case: ``EdgeResult.captured_at`` is ``now`` on the
+    detect path (``edge_detector_service.py:203``) and ``row["captured_at"]`` on
+    the read paths (line 310). A fix applied to only one of them would leave the
+    same key carrying two shapes.
+    """
+    from app.core.config import settings
+    from app.kernel.kernel_db import KernelPrediction, KernelSportEdge
+    from app.utils.helpers import utc_isoformat
+
+    monkeypatch.setattr(settings, "API_WRITE_KEY", "")
+    monkeypatch.setattr(settings, "ALLOW_OPEN_WRITES", True)
+
+    _seed_prediction_and_link(match_id="m1", implied=0.58)
+    data = client.post("/api/sport-edges/m1/detect").json()
+
+    assert data["outcomes"][0]["captured_at"] == utc_isoformat(
+        _db_stamp(KernelSportEdge, "captured_at", match_id="m1")
+    )
+    assert data["prediction_timestamp"] == utc_isoformat(
+        _db_stamp(KernelPrediction, "created_at", match_id="m1")
+    )
+
+
+def test_latest_without_a_verified_link_still_carries_the_prediction_offset(client):
+    """The ``no_verified_links`` branch formats ``pred.created_at`` on its own.
+
+    A prediction exists but no link was verified, so ``get_latest_edges``
+    returns [] and the route answers ``skipped=true`` with the prediction's
+    timestamp -- the second of the two identical ``pred.created_at`` sites, and
+    the one a match with an unlinked market actually takes.
+    """
+    from datetime import datetime, timezone
+
+    from app.kernel.kernel_db import KernelPrediction, get_kernel_session
+    from app.utils.helpers import utc_isoformat
+
+    now = datetime.now(timezone.utc)
+    session = get_kernel_session()
+    try:
+        session.add(KernelPrediction(
+            match_id="m9", sport="basketball", competition="nba", season="2025-26",
+            engine="BasketballEngine", predicted_scores={},
+            outcome_probabilities={"home_win": 0.6}, confidence=0.6,
+            feature_version="nba-1.0", explanation={}, created_at=now, updated_at=now,
+        ))
+        session.commit()
+    finally:
+        session.close()
+
+    data = client.get("/api/sport-edges/m9/latest").json()
+    assert data["skipped"] is True
+    assert data["skip_reason"] == "no_verified_links"
+    assert data["prediction_timestamp"] == utc_isoformat(
+        _db_stamp(KernelPrediction, "created_at", match_id="m9")
+    )
+

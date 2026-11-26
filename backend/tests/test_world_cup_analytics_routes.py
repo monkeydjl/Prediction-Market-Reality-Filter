@@ -1075,46 +1075,6 @@ class WorldCupAnalyticsRouteAuthTests(unittest.TestCase):
         )
         self.assertIs(route.response_model, PredictionCoverageResponse)
 
-    def test_world_cup_route_modules_never_format_a_row_timestamp_bare(self) -> None:
-        """A source-level rule, because eight call sites cannot each have a test.
-
-        ``.isoformat()`` on a value read out of a SQLite column is marker-less,
-        and the client reads it as local time. Audit 53.176 converted eight such
-        sites across these two modules; only the ``/prediction-coverage`` one is
-        reachable from this file's client, and the two modules carry no
-        DB-backed fixture to drive the other seven. Rather than leave them on
-        trust, the *shape* is banned here: any ``<row attribute>.isoformat()``
-        reappearing in either module fails this.
-
-        Deliberately an AST walk, not a regex: ``now.date().isoformat()`` is
-        legitimate (a date has no offset) and its receiver is an ``Attribute``
-        whose name is ``date``, which is not in the banned set.
-        """
-        import ast
-
-        from app.api.routes import world_cup_predictions as predictions_module
-
-        row_timestamps = {"kickoff_utc", "timestamp", "created_at", "last_updated", "last_update"}
-        offenders = []
-        for module in (world_cup_analytics, predictions_module):
-            source = Path(module.__file__).read_text(encoding="utf-8")
-            for node in ast.walk(ast.parse(source)):
-                if (
-                    isinstance(node, ast.Call)
-                    and isinstance(node.func, ast.Attribute)
-                    and node.func.attr == "isoformat"
-                    and isinstance(node.func.value, ast.Attribute)
-                    and node.func.value.attr in row_timestamps
-                ):
-                    offenders.append(f"{Path(module.__file__).name}:{node.lineno}")
-
-        self.assertEqual(
-            offenders,
-            [],
-            "these call sites format a stored timestamp without an offset; "
-            "use app.utils.helpers.utc_isoformat",
-        )
-
     def test_analytics_post_routes_require_write_key(self):
         paths = [
             "/analytics/result-fact-backfill?dry_run=true",

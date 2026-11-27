@@ -3,6 +3,8 @@
 All endpoints gated by PHASE7_SPORT_MARKET_BRIDGE_ENABLED (503 when false).
 Both are GET (read-only) — no require_write_key auth.
 """
+import logging
+
 import pytest
 from datetime import datetime, timedelta, timezone
 from fastapi import FastAPI
@@ -11,6 +13,7 @@ from fastapi.testclient import TestClient
 from app.core import config
 from app.kernel.kernel_db import init_kernel_db, close_kernel_db
 from app.kernel.traditional_odds_store import TraditionalOddsStore
+from app.utils.failure_policy import READ_FAILED
 
 
 @pytest.fixture
@@ -123,11 +126,11 @@ def _row_stamp(match_id="m1", outcome="home_win"):
     """Read ``captured_at`` straight from the row, asserting it comes back naive.
 
     These routes were never broken (audit 53.178): ``snap["captured_at"]`` is
-    *already* aware because ``TraditionalOddsStore`` re-attaches the offset
-    (``_ensure_utc``, traditional_odds_store.py:24). The column carries none --
-    which is what the assertion below pins. If SQLite ever starts round-tripping
-    an offset, this fails first, and the offset assertions in the route tests
-    would then be measuring the writer instead of the route.
+    *already* aware because ``TraditionalOddsStore`` re-attaches the offset in
+    its converter (``app.utils.helpers.as_utc``, audit 53.183). The column
+    carries none -- which is what the assertion below pins. If SQLite ever
+    starts round-tripping an offset, this fails first, and the offset assertions
+    in the route tests would then be measuring the writer instead of the route.
     """
     from app.kernel.kernel_db import KernelTraditionalOddsSnapshot, get_kernel_session
 
@@ -176,11 +179,11 @@ def test_the_offset_comes_from_the_store_not_the_column(client):
     """The property that made these two routes correct all along.
 
     ``captured_at`` reaches the route aware because ``TraditionalOddsStore``
-    re-attaches it -- unlike ``edge_store._row_to_dict``, which hands the column
-    value through untouched and left the same-looking code in ``sport_edges``
-    emitting naive strings. Pinning the converter here localises a regression:
-    delete ``_ensure_utc`` and this fails, naming the layer that dropped it,
-    instead of only the two endpoints going bare.
+    re-attaches it -- unlike ``edge_store._row_to_dict`` before audit 53.183,
+    which handed the column value through untouched and left the same-looking
+    code in ``sport_edges`` emitting naive strings. Pinning the converter here
+    localises a regression: drop the ``as_utc`` call and this fails, naming the
+    layer that dropped it, instead of only the two endpoints going bare.
     """
     _seed_odds(match_id="m1")
     naive = _row_stamp()
@@ -188,3 +191,84 @@ def test_the_offset_comes_from_the_store_not_the_column(client):
 
     assert stored.tzinfo is not None, "the store no longer re-attaches the offset"
     assert stored == naive.replace(tzinfo=timezone.utc)
+
+
+def _drop_odds_table():
+    """Drop ``kernel_traditional_odds_snapshots`` through the live session.
+
+    ``init_kernel_db`` creates the table at fixture setup, so dropping it makes
+    every query in the store fail for real rather than through a mock. Same door
+    as ``tests/test_sport_edge_routes.py::_drop_edges_table`` (audit 53.180).
+    """
+    from sqlalchemy import text
+    from app.kernel.kernel_db import get_kernel_session
+
+    session = get_kernel_session()
+    try:
+        session.execute(text("DROP TABLE kernel_traditional_odds_snapshots"))
+        session.commit()
+    finally:
+        session.close()
+
+
+def test_a_failed_read_is_not_reported_as_no_odds(client):
+    """A broken table must not answer the body a quiet day answers.
+
+    Before audit 53.180 both routes returned ``200 {"skipped": true,
+    "skip_reason": "no_odds"}`` with the table missing -- byte-identical to a
+    match nobody had odds for, and with no log line anywhere.
+    """
+    _drop_odds_table()
+    for url, empty_key in (
+        ("/api/sport-odds/m1/latest", "outcomes"),
+        ("/api/sport-odds/m1/history", "series"),
+    ):
+        res = client.get(url)
+        assert res.status_code == 200, url
+        body = res.json()
+        assert body["skip_reason"] == READ_FAILED, url
+        assert body["skipped"] is True, url
+        assert body[empty_key] == [], url
+
+
+def test_a_healthy_empty_read_still_says_no_odds(client):
+    """The other zero keeps its own word: the fix must not over-report.
+
+    Without this, "always answer read_failed" would pass the test above.
+    """
+    for url in ("/api/sport-odds/m1/latest", "/api/sport-odds/m1/history"):
+        body = client.get(url).json()
+        assert body["skip_reason"] == "no_odds", url
+        assert body["skipped"] is True, url
+
+
+def test_the_store_propagates_a_read_failure(kernel_db):
+    """Both store reads raise instead of inventing an empty value."""
+    from sqlalchemy.exc import OperationalError
+
+    _drop_odds_table()
+    store = TraditionalOddsStore()
+    with pytest.raises(OperationalError, match="no such table"):
+        store.get_snapshots(match_id="m1")
+    with pytest.raises(OperationalError, match="no such table"):
+        store.get_latest_snapshot(match_id="m1")
+
+
+def test_a_failed_read_leaves_a_trace(client, caplog):
+    """The third zero is only useful if the failure is also recorded.
+
+    The route is now the layer that names it, so the route is where the record
+    has to exist -- a silent 200 with a reason word would still leave an
+    operator nothing to grep for.
+    """
+    _drop_odds_table()
+    with caplog.at_level(logging.WARNING, logger="app.api.routes.sport_odds"):
+        client.get("/api/sport-odds/m1/latest")
+
+    ours = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "app.api.routes.sport_odds" and record.levelno >= logging.WARNING
+    ]
+    assert ours, "the failed read produced no warning from the route"
+    assert any("read failed" in message and "m1" in message for message in ours), ours

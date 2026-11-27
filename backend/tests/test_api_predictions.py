@@ -640,3 +640,62 @@ class TestPredictEndpointFix:
         data = resp.json()
         assert "prediction_timestamp" in data
         assert data["prediction_timestamp"] is not None
+
+
+class TestRouteTimestampsCarryAnOffset:
+    """Audit 53.182: every timestamp these routes publish carries an offset.
+
+    ``KernelPrediction.created_at`` is a ``DateTime`` column **without**
+    ``timezone=True``, so it comes back naive however aware the write was. The
+    response used to carry ``2026-...T13:00:00`` with no marker, which
+    ``new Date(...)`` resolves as local time -- an eight-hour shift in UTC+8 and
+    no symptom other than a wrong clock.
+    """
+
+    def test_detail_prediction_timestamp_carries_an_offset(self, api_client):
+        """A live defect, not an invariant: this column really is naive on read."""
+        _patch_kernel_adapter(api_client)
+        _insert_prediction("wc-1")
+
+        row = api_client.get("/api/predictions/matches/wc-1").json()["prediction"]
+        stamp = row["prediction_timestamp"]
+        assert stamp.endswith("+00:00"), stamp
+
+    def test_slate_kickoff_carries_an_offset(self, api_client):
+        """Latent rather than live: all eight adapters publish an aware kickoff.
+
+        Asserted anyway, because the route is what must not depend on that. One
+        adapter parsing a date column into a naive datetime is all it takes, and
+        the symptom is a wrong clock rather than an error -- so nothing else in
+        this suite would notice.
+        """
+        _patch_kernel_adapter(api_client)
+        slate = api_client.get("/api/predictions/matches").json()
+        assert slate, "empty window: the loop below would pass vacuously"
+        for match in slate:
+            assert match["kickoff_utc"].endswith("+00:00"), match
+
+    def test_kickoff_is_converted_not_relabelled(self):
+        """Same instant, two spellings, one representation -- in both serializers.
+
+        A naive value and an aware ``+08:00`` value describing the same moment
+        must serialize identically. An inline ``.replace(tzinfo=utc)`` would pass
+        the naive half and turn the ``+08:00`` half into ``21:00+00:00`` -- the
+        same eight-hour error, now with a marker attached so nothing looks wrong.
+
+        Both carriers are asserted because they are two functions with two
+        bodies: fixing ``_match_detail`` left ``_match_summary`` byte-identical
+        to its old form, and a mutant proved no test could tell (audit 53.182).
+        """
+        from datetime import timedelta
+
+        from app.api.routes.predictions import _match_detail, _match_summary
+
+        naive = datetime(2026, 6, 20, 13, 0)
+        shifted = datetime(2026, 6, 20, 21, 0, tzinfo=timezone(timedelta(hours=8)))
+        assert shifted.astimezone(timezone.utc).replace(tzinfo=None) == naive
+
+        for kickoff in (naive, shifted):
+            raw = _make_raw_match("wc-1", kickoff=kickoff)
+            assert _match_detail(raw.match)["kickoff_utc"] == "2026-06-20T13:00:00+00:00"
+            assert _match_summary(raw, set())["kickoff_utc"] == "2026-06-20T13:00:00+00:00"

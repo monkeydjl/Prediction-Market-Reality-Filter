@@ -10,6 +10,7 @@ import {
   YAxis,
 } from "recharts";
 import {
+  READ_FAILED_FLAG,
   useTraditionalOddsHistory,
   useMarketSnapshots,
 } from "@/lib/sports-api";
@@ -150,9 +151,21 @@ export function TraditionalOddsChart({ matchId }: TraditionalOddsChartProps) {
   if (bothErrored)
     return <div data-testid="error">错误: Failed to fetch odds data</div>;
 
+  // The third zero (audit 53.180). `/sport-odds/{id}/history` answers 200 with
+  // `skip_reason: "read_failed"` when the odds table could not be read, and
+  // `"no_odds"` when it answered and holds nothing for this match. Both arrive
+  // as `series: []`, so without this the two are one word: 「暂无赔率数据」.
+  const tradReadFailed = trad.skip_reason === READ_FAILED_FLAG;
+
   const merged = mergeSeries(trad, poly);
   if (Object.keys(merged).length === 0)
-    return <div data-testid="empty">暂无赔率数据</div>;
+    return (
+      <div data-testid={tradReadFailed ? "odds-read-failed" : "empty"}>
+        {tradReadFailed
+          ? "无法读取传统赔率——这不是「暂无赔率数据」"
+          : "暂无赔率数据"}
+      </div>
+    );
 
   const summaryRows = Object.entries(merged)
     .map(([outcome, points]) => {
@@ -172,6 +185,14 @@ export function TraditionalOddsChart({ matchId }: TraditionalOddsChartProps) {
         传统赔率 vs Polymarket
         <RealtimePriceIndicator isConnected={isConnected} matchId={matchId} />
       </h3>
+      {tradReadFailed && (
+        // Polymarket still drew a line, so the chart is not empty -- but the
+        // traditional half is missing for a reason, and a reader comparing the
+        // two sources has to be told which one is absent and why.
+        <p data-testid="odds-read-failed-partial" className="text-xs text-neg">
+          传统赔率读取失败，下图只有预测市场这一侧
+        </p>
+      )}
       {summaryRows.length > 0 && (
         <div
           data-testid="odds-divergence-summary"

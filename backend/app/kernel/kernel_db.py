@@ -36,6 +36,8 @@ from sqlalchemy import (
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
+from app.utils.helpers import utc_isoformat
+
 logger = logging.getLogger(__name__)
 
 _engine = None
@@ -797,7 +799,7 @@ def get_prediction_history(sport: str | None = None,
                 "confidence": hist.confidence,
                 "feature_version": hist.feature_version,
                 "trigger": hist.trigger,
-                "created_at": hist.created_at.isoformat() if hist.created_at else None,
+                "created_at": utc_isoformat(hist.created_at),
                 "outcome": None,
             }
             if outcome is not None:
@@ -808,7 +810,7 @@ def get_prediction_history(sport: str | None = None,
                     "outcome_correct": outcome.outcome_correct,
                     "score_mae": outcome.score_mae,
                     "brier_score": outcome.brier_score,
-                    "finished_at": outcome.finished_at.isoformat() if outcome.finished_at else None,
+                    "finished_at": utc_isoformat(outcome.finished_at),
                 }
             items.append(item)
 
@@ -859,7 +861,7 @@ def get_prediction_history_by_match(match_id: str) -> dict:
                 "confidence": hist.confidence,
                 "feature_version": hist.feature_version,
                 "trigger": hist.trigger,
-                "created_at": hist.created_at.isoformat() if hist.created_at else None,
+                "created_at": utc_isoformat(hist.created_at),
                 "outcome": None,  # trajectory doesn't need outcome per record
             })
 

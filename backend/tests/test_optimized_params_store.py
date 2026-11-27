@@ -164,6 +164,27 @@ def test_apply_marks_candidate_as_applied(store):
     assert again["id"] == saved["id"]
 
 
+def test_timestamps_carry_an_offset(store):
+    """This converter pre-formats, so the assertion is on the string.
+
+    Unlike the kernel stores -- which keep a ``datetime`` and let pydantic format
+    it -- ``_row_to_dict`` here calls ``isoformat`` itself. That is why audit
+    53.182's AST rule could have seen it, and why the fix keeps the string
+    rather than switching the dict's type. SQLite hands both columns back naive,
+    so the bare call dropped the marker and ``/sport-optimization`` published a
+    stamp the browser reads as local time (audit 53.183).
+    """
+    saved = store.save_candidate(
+        sport="nba", competition="nba",
+        factor_weights={"elo": 0.50}, elo_params={"hfa": 110},
+        score=0.75, accuracy=0.70, brier_score=0.20, mae=0.30, sample_count=100,
+    )
+    assert saved["created_at"].endswith("+00:00"), saved["created_at"]
+
+    applied = store.apply(saved["id"], reseed_elo=False)["applied"]
+    assert applied["applied_at"].endswith("+00:00"), applied["applied_at"]
+
+
 def test_apply_archives_previous_applied(store):
     first = store.save_candidate(
         sport="nba", competition="nba",

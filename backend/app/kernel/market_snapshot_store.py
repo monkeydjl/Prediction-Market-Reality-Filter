@@ -3,9 +3,25 @@
 Snapshots are written by the scheduler capture job and read by the
 MarketSnapshotChart frontend. Separated from links to avoid rewriting link
 rows on every price tick.
+
+Raw reads (:meth:`MarketSnapshotStore.get_snapshots`,
+:meth:`MarketSnapshotStore.get_latest_snapshot`) propagate a query failure
+rather than answering an empty value (audit 53.180). ``[]`` and ``None`` are
+reachable answers on a healthy database -- every link starts with no rows --
+so a store that returns them on failure has said "this market has no prices"
+on the strength of a query that never reached the table. Containing that
+swallow here is what made ``market_liquidity.compute_match_liquidity_factor``'s
+promise ("a failed read escapes") unimplementable, and it silently re-armed the
+inverted alarm documented there: no reading -> no damp -> *higher* confidence.
+
+The layer that can name the failure names it, and :meth:`audit_summary` is such
+a layer because its body already carries an ``available`` switch; the routes
+whose bodies have no switch let the error out as a 500, which is what
+``tests/test_sport_market_routes.py`` already demands of a degraded links table.
 """
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Any
 
@@ -13,6 +29,10 @@ from app.kernel.kernel_db import (
     KernelMarketSnapshot,
     get_kernel_session,
 )
+from app.utils.failure_policy import READ_FAILED
+from app.utils.helpers import as_utc
+
+logger = logging.getLogger(__name__)
 
 
 def _utcnow() -> datetime:
@@ -20,6 +40,17 @@ def _utcnow() -> datetime:
 
 
 def _row_to_dict(row: KernelMarketSnapshot) -> dict[str, Any]:
+    """One snapshot row as the dict every reader and route consumes.
+
+    ``captured_at`` goes through :func:`app.utils.helpers.as_utc` because this
+    dict is where the value stops being a row and starts being a payload. No
+    caller formats it: ``/snapshots`` declares ``datetime`` in its
+    ``response_model``, ``/links/{id}/latest`` has no model at all and goes
+    through ``jsonable_encoder``, and ``audit_summary`` republishes the value as
+    ``first_captured_at``/``last_captured_at``. All three serialize a naive
+    datetime without an offset, so the offset has to be attached *here*, before
+    any of them see it -- see audit 53.183 for the measurement.
+    """
     return {
         "id": row.id,
         "link_id": row.link_id,
@@ -27,7 +58,7 @@ def _row_to_dict(row: KernelMarketSnapshot) -> dict[str, Any]:
         "price": row.price,
         "liquidity": row.liquidity,
         "volume": row.volume,
-        "captured_at": row.captured_at,
+        "captured_at": as_utc(row.captured_at),
     }
 
 
@@ -93,6 +124,9 @@ class MarketSnapshotStore:
         order otherwise, and this series is drawn as a line chart, where a
         reordered pair inside a tie is a visible artefact. Ascending id keeps
         a tie in insertion order.
+
+        An empty list means "this link has no snapshots" and nothing else; a
+        failed query propagates (audit 53.180).
         """
         session = get_kernel_session()
         try:
@@ -106,8 +140,6 @@ class MarketSnapshotStore:
                 .all()
             )
             return [_row_to_dict(r) for r in rows]
-        except Exception:
-            return []
         finally:
             session.close()
 
@@ -119,6 +151,9 @@ class MarketSnapshotStore:
         and the tiebreaker-less form returned the *first*-inserted row, so a
         tie silently reported the *older* capture as the newest. Descending
         id keeps "latest" meaning "most recently written".
+
+        ``None`` means "this link has no snapshot" and nothing else; a failed
+        query propagates (audit 53.180).
         """
         session = get_kernel_session()
         try:
@@ -132,8 +167,6 @@ class MarketSnapshotStore:
                 .first()
             )
             return _row_to_dict(row) if row is not None else None
-        except Exception:
-            return None
         finally:
             session.close()
 
@@ -163,12 +196,36 @@ class MarketSnapshotStore:
         ``flags`` instead. ``kernel_market_snapshots.captured_at`` is a nullable
         column, so this state is reachable even though the store's writer always
         fills it in; see section 53.47 of the audit.
+
+        ``read_failed`` is the third zero (audit 53.180). ``available: false``
+        alone could not tell a market with no snapshots from a snapshot table
+        that could not be read, and only the second of those is the server's
+        fault -- so this body is the one place in the family that can name it,
+        because it already speaks in switches. Every branch carries the key
+        explicitly: an absent key would read as "not asked", which is a fourth
+        meaning nobody needs.
         """
-        snaps = self.get_snapshots(link_id=link_id)
+        try:
+            snaps = self.get_snapshots(link_id=link_id)
+        except Exception as exc:
+            logger.warning(
+                "market_snapshot_store audit read failed [link_id=%s]: %s",
+                link_id,
+                type(exc).__name__,
+                exc_info=True,
+            )
+            return {
+                "link_id": link_id,
+                "available": False,
+                "read_failed": True,
+                "snapshot_count": 0,
+                "flags": [READ_FAILED],
+            }
         if not snaps:
             return {
                 "link_id": link_id,
                 "available": False,
+                "read_failed": False,
                 "snapshot_count": 0,
                 "flags": ["no_snapshots"],
             }
@@ -196,6 +253,7 @@ class MarketSnapshotStore:
             return {
                 "link_id": link_id,
                 "available": False,
+                "read_failed": False,
                 "snapshot_count": len(snaps),
                 "flags": ["no_prices"],
             }
@@ -213,6 +271,7 @@ class MarketSnapshotStore:
             return {
                 "link_id": link_id,
                 "available": False,
+                "read_failed": False,
                 "snapshot_count": len(priced),
                 "untimestamped_count": untimestamped_count,
                 "flags": ["untimestamped_snapshots"],
@@ -250,6 +309,7 @@ class MarketSnapshotStore:
         return {
             "link_id": link_id,
             "available": True,
+            "read_failed": False,
             "snapshot_count": len(priced),
             "untimestamped_count": untimestamped_count,
             "first_price": round(first_p, 4),

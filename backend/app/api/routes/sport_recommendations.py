@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 from fastapi import APIRouter, HTTPException, Query
 
 from app.core import config
+from app.utils.helpers import utc_isoformat
 
 if TYPE_CHECKING:
     # Kernel imports stay inside the helpers at runtime (lazy); these are here
@@ -40,7 +41,17 @@ def _service() -> SportRecommendationService:
 
 
 def _rec_to_dict(rec: SportActionableRecommendation) -> dict[str, Any]:
-    """Serialize a SportActionableRecommendation to a JSON-friendly dict."""
+    """Serialize a SportActionableRecommendation to a JSON-friendly dict.
+
+    Both timestamps go through ``utc_isoformat``: ``prediction_timestamp`` is
+    ``KernelPrediction.created_at`` and ``captured_at`` is
+    ``KernelSportEdge.captured_at``, and **both columns are ``DateTime`` without
+    ``timezone=True``** -- SQLite hands them back naive, so a bare
+    ``.isoformat()`` emitted ``2026-06-20T13:00:00`` with no marker and the
+    browser read it as local time (audit 53.182). The ``captured_at`` fallback
+    above is ``datetime.now(timezone.utc)``, which was the tell: one field could
+    be aware or naive depending on whether it fell back.
+    """
     return {
         "match_id": rec.match_id,
         "mapped_outcome": rec.mapped_outcome,
@@ -58,11 +69,11 @@ def _rec_to_dict(rec: SportActionableRecommendation) -> dict[str, Any]:
         "rationale": rec.rationale,
         "engine_name": rec.engine_name,
         "competition": rec.competition,
-        "prediction_timestamp": rec.prediction_timestamp.isoformat() if rec.prediction_timestamp else None,
+        "prediction_timestamp": utc_isoformat(rec.prediction_timestamp),
         "model_prob": rec.model_prob,
         "market_prob": rec.market_prob,
         "sources_count": rec.sources_count,
-        "captured_at": rec.captured_at.isoformat() if rec.captured_at else None,
+        "captured_at": utc_isoformat(rec.captured_at),
         "review_priority": getattr(rec, "review_priority", "normal"),
         "guardrail_flags": getattr(rec, "guardrail_flags", None),
         "policy_notes": getattr(rec, "policy_notes", None),

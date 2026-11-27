@@ -20,6 +20,7 @@ from app.kernel.kernel_db import (
     KernelFuturesSnapshot,
     get_kernel_session,
 )
+from app.utils.helpers import as_utc
 
 
 def _utcnow() -> datetime:
@@ -37,8 +38,8 @@ def _link_row_to_dict(row: KernelFuturesLink) -> dict[str, Any]:
         "market_question": row.market_question,
         "implied_prob": row.implied_prob,
         "verified": bool(row.verified),
-        "created_at": row.created_at,
-        "updated_at": row.updated_at,
+        "created_at": as_utc(row.created_at),
+        "updated_at": as_utc(row.updated_at),
     }
 
 
@@ -52,7 +53,7 @@ def _snapshot_row_to_dict(row: KernelFuturesSnapshot, *, team: str | None = None
         "price": row.price,
         "liquidity": row.liquidity,
         "volume": row.volume,
-        "captured_at": row.captured_at,
+        "captured_at": as_utc(row.captured_at),
     }
     if team is not None:
         d["team"] = team

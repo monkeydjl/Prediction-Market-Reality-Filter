@@ -21,6 +21,7 @@ from app.kernel.kernel_db import (
     KernelSportEdge,
     get_kernel_session,
 )
+from app.utils.helpers import as_utc
 
 
 def _utcnow() -> datetime:
@@ -41,7 +42,7 @@ def _row_to_dict(row: KernelSportEdge) -> dict[str, Any]:
         "spread": row.spread,
         "sources_count": row.sources_count,
         "stale": bool(row.stale),
-        "captured_at": row.captured_at,
+        "captured_at": as_utc(row.captured_at),
     }
 
 

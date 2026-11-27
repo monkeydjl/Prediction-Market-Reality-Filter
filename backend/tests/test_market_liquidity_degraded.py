@@ -1,4 +1,8 @@
-"""What an unreadable sport-market links table does to the liquidity factor.
+"""What an unreadable sport-market *table* does to the liquidity factor.
+
+Both reads on this path are covered: the links table (``_break_links``) and the
+snapshot store behind it (``_break_snapshots``, audit 53.180). Breaking only the
+first one left the store's own swallow as the last unmeasured door.
 
 ``compute_match_liquidity_factor`` wrapped two store reads in one
 ``except Exception: return None``. ``None`` is also its normal answer — "no
@@ -123,6 +127,22 @@ def _break_links() -> None:
     )
 
 
+def _break_snapshots() -> None:
+    """Break the *second* read on the same path, not the first.
+
+    ``_break_links`` takes out ``get_verified_links``, so every test above
+    never reaches ``MarketSnapshotStore`` at all. That left the store's own
+    ``except Exception: return [] / None`` as the last unmeasured door on this
+    path (audit 53.180): it answered ``None`` for a query that never reached
+    the table, which is the same "unmeasurable" branch -- and therefore the
+    same inverted alarm -- one store later.
+    """
+    _sql(
+        "ALTER TABLE kernel_market_snapshots "
+        "RENAME COLUMN implied_prob TO implied_prob_x"
+    )
+
+
 def test_a_thin_market_is_measured_and_damps_confidence(kernel_db):
     """The healthy reading, so the degraded ones below are comparable."""
     _seed_thin_market()
@@ -198,3 +218,66 @@ def test_a_swallowed_read_would_raise_confidence_above_the_thin_market(kernel_db
     _break_links()
     with pytest.raises(OperationalError):
         compute_confidence(PROBS, custom=inject_liquidity_into_custom({}, MATCH_ID))
+
+
+def test_an_unreadable_snapshots_table_escapes_the_liquidity_factor(kernel_db):
+    """The second store on the same path, measured on its own.
+
+    ``_break_links`` cannot reach this door: the links read raises first. With
+    only the links tested, ``MarketSnapshotStore.get_latest_snapshot``'s
+    ``except Exception: return None`` was still converting an unreachable query
+    into "this venue publishes no depth" -- the exact branch that makes the
+    factor ``None`` and awards the confidence bonus. Pre-fix this test answered
+    ``None`` (and ``inject_liquidity_into_custom`` returned ``{}``), so the
+    reading was "unmeasurable", not "unreadable".
+    """
+    _seed_thin_market()
+    assert compute_match_liquidity_factor(MATCH_ID) == EXPECTED_FACTOR
+
+    _break_snapshots()
+    with pytest.raises(OperationalError):
+        compute_match_liquidity_factor(MATCH_ID)
+
+
+def test_an_unreadable_snapshots_table_escapes_every_liquidity_door(kernel_db):
+    """Injection, the feature builders, and the confidence call that consumes it.
+
+    Same doors as the links-table test above; kept separate because the two
+    failures are thrown by different queries and a single test would only ever
+    exercise whichever ran first.
+    """
+    _seed_thin_market()
+    _break_snapshots()
+    match, raw = _match(), {"team": {"elo_home": 1520, "elo_away": 1480}}
+
+    with pytest.raises(OperationalError):
+        inject_liquidity_into_custom({}, MATCH_ID)
+    with pytest.raises(OperationalError):
+        BasketballFeatureBuilder().build(match, raw)
+    with pytest.raises(OperationalError):
+        MultiFeatureBuilder({"nba-": BasketballFeatureBuilder()}).build(match, raw)
+    with pytest.raises(OperationalError):
+        compute_confidence(PROBS, custom=inject_liquidity_into_custom({}, MATCH_ID))
+
+
+def test_a_readable_but_empty_snapshots_table_is_still_unmeasurable(kernel_db):
+    """The reverse direction, so "raises when broken" is not "raises".
+
+    A link with no snapshot is a cold-start state, not a fault: ``None`` and an
+    omitted key stay the answer there (audit 53.180's second zero).
+    """
+    link = SportMarketLinkStore().upsert_link(
+        match_id=MATCH_ID,
+        contract_id="KXNBA-BOS-LAL-BOS",
+        source="polymarket",
+        outcome_label="YES",
+        mapped_outcome="home_win",
+        link_method="rule",
+        link_confidence=0.95,
+        verified=True,
+        market_question="Will Boston beat the Lakers?",
+        implied_prob=0.6,
+    )
+    assert link["id"] is not None
+    assert compute_match_liquidity_factor(MATCH_ID) is None
+    assert inject_liquidity_into_custom({}, MATCH_ID) == {}

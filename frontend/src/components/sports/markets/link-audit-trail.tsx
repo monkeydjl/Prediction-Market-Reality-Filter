@@ -1,14 +1,12 @@
 "use client";
 
-import { useLinkAudit } from "@/lib/sports-api";
-
-const FLAG_LABELS: Record<string, string> = {
-  no_snapshots: "无快照",
-  no_prices: "无价格",
-  sparse: "样本稀疏",
-  large_move: "大幅移动",
-  high_drawdown: "高回撤",
-};
+import {
+  AUDIT_ZERO_TEXT,
+  auditFlagChips,
+  auditFlagLabel,
+  auditZero,
+  useLinkAudit,
+} from "@/lib/sports-api";
 
 function pct(value: number | undefined): string {
   if (value == null) return "—";
@@ -47,21 +45,34 @@ export function LinkAuditTrail({ linkId }: { linkId: number }) {
     );
   }
 
+  // One classifier for both audit doors (see lib/sports-api/audit-state.ts).
+  // `read_failed` has to be asked before `available`, because the flag is the
+  // only thing that can say "the question could not be answered".
+  const zero = auditZero(data);
+  const chips = auditFlagChips(data.flags);
+
   return (
     <div className="py-2" data-testid={`link-audit-${linkId}`}>
-      {data.flags && data.flags.length > 0 && (
+      {chips.length > 0 && (
         <div className="mb-2 flex flex-wrap gap-1">
-          {data.flags.map((f) => (
+          {chips.map((f) => (
             <span
               key={f}
               className="rounded border border-warn/40 bg-warn/10 px-1.5 py-0.5 text-[11px] text-warn"
             >
-              {FLAG_LABELS[f] ?? f}
+              {auditFlagLabel(f)}
             </span>
           ))}
         </div>
       )}
-      {data.available ? (
+      {zero === "read_failed" ? (
+        <p
+          className="text-xs text-neg"
+          data-testid={`link-audit-read-failed-${linkId}`}
+        >
+          {AUDIT_ZERO_TEXT.read_failed}（快照 {data.snapshot_count}）
+        </p>
+      ) : data.available ? (
         <dl className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
           <div>
             <dt className="text-muted-foreground">首价 → 末价</dt>
@@ -107,7 +118,7 @@ export function LinkAuditTrail({ linkId }: { linkId: number }) {
         </dl>
       ) : (
         <p className="text-xs text-muted-foreground">
-          该链接尚无可用价格序列（快照 {data.snapshot_count}）。
+          {AUDIT_ZERO_TEXT[zero]}（快照 {data.snapshot_count}）。
         </p>
       )}
     </div>

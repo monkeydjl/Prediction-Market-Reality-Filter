@@ -11,6 +11,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import sessionmaker
 
 from app.kernel.kernel_db import KernelOptimizedParams
+from app.utils.helpers import utc_isoformat
 
 
 def _get_engine(db_path: str) -> Engine:
@@ -57,8 +58,8 @@ class OptimizedParamsStore:
             "sample_count": row.sample_count,
             "trial_number": row.trial_number,
             "status": row.status,
-            "created_at": row.created_at.isoformat() if row.created_at else None,
-            "applied_at": row.applied_at.isoformat() if row.applied_at else None,
+            "created_at": utc_isoformat(row.created_at),
+            "applied_at": utc_isoformat(row.applied_at),
         }
 
     def save_candidate(

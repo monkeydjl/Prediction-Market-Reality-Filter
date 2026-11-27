@@ -22,12 +22,23 @@ from app.kernel.kernel_db import (
     get_kernel_session,
 )
 
+from app.utils.helpers import as_utc
+
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
 def _settlement_to_dict(row: KernelMarketSettlement) -> dict[str, Any]:
+    """One settlement row, timestamps carrying their UTC offset.
+
+    All three stamps are ``DateTime`` columns, so SQLite hands them back naive
+    even though the writer stored UTC. Handing the object out untouched let
+    ``jsonable_encoder`` render ``2026-06-20T13:00:00`` -- no marker -- and the
+    browser read that as local time. ``as_utc`` is the shared exit for exactly
+    this: the ``sport-settlements`` routes return this dict as the response body
+    (audit 53.184), so the conversion belongs here rather than in the route.
+    """
     return {
         "id": row.id,
         "match_id": row.match_id,
@@ -35,7 +46,7 @@ def _settlement_to_dict(row: KernelMarketSettlement) -> dict[str, Any]:
         "engine": row.engine,
         "competition": row.competition,
         "settlement_implied_prob": row.settlement_implied_prob,
-        "settlement_captured_at": row.settlement_captured_at,
+        "settlement_captured_at": as_utc(row.settlement_captured_at),
         "link_id": row.link_id,
         "model_prob": row.model_prob,
         "market_prob_at_detection": row.market_prob_at_detection,
@@ -46,12 +57,17 @@ def _settlement_to_dict(row: KernelMarketSettlement) -> dict[str, Any]:
         "direction_correct": row.direction_correct,
         "status": row.status,
         "skip_reason": row.skip_reason,
-        "match_finished_at": row.match_finished_at,
-        "processed_at": row.processed_at,
+        "match_finished_at": as_utc(row.match_finished_at),
+        "processed_at": as_utc(row.processed_at),
     }
 
 
 def _calibration_to_dict(row: KernelMarketCalibration) -> dict[str, Any]:
+    """One calibration row; ``last_updated`` is the same naive-column exit.
+
+    ``GET /sport-settlements/calibrations`` returns this dict directly, so
+    ``last_updated`` reached the wire without an offset before audit 53.184.
+    """
     return {
         "id": row.id,
         "engine": row.engine,
@@ -62,7 +78,7 @@ def _calibration_to_dict(row: KernelMarketCalibration) -> dict[str, Any]:
         "avg_brier": row.avg_brier,
         "avg_signed_error": row.avg_signed_error,
         "direction_accuracy": row.direction_accuracy,
-        "last_updated": row.last_updated,
+        "last_updated": as_utc(row.last_updated),
     }
 
 

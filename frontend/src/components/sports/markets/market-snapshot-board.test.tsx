@@ -125,4 +125,33 @@ describe("MarketSnapshotBoard", () => {
     expect(odds).toHaveTextContent("24.0%");
     expect(odds).toHaveTextContent("4.10");
   });
+
+  // ── The two zeros of /sport-odds/{id}/latest (audit 53.180) ───────────────
+  // Both arrive as `skipped: true` with an empty `outcomes`, and the block
+  // below renders nothing for either — right for "no odds today", a silent
+  // hole for "the table could not be read".
+
+  it("says so when the odds read failed, instead of showing nothing", () => {
+    apiMocks.useTraditionalOddsLatest.mockReturnValue({
+      data: { match_id: "m1", skipped: true, skip_reason: "read_failed", outcomes: [] },
+    });
+    render(<MarketSnapshotBoard />);
+
+    expect(screen.getByTestId("traditional-odds-read-failed")).toHaveTextContent(
+      "读取失败",
+    );
+    expect(screen.queryByTestId("traditional-odds-latest")).toBeNull();
+  });
+
+  it("stays quiet when the odds read succeeded and there are none", () => {
+    // The reverse control: if this went red, the board would be warning about
+    // a healthy match that simply has no bookmaker coverage yet.
+    apiMocks.useTraditionalOddsLatest.mockReturnValue({
+      data: { match_id: "m1", skipped: true, skip_reason: "no_odds", outcomes: [] },
+    });
+    render(<MarketSnapshotBoard />);
+
+    expect(screen.queryByTestId("traditional-odds-read-failed")).toBeNull();
+    expect(screen.queryByTestId("traditional-odds-latest")).toBeNull();
+  });
 });

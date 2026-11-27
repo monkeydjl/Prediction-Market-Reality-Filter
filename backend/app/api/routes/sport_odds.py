@@ -3,15 +3,24 @@
 All endpoints gated by PHASE7_SPORT_MARKET_BRIDGE_ENABLED (503 when false).
 Both are GET (read-only) — no require_write_key auth.
 Route order: static paths (/history) before dynamic /{match_id}/latest.
+
+``skip_reason`` carries one of two words: ``no_odds`` (the store answered, there
+is nothing) or ``read_failed`` (the store did not answer). A disabled bridge
+never reaches a body — it is a 503 from the gate — so the three meanings of an
+empty body stay separate (audit 53.180).
 """
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, HTTPException, Query
 
 from app.core import config
+from app.utils.failure_policy import READ_FAILED
 from app.utils.helpers import utc_isoformat
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     # Import-time only for the checker; the runtime import stays inside _store()
@@ -45,7 +54,25 @@ def get_history(
     """
     _ensure_enabled()
     store = _store()
-    snapshots = store.get_snapshots(match_id=match_id, mapped_outcome=mapped_outcome)
+    # An empty list here means the store answered and this match has no
+    # snapshots. A failed read is a different fact and gets a different word
+    # (audit 53.180); the store propagates it, and this is the only layer that
+    # both knows it happened and can say so in the body.
+    try:
+        snapshots = store.get_snapshots(match_id=match_id, mapped_outcome=mapped_outcome)
+    except Exception as exc:
+        logger.warning(
+            "sport_odds history read failed [match_id=%s]: %s",
+            match_id,
+            type(exc).__name__,
+            exc_info=True,
+        )
+        return {
+            "match_id": match_id,
+            "series": [],
+            "skipped": True,
+            "skip_reason": READ_FAILED,
+        }
     if not snapshots:
         return {"match_id": match_id, "series": [], "skipped": True, "skip_reason": "no_odds"}
 
@@ -73,7 +100,21 @@ def get_latest(match_id: str) -> dict:
     """Latest traditional odds snapshot for each outcome of a match."""
     _ensure_enabled()
     store = _store()
-    snapshots = store.get_snapshots(match_id=match_id)
+    try:
+        snapshots = store.get_snapshots(match_id=match_id)
+    except Exception as exc:
+        logger.warning(
+            "sport_odds latest read failed [match_id=%s]: %s",
+            match_id,
+            type(exc).__name__,
+            exc_info=True,
+        )
+        return {
+            "match_id": match_id,
+            "outcomes": [],
+            "skipped": True,
+            "skip_reason": READ_FAILED,
+        }
     if not snapshots:
         return {
             "match_id": match_id,

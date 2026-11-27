@@ -206,3 +206,21 @@ def test_a_degraded_read_surfaces_as_500_not_404(kernel_db, monkeypatch):
         res = client.get(url)
         assert res.status_code == 500, url
         assert res.status_code != 404, url
+
+
+def test_recommendation_timestamps_carry_an_offset(client):
+    """Both stamps survive the SQLite round trip with a marker.
+
+    ``KernelPrediction.created_at`` and ``KernelSportEdge.captured_at`` are both
+    ``DateTime`` without ``timezone=True``; ``_seed_prediction_and_edge`` writes
+    aware values and both reads hand them back naive, so before audit 53.182 the
+    body carried ``2026-...T13:00:00`` and ``new Date(...)`` read that as local
+    time. The ``captured_at`` fallback in the service is
+    ``datetime.now(timezone.utc)`` -- which is exactly how one field of this body
+    could be aware while the field beside it was not.
+    """
+    _seed_prediction_and_edge(match_id="m1", implied=0.50, adjusted_edge=0.072)
+    data = client.get("/api/sport-recommendations/m1").json()
+    for key in ("prediction_timestamp", "captured_at"):
+        assert data[key] is not None, key
+        assert data[key].endswith("+00:00"), (key, data[key])

@@ -2,6 +2,7 @@
 
 import { Fragment, useState } from "react";
 import {
+  READ_FAILED_FLAG,
   useLatestLinks,
   useMarketLinksByMatch,
   useTraditionalOddsLatest,
@@ -157,6 +158,16 @@ export function MarketSnapshotBoard() {
             </tbody>
           </table>
         </ScrollableTable>
+      )}
+
+      {odds?.skip_reason === READ_FAILED_FLAG && (
+        // The two zeros (audit 53.180). `/sport-odds/{id}/latest` says
+        // `no_odds` when it answered and `read_failed` when it could not; the
+        // block below renders nothing for either, which is right for the first
+        // (there is nothing to show) and a silent hole for the second.
+        <p className="text-xs text-neg" data-testid="traditional-odds-read-failed">
+          传统赔率读取失败，无法确认这场是否有赔率
+        </p>
       )}
 
       {odds && !odds.skipped && odds.outcomes.length > 0 && (

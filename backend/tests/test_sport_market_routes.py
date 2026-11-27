@@ -3,6 +3,9 @@
 All endpoints gated by PHASE7_SPORT_MARKET_BRIDGE_ENABLED (503 when false).
 /latest returns only verified links (fail-closed). /verify is the only write.
 """
+import re
+from datetime import datetime
+
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -337,3 +340,174 @@ def test_a_readable_empty_table_still_answers_200_and_empty(client, subtests):
             res = client.get(url)
             assert res.status_code == 200
             assert res.json() == expected
+
+
+# --- The snapshot store's own read, measured separately (audit 53.180) ---
+
+def _drop_snapshots_table():
+    """Real DDL via the live ORM session, same door as ``_drop_links_table``."""
+    from sqlalchemy import text
+    from app.kernel.kernel_db import get_kernel_session
+    session = get_kernel_session()
+    try:
+        session.execute(text("DROP TABLE kernel_market_snapshots"))
+        session.commit()
+    finally:
+        session.close()
+
+
+def test_a_degraded_snapshots_table_surfaces_as_500(error_client, subtests):
+    """The two bodies with no switch vocabulary still refuse to answer.
+
+    ``test_a_degraded_links_table_surfaces_as_500`` breaks the *links* read, so
+    on every one of its eight urls ``MarketSnapshotStore`` is never reached.
+    With only the links table broken, both urls below answered 200:
+    ``latest_snapshot: null`` per item and an empty ``series`` -- the same
+    sentence a match nobody had priced returns, on the strength of a query that
+    never reached the table. Neither body carries a word for "the read failed",
+    and inventing one on the closed ``MarketSnapshotSeries`` element type is the
+    expensive shape, so the error travels instead. This is also the convention
+    the rest of this module already follows.
+    """
+    from app.kernel.market_snapshot_store import MarketSnapshotStore
+    link = _seed_link(match_id="m1", contract_id="c1", verified=True)
+    MarketSnapshotStore().append_snapshot(link_id=link["id"], implied_prob=0.6, price=0.6)
+    _drop_snapshots_table()
+
+    for url in (
+        "/api/sport-markets/links/m1/latest",
+        "/api/sport-markets/snapshots/m1",
+    ):
+        with subtests.test(url=url):
+            assert error_client.get(url).status_code == 500
+
+
+def test_the_audit_doors_name_a_failed_snapshot_read(client, subtests):
+    """The one body in this family that *can* name it, does.
+
+    ``audit_summary`` already speaks in switches (``available`` + ``flags``), so
+    the third zero costs no response model and no generated type. Both audit
+    routes return that dict unmodelled, so the key reaches the caller.
+    """
+    link = _seed_link(match_id="m1", contract_id="c1", verified=True)
+    _drop_snapshots_table()
+
+    for url in (
+        f"/api/sport-markets/links/{link['id']}/audit",
+        "/api/sport-markets/matches/m1/audit",
+    ):
+        with subtests.test(url=url):
+            res = client.get(url)
+            assert res.status_code == 200
+            body = res.json()
+            entry = body["audits"][0] if "audits" in body else body
+            assert entry["read_failed"] is True
+            assert entry["available"] is False
+            assert entry["flags"] == ["read_failed"]
+
+
+def test_a_readable_but_empty_snapshots_table_keeps_its_own_word(client, subtests):
+    """The fix must not over-report: cold start is not a read failure.
+
+    Without this, "always answer read_failed" would pass the test above.
+    """
+    link = _seed_link(match_id="m1", contract_id="c1", verified=True)
+
+    for url in (
+        f"/api/sport-markets/links/{link['id']}/audit",
+        "/api/sport-markets/matches/m1/audit",
+    ):
+        with subtests.test(url=url):
+            body = client.get(url).json()
+            entry = body["audits"][0] if "audits" in body else body
+            assert entry["read_failed"] is False
+            assert entry["available"] is False
+            assert entry["flags"] == ["no_snapshots"]
+
+
+# --- every timestamp on the wire carries an offset (audit 53.183) ---
+#
+# Deliberately not key by key. These four bodies publish timestamps under six
+# different names (`captured_at`, `created_at`, `updated_at`,
+# `latest_snapshot.captured_at`, `first_captured_at`, `last_captured_at`), and a
+# key added later would be silently unguarded. So the rule is applied to *any*
+# ISO-8601-shaped string in the body, whatever it happens to be called.
+#
+# The stamp is parsed, not suffix-matched. FastAPI renders an aware `datetime`
+# object as `...Z`, but passes a pre-formatted `"+00:00"` string straight
+# through -- both spellings occur in this API, and `sport_odds` is the second
+# kind. Asserting `endswith("+00:00")` would pin the encoder's spelling rather
+# than the property under test.
+
+_ISO_SHAPED = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}")
+
+
+def _stamp_strings(payload):
+    """Every ISO-8601-shaped string anywhere in a decoded JSON body."""
+    if isinstance(payload, str):
+        return [payload] if _ISO_SHAPED.match(payload) else []
+    if isinstance(payload, dict):
+        return [s for value in payload.values() for s in _stamp_strings(value)]
+    if isinstance(payload, list):
+        return [s for value in payload for s in _stamp_strings(value)]
+    return []
+
+
+def _assert_every_stamp_is_zoned(payload, label):
+    """Fail if any timestamp in the body parses to a naive datetime."""
+    stamps = _stamp_strings(payload)
+    assert stamps, f"{label}: no timestamp in the body, so this proves nothing"
+    for stamp in stamps:
+        parsed = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+        assert parsed.tzinfo is not None, f"{label}: {stamp} carries no offset"
+
+
+def test_snapshots_body_timestamps_carry_an_offset(client):
+    """The response_model route: pydantic adds no offset the value does not have."""
+    from app.kernel.market_snapshot_store import MarketSnapshotStore
+
+    link = _seed_link(match_id="m1", contract_id="c1", verified=True)
+    MarketSnapshotStore().append_snapshot(
+        link_id=link["id"], implied_prob=0.6, price=0.6,
+    )
+    body = client.get("/api/sport-markets/snapshots/m1").json()
+    _assert_every_stamp_is_zoned(body["series"], "snapshots")
+
+
+def test_links_body_timestamps_carry_an_offset(client):
+    _seed_link(match_id="m1", contract_id="c1", verified=True)
+    body = client.get("/api/sport-markets/links/m1").json()
+    _assert_every_stamp_is_zoned(body["items"], "links")
+
+
+def test_latest_body_timestamps_carry_an_offset(client):
+    """One body, two converters: ``link.created_at`` beside ``snapshot.captured_at``.
+
+    Fixing only the snapshot converter would leave this body half-marked, which
+    is harder to reason about than either state on its own.
+    """
+    from app.kernel.market_snapshot_store import MarketSnapshotStore
+
+    link = _seed_link(match_id="m1", contract_id="c1", verified=True)
+    MarketSnapshotStore().append_snapshot(
+        link_id=link["id"], implied_prob=0.6, price=0.6,
+    )
+    body = client.get("/api/sport-markets/links/m1/latest").json()
+    _assert_every_stamp_is_zoned(body["items"], "latest")
+
+
+def test_audit_bodies_timestamps_carry_an_offset(client):
+    """Both audit doors republish the row stamp as first/last_captured_at."""
+    from app.kernel.market_snapshot_store import MarketSnapshotStore
+
+    link = _seed_link(match_id="m1", contract_id="c1", verified=True)
+    store = MarketSnapshotStore()
+    store.append_snapshot(link_id=link["id"], implied_prob=0.6, price=0.6)
+    store.append_snapshot(link_id=link["id"], implied_prob=0.7, price=0.7)
+
+    for url in (
+        f"/api/sport-markets/links/{link['id']}/audit",
+        "/api/sport-markets/matches/m1/audit",
+    ):
+        body = client.get(url).json()
+        _assert_every_stamp_is_zoned(body, url)

@@ -430,6 +430,14 @@ export interface ApplyParamsResult {
 export interface MarketPriceAudit {
   link_id: number;
   available: boolean;
+  /**
+   * The third zero (audit 53.180). `true` = the snapshot read failed, so
+   * nothing here is known; `false` = the read ran and there is genuinely
+   * nothing to draw. Optional because a body from an older backend omits it,
+   * and absent must read as *unknown* rather than as success — classify with
+   * `auditZero()` from `./audit-state`, never with `!a.read_failed`.
+   */
+  read_failed?: boolean;
   snapshot_count: number;
   first_price?: number;
   last_price?: number;

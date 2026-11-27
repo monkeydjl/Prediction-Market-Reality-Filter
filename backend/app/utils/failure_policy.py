@@ -15,6 +15,18 @@ FAIL_CLOSED_EMPTY_LIST = "fail_closed_empty_list"
 FAIL_CLOSED_NONE = "fail_closed_none"
 DETERMINISTIC_FALLBACK = "deterministic_fallback"
 
+# The third zero, named once (audit 53.180).
+#
+# A body that answers "nothing to show" can mean three different things, and a
+# client that cannot separate them acts on the wrong one: the feature is off
+# (``enabled: false``, or a 503 where the router gates), there is genuinely no
+# data (``available: false`` / ``skip_reason: "no_odds"``), or the read failed.
+# Only the third one is the server's fault, and only the third one means "ask
+# again later" -- so it gets its own word rather than reusing either of the
+# other two. One body uses one mechanism; this constant is the reason value
+# (``skip_reason``) and the boolean key (``read_failed``) for that meaning.
+READ_FAILED = "read_failed"
+
 
 def log_service_failure(
     logger: Logger,

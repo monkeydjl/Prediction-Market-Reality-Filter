@@ -5,7 +5,11 @@ import type { MarketPriceAudit } from "@/lib/sports-api/types";
 const apiMocks = vi.hoisted(() => ({
   useLinkAudit: vi.fn(),
 }));
-vi.mock("@/lib/sports-api", () => ({
+// Partial mock: the component also reads the `auditZero` / `auditFlagChips`
+// classifiers and `AUDIT_ZERO_TEXT` from the same barrel, so spreading the real
+// module keeps them while replacing only the hook.
+vi.mock("@/lib/sports-api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/sports-api")>()),
   useLinkAudit: apiMocks.useLinkAudit,
 }));
 
@@ -67,5 +71,65 @@ describe("LinkAuditTrail Δ direction colors", () => {
     expect(delta).not.toHaveClass("text-down");
     expect(delta).not.toHaveClass("text-pos");
     expect(delta).not.toHaveClass("text-neg");
+  });
+});
+
+// The three zeroes (audit 53.180). `available: false` used to print
+// 「尚无可用价格序列」 whether the store had answered or not; the backend now
+// says which, and this door has to stop merging them back together.
+describe("LinkAuditTrail zero states", () => {
+  beforeEach(() => {
+    apiMocks.useLinkAudit.mockReset();
+  });
+
+  it("names a failed read instead of calling it an empty series", () => {
+    mockAudit({
+      available: false,
+      read_failed: true,
+      snapshot_count: 0,
+      flags: ["read_failed"],
+    });
+    render(<LinkAuditTrail linkId={7} />);
+    const line = screen.getByTestId("link-audit-read-failed-7");
+    expect(line.textContent).toContain("这不是「尚无快照」");
+    expect(screen.queryByText(/尚无可用价格序列/)).toBeNull();
+    // A server fault is bad news, so the valence token, not a direction token.
+    expect(line).toHaveClass("text-neg");
+    expect(line).not.toHaveClass("text-up");
+    expect(line).not.toHaveClass("text-down");
+  });
+
+  it("does not additionally render the raw flag as a pill", () => {
+    mockAudit({ available: false, read_failed: true, flags: ["read_failed"] });
+    render(<LinkAuditTrail linkId={7} />);
+    expect(screen.queryByText("read_failed")).toBeNull();
+  });
+
+  it("keeps the old wording when the read really did succeed", () => {
+    mockAudit({
+      available: false,
+      read_failed: false,
+      snapshot_count: 0,
+      flags: ["no_snapshots"],
+    });
+    render(<LinkAuditTrail linkId={7} />);
+    expect(screen.getByText(/尚无可用价格序列/)).toBeInTheDocument();
+    expect(screen.getByText("无快照")).toBeInTheDocument();
+    expect(screen.queryByTestId("link-audit-read-failed-7")).toBeNull();
+  });
+
+  it("reports an unmarked body as unknown, not as empty", () => {
+    mockAudit({ available: false, snapshot_count: 3, flags: [] });
+    render(<LinkAuditTrail linkId={7} />);
+    expect(screen.getByText(/价格序列状态未知/)).toBeInTheDocument();
+    expect(screen.queryByText(/尚无可用价格序列/)).toBeNull();
+  });
+
+  it("still draws the numbers when the path is available", () => {
+    // Guard the guard: the new branch must not swallow the success one.
+    mockAudit({ read_failed: false });
+    render(<LinkAuditTrail linkId={7} />);
+    expect(screen.getByText("+9.0pp")).toBeInTheDocument();
+    expect(screen.queryByTestId("link-audit-read-failed-7")).toBeNull();
   });
 });

@@ -316,7 +316,7 @@ def predict_match(
             "explanation": [c.__dict__ for c in result.explanation],
             "betting_analysis": result.betting_analysis,
             "feature_version": result.feature_version,
-            "prediction_timestamp": result.prediction_timestamp.isoformat(),
+            "prediction_timestamp": utc_isoformat(result.prediction_timestamp),
         }
     except UnknownMatchError:
         # Ordered before the generic handler, which would otherwise report a
@@ -569,7 +569,7 @@ def _match_summary(raw: RawMatchData, predicted_ids: set[str]) -> dict:
         "away_team": m.away.name,
         "home_code": m.home.code,
         "away_code": m.away.code,
-        "kickoff_utc": m.kickoff_utc.isoformat() if m.kickoff_utc else None,
+        "kickoff_utc": utc_isoformat(m.kickoff_utc),
         "stage": m.stage,
         "has_prediction": m.match_id in predicted_ids,
     }
@@ -586,7 +586,7 @@ def _match_detail(match: MatchIdentity) -> dict:
         "away_team": match.away.name,
         "home_code": match.home.code,
         "away_code": match.away.code,
-        "kickoff_utc": match.kickoff_utc.isoformat() if match.kickoff_utc else None,
+        "kickoff_utc": utc_isoformat(match.kickoff_utc),
         "stage": match.stage,
         "round": match.round,
     }
@@ -606,9 +606,16 @@ def _prediction_to_dict(pred: KernelPrediction) -> dict:
     if isinstance(explanation, str):
         explanation = json.loads(explanation)
 
+    # Naive on the way out of SQLite: ``created_at`` is a ``DateTime`` column
+    # without ``timezone=True``, so the bare ``.isoformat()`` that used to sit
+    # here emitted ``2026-06-20T13:00:00`` with no offset. It is also the one
+    # site in this module the AST sweep cannot see -- the receiver is a local
+    # name, not an attribute (audit 53.182). The ``str`` branch predates this
+    # and stays: the annotation admits a pre-formatted value, which must not be
+    # run through ``utc_isoformat``, so the ``isinstance`` test earns its keep.
     timestamp: datetime | str | None = pred.created_at
     if isinstance(timestamp, datetime):
-        timestamp = timestamp.isoformat()
+        timestamp = utc_isoformat(timestamp)
 
     return {
         "engine": pred.engine,

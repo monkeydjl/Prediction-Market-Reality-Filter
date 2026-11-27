@@ -285,3 +285,234 @@ def test_get_latest_snapshot_empty(kernel_db):
     from app.kernel.market_snapshot_store import MarketSnapshotStore
     snap_store = MarketSnapshotStore()
     assert snap_store.get_latest_snapshot(link_id=99999) is None
+
+
+def test_the_snapshot_store_propagates_a_read_failure(kernel_db):
+    """Both raw reads raise instead of inventing an empty value.
+
+    ``[]`` and ``None`` are legal answers here -- every link starts with no
+    rows -- so a store that returns them on failure has answered "no prices"
+    from a query that never ran. Measured pre-fix through
+    ``market_liquidity.compute_match_liquidity_factor``, that re-armed the
+    inverted alarm documented in tests/test_market_liquidity_degraded.py.
+    """
+    from sqlalchemy import text
+    from sqlalchemy.exc import OperationalError
+
+    from app.kernel.market_snapshot_store import MarketSnapshotStore
+    from app.kernel.sport_market_link_store import SportMarketLinkStore
+
+    link = SportMarketLinkStore().upsert_link(
+        match_id="m1", contract_id="c1", source="polymarket",
+        outcome_label="YES", mapped_outcome="home_win",
+        link_method="rule", link_confidence=0.95, verified=True,
+        market_question="q", implied_prob=0.6,
+    )
+    snap_store = MarketSnapshotStore()
+    snap_store.append_snapshot(link_id=link["id"], implied_prob=0.6, price=0.6)
+    # Healthy read first, so the assertions below are about the break.
+    assert len(snap_store.get_snapshots(link_id=link["id"])) == 1
+
+    session = get_kernel_session()
+    try:
+        session.execute(text("DROP TABLE kernel_market_snapshots"))
+        session.commit()
+    finally:
+        session.close()
+
+    with pytest.raises(OperationalError, match="no such table"):
+        snap_store.get_snapshots(link_id=link["id"])
+    with pytest.raises(OperationalError, match="no such table"):
+        snap_store.get_latest_snapshot(link_id=link["id"])
+
+
+def test_audit_summary_names_a_failed_read_instead_of_calling_it_empty(kernel_db):
+    """``available: false`` alone could not tell the two zeros apart.
+
+    The audit body already carries a switch, so the third meaning gets a key
+    rather than a 500. ``snapshot_count`` stays 0 because nothing was counted,
+    not because the count *was* zero -- which is why the reason word is the
+    load-bearing part of this body.
+    """
+    from sqlalchemy import text
+    from app.kernel.market_snapshot_store import MarketSnapshotStore
+
+    session = get_kernel_session()
+    try:
+        session.execute(text("DROP TABLE kernel_market_snapshots"))
+        session.commit()
+    finally:
+        session.close()
+
+    out = MarketSnapshotStore().audit_summary(link_id=1)
+    assert out["read_failed"] is True
+    assert out["available"] is False
+    assert out["snapshot_count"] == 0
+    assert out["flags"] == ["read_failed"]
+
+
+def test_audit_summary_keeps_the_other_zero_apart(kernel_db):
+    """A readable, empty table keeps ``read_failed: false``.
+
+    Every branch carries the key explicitly, because an absent key would read
+    as "not asked" -- a fourth meaning.
+    """
+    from app.kernel.market_snapshot_store import MarketSnapshotStore
+
+    out = MarketSnapshotStore().audit_summary(link_id=99999)
+    assert out["read_failed"] is False
+    assert out["available"] is False
+    assert out["flags"] == ["no_snapshots"]
+
+
+# --- the row->dict converters hand out aware datetimes (audit 53.183) ---
+#
+# These values never pass a `.isoformat()` call site. A converter puts the
+# `datetime` object itself into the dict and pydantic (response_model) or
+# FastAPI's jsonable_encoder formats it afterwards, so neither the grep census
+# nor the AST rule in `test_row_timestamp_serialization.py` can see them: there
+# is no call to match. What can see them is the converter's own return value.
+#
+# Every one of these columns comes back from SQLite with no tzinfo, so a
+# converter that hands the column through emits `2026-06-20T13:00:00` and the
+# browser reads it as local time.
+
+AUDIT_183_AT = datetime(2026, 6, 20, 13, 0, tzinfo=timezone.utc)
+
+
+def _stamps_in(value):
+    """Every ``datetime`` reachable in a nested dict/list payload."""
+    if isinstance(value, datetime):
+        return [value]
+    if isinstance(value, dict):
+        return [s for v in value.values() for s in _stamps_in(v)]
+    if isinstance(value, (list, tuple)):
+        return [s for v in value for s in _stamps_in(v)]
+    return []
+
+
+def _raw_column(model, attr):
+    """Read one column straight from the row, bypassing every converter."""
+    session = get_kernel_session()
+    try:
+        row = session.query(model).first()
+    finally:
+        session.close()
+    assert row is not None, "the seed wrote no row to read back"
+    return getattr(row, attr)
+
+
+def _seed_market_snapshot():
+    from app.kernel.kernel_db import KernelMarketSnapshot
+    from app.kernel.market_snapshot_store import MarketSnapshotStore
+    from app.kernel.sport_market_link_store import SportMarketLinkStore
+
+    link = SportMarketLinkStore().upsert_link(
+        match_id="m1", contract_id="c1", source="polymarket", outcome_label="YES",
+        mapped_outcome="home_win", link_method="rule", link_confidence=0.9,
+        verified=True, market_question="q", implied_prob=0.5,
+    )
+    MarketSnapshotStore().append_snapshot(
+        link_id=link["id"], implied_prob=0.5, captured_at=AUDIT_183_AT,
+    )
+    payload = MarketSnapshotStore().get_snapshots(link_id=link["id"])
+    return payload, _raw_column(KernelMarketSnapshot, "captured_at")
+
+
+def _seed_sport_market_link():
+    from app.kernel.kernel_db import KernelSportMarketLink
+    from app.kernel.sport_market_link_store import SportMarketLinkStore
+
+    SportMarketLinkStore().upsert_link(
+        match_id="m1", contract_id="c1", source="polymarket", outcome_label="YES",
+        mapped_outcome="home_win", link_method="rule", link_confidence=0.9,
+        verified=True, market_question="q", implied_prob=0.5,
+    )
+    payload = SportMarketLinkStore().get_links(match_id="m1")
+    return payload, _raw_column(KernelSportMarketLink, "created_at")
+
+
+def _seed_edge():
+    from app.kernel.edge_store import EdgeStore
+    from app.kernel.kernel_db import KernelSportEdge
+
+    EdgeStore().append_edge(
+        match_id="m1", mapped_outcome="home_win", model_prob=0.65, market_prob=0.5,
+        raw_edge=0.15, trust=0.7, liquidity_factor=1.0, adjusted_edge=0.07,
+        spread=None, sources_count=1, stale=False, captured_at=AUDIT_183_AT,
+    )
+    payload = EdgeStore().get_latest_edges(match_id="m1")
+    return payload, _raw_column(KernelSportEdge, "captured_at")
+
+
+def _seed_traditional_odds():
+    from app.kernel.kernel_db import KernelTraditionalOddsSnapshot
+    from app.kernel.traditional_odds_store import TraditionalOddsStore
+
+    TraditionalOddsStore().append_snapshot(
+        match_id="m1", mapped_outcome="home_win", competition="epl",
+        implied_prob=0.5, decimal_odds=2.0, bookmaker="bk", bookmakers_count=1,
+        captured_at=AUDIT_183_AT,
+    )
+    payload = TraditionalOddsStore().get_snapshots(match_id="m1")
+    return payload, _raw_column(KernelTraditionalOddsSnapshot, "captured_at")
+
+
+def _seed_futures_links():
+    from app.kernel.futures_link_store import FuturesLinkStore
+    from app.kernel.kernel_db import KernelFuturesLink
+
+    store = FuturesLinkStore()
+    store.upsert_link(
+        competition="epl", season="2025-26", team="Arsenal", contract_id="c9",
+        source="polymarket", market_question="q", implied_prob=0.4, verified=True,
+    )
+    link_id = store.get_links("epl", "2025-26")[0]["id"]
+    store.append_snapshot(
+        link_id=link_id, implied_prob=0.4, price=None, liquidity=None, volume=None,
+        captured_at=AUDIT_183_AT,
+    )
+    payload = store.get_links("epl", "2025-26") + store.get_latest_snapshots(
+        "epl", "2025-26"
+    )
+    return payload, _raw_column(KernelFuturesLink, "created_at")
+
+
+SEEDS = [
+    ("market_snapshot", _seed_market_snapshot),
+    ("sport_market_link", _seed_sport_market_link),
+    ("edge", _seed_edge),
+    ("traditional_odds", _seed_traditional_odds),
+    ("futures", _seed_futures_links),
+]
+
+
+@pytest.mark.parametrize("label,seed", SEEDS, ids=[name for name, _ in SEEDS])
+def test_no_row_dict_converter_hands_out_a_naive_datetime(kernel_db, label, seed):
+    """Every timestamp a converter publishes is aware.
+
+    Three assertions, and the first two are what keep the third from passing
+    vacuously:
+
+    1. the column really does come back naive -- if SQLite ever round-trips the
+       offset, "aware in the dict" would prove nothing about the converter;
+    2. the payload really does contain a datetime -- a renamed key would
+       otherwise leave nothing to check;
+    3. none of them is naive.
+    """
+    payload, raw = seed()
+
+    assert raw.tzinfo is None, (
+        f"{label}: premise broken -- SQLite now round-trips the offset, so this "
+        "test no longer measures the converter"
+    )
+
+    stamps = _stamps_in(payload)
+    assert stamps, f"{label}: the payload carries no datetime at all"
+
+    naive = [s for s in stamps if s.tzinfo is None]
+    assert naive == [], (
+        f"{label}: these reach a route without an offset, and the browser reads "
+        f"them as local time: {naive}"
+    )
+

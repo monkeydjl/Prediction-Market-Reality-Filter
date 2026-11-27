@@ -14,6 +14,7 @@ from app.kernel.kernel_db import (
     KernelSportMarketLink,
     get_kernel_session,
 )
+from app.utils.helpers import as_utc
 
 
 def _utcnow() -> datetime:
@@ -33,8 +34,8 @@ def _row_to_dict(row: KernelSportMarketLink) -> dict[str, Any]:
         "verified": bool(row.verified),
         "market_question": row.market_question,
         "implied_prob": row.implied_prob,
-        "created_at": row.created_at,
-        "updated_at": row.updated_at,
+        "created_at": as_utc(row.created_at),
+        "updated_at": as_utc(row.updated_at),
     }
 
 

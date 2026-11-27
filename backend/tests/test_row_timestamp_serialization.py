@@ -5,7 +5,8 @@ SQLite hands ``DateTime`` columns back naive -- including columns declared
 ``2026-06-20T12:00:00`` with no marker, and a browser's ``new Date(...)`` reads
 that as *local* time. In UTC+8 that is an eight-hour error with no symptom other
 than a wrong clock. Audit 53.171 found the first site, 53.172 five more, 53.176
-eight in the two world-cup route modules, 53.177 six in ``sport_edges``.
+eight in the two world-cup route modules, 53.177 six in ``sport_edges``,
+53.182 six in ``predictions`` / ``sport_recommendations``.
 
 The rule lives here rather than next to any one module's tests, because it is a
 rule about *modules*, and because most of those call sites are unreachable from
@@ -13,6 +14,13 @@ the tests that cover the endpoints they sit in (seven of the 53.176 eight; all
 six of 53.177's are reachable, which is why they also have endpoint tests).
 ``MODULE_NAMES`` grows as each module is swept; a module that is not listed is
 not yet clean, and adding it to this tuple is the last step of sweeping it.
+
+A second ring exists, and it is where five sweeps stopped short: the module
+that *formats* the stamp need not be the module that *returns* it.
+``app/kernel/`` held seven such stamps behind live endpoints, and this rule
+could not reach any of them: it asserted an ``app.api.routes.`` prefix
+(audit 53.184). ``kernel_db`` is now listed below; ``market_settlement_store``
+cannot be, for a reason recorded next to ``MODULE_NAMES``.
 """
 from __future__ import annotations
 
@@ -27,7 +35,23 @@ MODULE_NAMES = (
     "app.api.routes.world_cup_analytics",
     "app.api.routes.world_cup_predictions",
     "app.api.routes.sport_edges",
+    "app.api.routes.predictions",
+    "app.api.routes.sport_recommendations",
+    # Second ring (audit 53.184): kernel_db builds the ``/predictions/history``
+    # body itself, so the route modules above never contained the code that
+    # formats its ``created_at``.
+    "app.kernel.kernel_db",
 )
+
+# Two modules are deliberately absent, and the difference matters:
+# ``market_settlement_store`` converts with ``as_utc`` and never calls
+# ``.isoformat()``, so this rule is green on it whatever the code does: listing
+# it would be an empty guard, not a clean one. Its protection is the wire
+# assertions in ``tests/test_kernel_timestamp_wire.py`` (53.184).
+# ``market_snapshot_store`` and ``backtest/match_loader`` have one ``.isoformat()``
+# each that is a *sort key* and never reaches a body; the rule would red on the
+# only correct line in the function (53.183/53.184).
+
 
 def _is_row_timestamp(name: str) -> bool:
     """True for the attribute names that carry a wall-clock instant.
@@ -60,20 +84,86 @@ def test_no_swept_module_formats_a_row_timestamp_bare() -> None:
     offenders = []
     for module_name in MODULE_NAMES:
         filename, tree = _source_of(module_name)
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
-                continue
-            func = node.func
-            if not (isinstance(func, ast.Attribute) and func.attr == "isoformat"):
-                continue
-            receiver = func.value
-            if isinstance(receiver, ast.Attribute) and _is_row_timestamp(receiver.attr):
-                offenders.append(f"{filename}:{node.lineno} ({receiver.attr})")
+        offenders.extend(_offenders_in(filename, tree))
 
     assert offenders == [], (
         "these call sites format a stored timestamp without an offset; use "
         "app.utils.helpers.utc_isoformat: " + ", ".join(offenders)
     )
+
+
+def _offenders_in(filename: str, tree: ast.Module) -> list[str]:
+    """Every bare ``.isoformat()`` on a timestamp-shaped receiver in ``tree``."""
+    offenders = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not (isinstance(func, ast.Attribute) and func.attr == "isoformat"):
+            continue
+        receiver = func.value
+        # Two receiver shapes, not one. ``row.created_at`` is an attribute;
+        # ``timestamp.isoformat()`` is a *local* that a serializer rebinds from
+        # a row column. The first version of this rule matched only attributes,
+        # so ``predictions._prediction_to_dict`` sat outside its reach while the
+        # module read as governed (audit 53.182). Matching names costs nothing:
+        # ``utc_isoformat`` on an already-aware value returns the same string, so
+        # an over-match is a no-op rewrite while a miss is an eight-hour error.
+        name = (
+            receiver.attr
+            if isinstance(receiver, ast.Attribute)
+            else receiver.id
+            if isinstance(receiver, ast.Name)
+            else None
+        )
+        if name is not None and _is_row_timestamp(name):
+            offenders.append(f"{filename}:{node.lineno} ({name})")
+    return offenders
+
+
+def test_the_rule_sees_both_receiver_shapes() -> None:
+    """Positive control for the rule itself, not for the modules it sweeps.
+
+    Once ``_prediction_to_dict`` was converted, the ``ast.Name`` branch became
+    unfalsifiable: deleting it changed no assertion anywhere in the suite, so
+    the rule would have quietly gone back to attributes only. This runs it over
+    a synthetic snippet where both shapes appear, which is the only way to keep
+    a scanner honest (same reason audit §53.4 requires a positive control on
+    every vocabulary scan).
+    """
+    source = (
+        "def serialize(row, timestamp):\n"
+        "    a = row.created_at.isoformat()\n"
+        "    b = timestamp.isoformat()\n"
+        "    c = row.name.upper()\n"
+        "    return a, b, c\n"
+    )
+    assert _offenders_in("probe.py", ast.parse(source)) == [
+        "probe.py:2 (created_at)",
+        "probe.py:3 (timestamp)",
+    ]
+
+
+def test_the_family_covers_every_shape_in_use() -> None:
+    """Pin the family's *definition*, not the sites swept with it.
+
+    ``_is_row_timestamp`` is a heuristic over names, so the only way to tell a
+    narrowed rule from a clean sweep is to assert membership directly: dropping
+    ``kickoff_utc`` from the set makes the offender test pass on every module
+    while silently ceasing to cover two real sites, and nothing else in the
+    suite would move.
+    """
+    for name in (
+        "created_at",
+        "captured_at",
+        "prediction_timestamp",
+        "timestamp",
+        "last_updated",
+        "kickoff_utc",
+    ):
+        assert _is_row_timestamp(name), name
+    for name in ("match_id", "sport", "upper", "captured", "isoformat"):
+        assert not _is_row_timestamp(name), name
 
 
 def test_every_swept_module_is_really_swept() -> None:
@@ -86,7 +176,7 @@ def test_every_swept_module_is_really_swept() -> None:
     """
     for module_name in MODULE_NAMES:
         filename, tree = _source_of(module_name)
-        assert module_name.startswith("app.api.routes."), module_name
+        assert module_name.startswith(("app.api.routes.", "app.kernel.")), module_name
         assert filename == f"{module_name.rsplit('.', 1)[-1]}.py", (
             f"{module_name} resolved to {filename}"
         )

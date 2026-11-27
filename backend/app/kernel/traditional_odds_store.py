@@ -5,7 +5,10 @@ Separate from MarketSnapshotStore because the field semantics differ:
 - Traditional odds have decimal_odds, bookmaker, bookmakers_count
 
 Follows the existing Store pattern: keyword-only args, session-per-call,
-_row_to_dict converter, fail-closed reads.
+_row_to_dict converter. Reads propagate a query failure instead of returning an
+empty value (audit 53.180): "no snapshots" is a real answer that callers act on,
+so it cannot double as the failure signal. The route owns the translation into
+an HTTP body, where the failure can be named.
 """
 from __future__ import annotations
 
@@ -16,19 +19,11 @@ from app.kernel.kernel_db import (
     KernelTraditionalOddsSnapshot,
     get_kernel_session,
 )
+from app.utils.helpers import as_utc
 
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
-
-
-def _ensure_utc(dt: datetime | None) -> datetime | None:
-    """Re-attach UTC tzinfo if stripped by SQLite DateTime storage."""
-    if dt is None:
-        return None
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt
 
 
 def _row_to_dict(row: KernelTraditionalOddsSnapshot) -> dict[str, Any]:
@@ -41,7 +36,7 @@ def _row_to_dict(row: KernelTraditionalOddsSnapshot) -> dict[str, Any]:
         "decimal_odds": row.decimal_odds,
         "bookmaker": row.bookmaker,
         "bookmakers_count": row.bookmakers_count,
-        "captured_at": _ensure_utc(row.captured_at),
+        "captured_at": as_utc(row.captured_at),
     }
 
 
@@ -91,7 +86,14 @@ class TraditionalOddsStore:
     def get_latest_snapshot(
         self, *, match_id: str, mapped_outcome: str | None = None
     ) -> dict[str, Any] | None:
-        """Most recent snapshot for a match, optionally filtered by outcome."""
+        """Most recent snapshot for a match, optionally filtered by outcome.
+
+        ``None`` means "this match has no snapshot" and nothing else: a failed
+        query propagates. Both are reachable states on a healthy database, and
+        the caller cannot tell them apart from the return value alone, so the
+        store must not try to speak for a failure it cannot describe
+        (audit 53.180; same rule as ``edge_store``'s module docstring).
+        """
         session = get_kernel_session()
         try:
             q = session.query(KernelTraditionalOddsSnapshot).filter_by(match_id=match_id)
@@ -99,15 +101,17 @@ class TraditionalOddsStore:
                 q = q.filter(KernelTraditionalOddsSnapshot.mapped_outcome == mapped_outcome)
             row = q.order_by(KernelTraditionalOddsSnapshot.captured_at.desc()).first()
             return _row_to_dict(row) if row is not None else None
-        except Exception:
-            return None
         finally:
             session.close()
 
     def get_snapshots(
         self, *, match_id: str, mapped_outcome: str | None = None
     ) -> list[dict[str, Any]]:
-        """All snapshots for a match (oldest first), optionally filtered by outcome."""
+        """All snapshots for a match (oldest first), optionally filtered by outcome.
+
+        An empty list means "no snapshots" and nothing else; a failed query
+        propagates (audit 53.180).
+        """
         session = get_kernel_session()
         try:
             q = session.query(KernelTraditionalOddsSnapshot).filter_by(match_id=match_id)
@@ -115,7 +119,5 @@ class TraditionalOddsStore:
                 q = q.filter(KernelTraditionalOddsSnapshot.mapped_outcome == mapped_outcome)
             rows = q.order_by(KernelTraditionalOddsSnapshot.captured_at.asc()).all()
             return [_row_to_dict(r) for r in rows]
-        except Exception:
-            return []
         finally:
             session.close()

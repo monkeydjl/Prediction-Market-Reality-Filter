@@ -22925,3 +22925,917 @@ return {..., "available": True, ...}
 按目录批量改就是第三次「按文件切」。
 
 **本节行数**：正文 **+165/−0**，连本段共 **+168/−0**；审计文档已入库 **+22774/−15**，加本节 **+22942/−15**。
+
+## §53.180 第三种零有了名字：`read_failed`
+
+§53.179 结尾留了一个二选一：「四个读方法：`except` 里走 `failure_policy.fail_closed_*`
+（**保留**现在的返回值），或改成抛出 + 路由把「读失败」翻译成 `available: false`。二选一，先定。」
+
+本节选了后者，并把「翻译成什么」定成一个词。
+
+### 名字：一个常量，两种载体
+
+`app/utils/failure_policy.py` 原本只有三个策略名（`fail_closed_empty_list` / `fail_closed_none`
+/ `deterministic_fallback`），它们描述的是**失败之后返回什么**，不是**失败该怎么被称呼**。
+所以第三个零没有名字——它只有一个形容词「不是那两种」。
+
+```python
+# The third zero, named once (audit 53.180).
+#
+# A body that answers "nothing to show" can mean three different things, and a
+# client that cannot separate them acts on the wrong one: the feature is off
+# (``enabled: false``, or a 503 where the router gates), there is genuinely no
+# data (``available: false`` / ``skip_reason: "no_odds"``), or the read failed.
+# Only the third one is the server's fault, and only the third one means "ask
+# again later" -- so it gets its own word rather than reusing either of the
+# other two. One body uses one mechanism; this constant is the reason value
+# (``skip_reason``) and the boolean key (``read_failed``) for that meaning.
+READ_FAILED = "read_failed"
+```
+
+一个常量，两种载体，因为两种 body 的语法不同：`sport-odds` 的两条路由本来就是
+`{"skipped": bool, "skip_reason": str | null}` 的**理由词**形状，第三个零进 `skip_reason`；
+`audit_summary` 本来就是 `{"available": bool, "flags": [...]}` 的**开关**形状，第三个零进
+`read_failed` + `flags`。**一个 body 只用一种机制**——两种都塞进去，读者第一次见到就会问
+「以哪个为准」。
+
+### 赔率那一对：store 抛，路由命名
+
+`TraditionalOddsStore` 的两个读方法去掉了 `except Exception`，模块 docstring 从
+「fail-closed reads」改成「Reads propagate a query failure」；两条 GET 各包一层：
+
+```python
+    try:
+        snapshots = store.get_snapshots(match_id=match_id, mapped_outcome=mapped_outcome)
+    except Exception as exc:
+        logger.warning(
+            "sport_odds history read failed [match_id=%s]: %s",
+            match_id,
+            type(exc).__name__,
+            exc_info=True,
+        )
+        return {"match_id": match_id, "series": [], "skipped": True, "skip_reason": READ_FAILED}
+```
+
+三条新测试钉住三件事，缺一条都能被一种更差的实现骗过：
+
+| 测试 | 骗不过的实现 |
+|---|---|
+| `test_a_failed_read_is_not_reported_as_no_odds` | 修复前的样子（两个字都叫 `no_odds`） |
+| `test_a_healthy_empty_read_still_says_no_odds` | 「永远回 `read_failed`」——**这是反向控制** |
+| `test_a_failed_read_leaves_a_trace` | 回对了词、但一条日志都没有（运维无从 grep） |
+
+第四条 `test_the_store_propagates_a_read_failure` 钉的是**层**：两个方法都 `pytest.raises
+OperationalError, match="no such table"`，把「读失败」固定在 store 而不是留给路由去猜。
+
+`tests/test_sport_odds_routes.py` 从 8 条涨到 12 条，全绿。
+
+### 快照那一对：不是「命名问题」，是一句写好了却做不到的承诺
+
+快照 store 的两个方法形状完全一样，但**它不算「同一处缺陷的第二份拷贝」**——
+`app/kernel/market_liquidity.py` 里已经有一段 docstring 在**声明**失败应当逃出去：
+
+> A failed *read* is not one of those cases and escapes. ``None`` is this
+> function's cold-start answer — both live tables hold zero rows — so
+> swallowing a query failure into it asserted "this market's depth is
+> unmeasurable" on the strength of a query that never reached the table. …
+> ``SportMarketLinkStore.get_verified_links`` already raises on an unreadable
+> table; this handler caught that and converted it straight back, so the inner
+> fix was unobservable through every door here.
+
+这段话写在 `compute_match_liquidity_factor` 上，说的是 **links** 表。它之所以成立，是因为
+`SportMarketLinkStore` 真的抛。而同一个函数往下三行的第二个读：
+
+```python
+        snap = snap_store.get_latest_snapshot(link_id=link["id"])
+        liquidities.append(snap.get("liquidity") if snap else None)
+```
+
+`get_latest_snapshot` 那时候 `except Exception: return None`。**同一句承诺，一半能兑现、一半
+不能**——而 `None` 恰好走回那个被否定的分支（无读数 ⇒ 无 damp ⇒ **置信度反向升高**）。
+
+所以这一对不是「把同样的字面再修一遍」，是**让一段已经写下的判据第一次真的可执行**。
+
+### 复现：修复前那三条门各自的 200
+
+把 `kernel_market_snapshots` 整张表删掉，两个吞异常都恢复，再打三条门（临时 kernel DB，
+链路、快照都经 store 自己的写路径种下）：
+
+```text
+/api/sport-markets/links/m1/latest   -> 200
+  {"match_id": "m1", "items": [{"contract_id": "c1", ..., "latest_snapshot": null}], "total": 1}
+
+/api/sport-markets/snapshots/m1      -> 200
+  {"match_id": "m1", "series": [{"contract_id": "c1", ..., "snapshots": [], "untimestamped_count": 0}]}
+
+/api/sport-markets/links/1/audit     -> 200
+  {"link_id": 1, "available": false, "snapshot_count": 0, "flags": ["no_snapshots"],
+   "match_id": "m1", "source": "polymarket", "verified": true}
+
+compute_match_liquidity_factor("m1") -> None        # 深度「测不出来」
+```
+
+四条读数，一条都不像故障。特别是后两条：`flags: ["no_snapshots"]` **是在陈述**「这个市场
+没有快照」，`None` **是在陈述**「这个场地不公布深度」。两句都是关于**数据**的断言，实际
+依据是一个**没到过表**的查询。
+
+`existing test 为什么没拦住`：`tests/test_sport_market_routes.py::test_a_degraded_links_table_surfaces_as_500`
+确实删表、确实断言 500——但它删的是 **links** 表，于是 `get_verified_links` 先抛，
+八条 url 一条都走不到快照 store。**一个坏掉的第一个读会遮住后面每一个读**，
+所以「这一族已经有降级测试了」不是覆盖面，是**另一个 door 的证据**。
+
+### 分派规则：有开关就用键，没开关就让错误走 500
+
+四个方法都改成抛出之后，七个调用点必须各自选一条路。本节定下的判据是：
+
+> **body 里已经有开关的，用键命名；没有开关的，让错误逃成 500。**
+> 中间那条路（给一个本来没有词汇的 body 临时发明一套）是最贵的，而且抄一次就会抄第二遍。
+
+按这条分派：
+
+| 调用点 | body 形状 | 选择 |
+|---|---|---|
+| `sport_odds` 两条 GET | 已有 `skipped` / `skip_reason` | `skip_reason: read_failed` |
+| `audit_summary` → 两条 audit 路由 | 已有 `available` / `flags` | `read_failed: true` + `flags: ["read_failed"]` |
+| `sport_markets.py:81` `/links/{id}/latest` | 只有 `items` | 500 |
+| `sport_markets.py:135` `/snapshots/{id}` | `MarketSnapshotSeries`（**闭合**元素类型） | 500 |
+| `edge_detector_service:143` | 服务层，`/detect` 无 catch | 逃出去 |
+| `market_liquidity:145` | 承诺已经写明「escape」 | 逃出去 |
+| `market_liquidity:190`（赔率 store 的第三个调用方） | 已有 `except Exception: logger.debug` | 逃到那个 handler，**从此留痕** |
+
+两处「不命名」的理由要写清楚，否则下一节会有人来「补齐」：
+
+1. `/snapshots/{match_id}` 的 `response_model=MarketSnapshotsResponse` 是**闭合**模型
+   （`BaseModel`，不是 `FlexibleResponse`）。加一个键要改 `MarketSnapshotSeries`
+   **元素类型**——§2 里那条「元素越宽漏声明越贵」。而这条路由本来就没有「为什么空」的词汇，
+   发明一套只是为了不 500。
+2. **这个模块的既有约定已经是 500**：`test_a_degraded_links_table_surfaces_as_500` 那一族
+   八条 url 全部断言 500。同一个文件里一半 500 一半 200 才是真的不一致。
+
+`market_liquidity:190` 那一处值得单独记一笔：它本来就有 `except Exception: logger.debug(...)`，
+所以行为**一个字节都没变**（失败时仍然 `return out`），只是从「什么都没留」变成「DEBUG 留痕」。
+§53.179 把它归在「内部消费、错得不显眼」里，本节确认它确实容忍空值，**容忍不等于可以沉默**。
+
+`audit_summary` 的五个 return 分支现在都显式带 `read_failed`。缺省的键会被读成「没问过」，
+那是第四种零，没人需要。
+
+### 变异：6 个，6 个 kill
+
+`.workbuddy/tmp/mutate_53180.py`，五个测试文件一起跑（基线 39 passed + 20 subtests）：
+
+| # | 变异 | 结果 | 变红的测试 |
+|---|---|---|---|
+| 1 | 快照 store `get_snapshots` 恢复 `return []` | RED 4 | degraded-500 / audit 命名 / store 传播 / audit 单测 |
+| 2 | 快照 store `get_latest_snapshot` 恢复 `return None` | RED 4 | degraded-500 / store 传播 / 两条 liquidity escape |
+| 3 | `audit_summary` 不再捕获（改为传播） | RED 2 | 两条 audit 命名测试 |
+| 4 | `audit_summary` 把冷启动叫成失败 | RED 2 | 两条**反向控制**测试 |
+| 5 | 赔率 store `get_snapshots` 恢复 `return []` | RED 3 | 三条赔率失败测试 |
+| 6 | 赔率路由去掉翻译 | RED 1 | `test_a_failed_read_is_not_reported_as_no_odds` |
+
+六个全部还原，`sha256` 逐一相同。**#4 是本节唯一一个「往反方向变异」的**：它证明
+`test_a_healthy_empty_read_still_says_no_odds` 与
+`test_a_readable_but_empty_snapshots_table_keeps_its_own_word` 不是摆设——没有它们，
+「一律回 `read_failed`」能通过 #1 和 #5 的全部断言。
+
+同时，变异 #1 与 #2 的**红名单不同**（#1 没有 liquidity 那两条，#2 没有 audit 那一条），
+这就是「N 个载体需 N 条守卫」在一个方法对上的实例：两个方法各自被不同的测试打到，
+合成一条 `except` 才是那个让它们同时变绿的写法。
+
+### 一处诚实的边界：`_break_links` 遮住了第二个 store
+
+删 links 表的那一族测试写了很久，也一直是绿的，但它**从未**执行到
+`MarketSnapshotStore` 的任何一行。这不是测试写得差，是**降级测试的固有形状**：
+断第一个读，后面的读就不再运行。
+
+补法不是改写旧测试，是**换一个被断的对象**：`_break_snapshots()` 只重命名快照表的一列
+（`implied_prob` → `implied_prob_x`），让第一个读成功、第二个读失败。同一个文件里的
+`_break_links()` 保持原样——两条路径各有一条证据，而不是一条证据兼任两条。
+
+### 过程账
+
+改 `TraditionalOddsStore` 时把两个方法体一次替换，`get_snapshots` 的收尾多出一个
+`finally: session.close()`，于是 `SyntaxError`。它没有在编辑时报错，而是过了几步
+**由另一个测试文件的 collection 报出来**——pytest 报的是被 import 的那个模块，
+所以文件名叫「测试收集失败」、真凶在 `app/` 里。
+
+教训只有一条，但很便宜：**改完先 `ast.parse` 一遍再跑测试**，一次四行脚本就能把
+「引号/缩进/重复块」这类错误挡在测试之前。本次之后补跑，四个改动文件 4/4 OK。
+
+### 未决
+
+- 路由层时间戳仍待收 **5 处**（`predictions.py:319/572/589`、`sport_recommendations.py:61/65`）。
+- 那 385 个 silent handler 里，本节只收了 4 个方法（+ 2 个路由 + 1 个 audit 方法）。
+  `services` 187 / `sports` 66 / `api` 48 各自需要判据。
+- `audit_summary` 的 `read_failed` 现在**没有消费者**：两条 audit 路由无 `response_model`，
+  前端也没有读它。§5 的收口要求「界面真的读它」，这一步没做。
+- `MarketSnapshotStore._row_to_dict` 的 `captured_at` 是裸 `row.captured_at`（不经
+  `_ensure_utc`），与 `edge_store` 是同一种形状；`/snapshots/{match_id}` 的
+  `MarketSnapshotPoint.captured_at: datetime | None` 由 pydantic 直接序列化，
+  **不走 `.isoformat()`，所以那一轮普查看不见它**。这是下一节的材料。
+
+**本节行数**：正文 **+206/−0**，连本段共 **+209/−0**；审计文档已入库 **+22942/−15**，加本节 **+23151/−15**。
+
+## §53.181 第三种零的消费侧：先找业主，再照抄三态
+
+§53.180 的未决第一条写的是：「`audit_summary` 的 `read_failed` 现在**没有消费者**：两条
+audit 路由无 `response_model`，前端也没有读它。§5 的收口要求「界面真的读它」，这一步没做。」
+
+本节收这条。**先找业主**——因为这个仓库里已经有人消费过第三种零了。
+
+### 业主：`calibration-panel.tsx` 早就有一套
+
+`ReliabilityData.error?: string` 的注释写着「Set to a stable category (currently only
+`"query_failed"`) when the store could not be read. Absent on success, including the
+genuinely-empty case.」消费侧对应三件事，一件不少：
+
+```text
+1. 措辞：无法读取可靠性数据（{error}）——这不是「暂无样本」
+2. 身份：data-testid="reliability-store-error"（与空态 "暂无样本" 分开）
+3. 行为：读不出来就不画图（empty axis reads as a result）
+```
+
+所以本节**不是发明一套 UI 约定，是照抄一条已经在跑、已经被测试钉住的约定**（§53.175 那条
+「写新断言之前先看有没有业主」的第三次应用）。
+
+### 四个 door，两个载体，一个分类器
+
+§53.180 把第三种零做成两种载体，消费侧就得按载体各读一次：
+
+| door | 载体 | 消费点 |
+|---|---|---|
+| `GET /sport-markets/links/{id}/audit` | `read_failed: boolean` | `link-audit-trail.tsx` |
+| `GET /sport-markets/matches/{id}/audit` | 同上 | `market-price-audit-panel.tsx` |
+| `GET /sport-odds/{id}/history` | `skip_reason` 理由词 | `TraditionalOddsChart.tsx` |
+| `GET /sport-odds/{id}/latest` | 同上 | `market-snapshot-board.tsx` |
+
+前两个 door 共用 `src/lib/sports-api/audit-state.ts` 里的一个分类器。这不是为了省三行，
+理由是后端 `market_snapshot_store.is_timestamped` 的同一条：**两个读者各自判一遍，迟早判得
+不一样**。这里已经有先例——同一个 body 的两个渲染点，一个翻译 flag 一个不翻译（见下）。
+
+### 三态：`true` / `false` / 缺失
+
+```ts
+export function auditZero(entry: { read_failed?: boolean }): AuditZero {
+  if (entry.read_failed === true) return "read_failed";
+  if (entry.read_failed === false) return "absent";
+  return "unknown";
+}
+```
+
+- `true` → 「无法读取价格序列——这不是「尚无快照」」
+- `false` → 「尚无可用价格序列」（原来的话，保留）
+- 缺失 → 「价格序列状态未知」
+
+第三态是 §5 那条「前端只认显式 `false`，缺省=未知」的直接落地。后端 53.180 起每个分支都显式给，
+所以正常路径上不会有第三态；它存在是因为**老响应 / 缓存响应没有这个键，而把缺失读成「读成功了」
+正好把这个 flag 要消掉的那句假话又装回去**。三种零三种话，一句都不共用。
+
+`read_failed` 与 `available` 的先后也是判据：**flag 压过 `available`**。前者陈述的是*查询*，
+后者陈述的是*结果*，只有查询能让结果变得不可知。变异 #2 就是把这条反过来（把「未知」读成
+「失败」），它让三条 Δ 颜色测试一起变红——因为健康面板会突然宣称读取失败、把数字整个藏掉。
+
+类型上写 `read_failed?: boolean` 而不是 `boolean`，也是同一个理由：必填会把「老后端」这种
+情况挤出可选域，逼着调用方用 `!a.read_failed` 把缺失当成功。注释里写明「classify with
+`auditZero()`, never with `!a.read_failed`」。
+
+### flags 不再做药丸，标签下沉到一个地方
+
+后端把 `read_failed` 同时放进 `flags`。如果原样渲染，同一个事实会以两种形态出现（药丸 + 句子），
+而且面板根本不翻译 flag，药丸上会是英文键 `read_failed`。所以 `auditFlagChips()` 把它滤掉：
+
+```text
+§53.180 之后的 flags：  ["read_failed"]
+修复前的面板：           药丸 "read_failed"（英文）+ 句子「无可用价格序列」
+本节之后：               句子「无法读取价格序列——这不是「尚无快照」」
+```
+
+顺带发现另一处漂移：`FLAG_LABELS` 只长在 `link-audit-trail.tsx` 里，六个键里**没有
+`untimestamped_snapshots`**——于是「行有时间戳、但一条都没有」这个状态在审计轨上显示英文原文，
+在面板上**全部** flag 都显示英文原文（面板从来没翻译过）。把标签表下沉到 `audit-state.ts`
+（`AUDIT_FLAG_LABELS` / `auditFlagLabel`），两个 door 一起用，未知 flag 仍回落到原始键
+（「编一个标签比一个陌生的键更糟」，同 `calibration-buckets.ts`）。
+
+### 赔率那两门：一个静默洞、一句假话、一个「少了一半不说」
+
+| 位置 | 修复前 | 现在 |
+|---|---|---|
+| `market-snapshot-board.tsx:162` `odds && !odds.skipped && …` | 两种跳过都**整块不渲染** | `read_failed` 单独一行「无法确认这场是否有赔率」 |
+| `TraditionalOddsChart.tsx` `merged` 为空 → 「暂无赔率数据」 | 读失败叫成安静的市场 | 「无法读取传统赔率——这不是「暂无赔率数据」」 |
+| 同上，但 Polymarket 有数据 | 图照画，**传统那半边缺失不说** | 图上方一行「传统赔率读取失败，下图只有预测市场这一侧」 |
+
+第三种最阴：图不是空的，所以「空态」那条修法盖不住它。比较少了一半而不声明，读数的人会把
+「只有一条线」当成「庄家没报价」。
+
+### 门与规模
+
+`tsc --noEmit` / `tsc -p tsconfig.test.json --noEmit` / `eslint src` 三道全 0；全量
+`vitest run` **132 文件 / 827 条**全绿。代码 **12 个文件 +571/−67**（10 改 + 2 新），
+新增测试 **26 条**：`audit-state.test.ts` 11（新文件）、`link-audit-trail` 3→8、
+`market-price-audit-panel` 3→7、`TraditionalOddsChart` 5→9、`market-snapshot-board` 5→7。
+
+### 变异：9 个，9 个 kill
+
+`.workbuddy/tmp/mutate_53180_fe.py`，五个测试文件一起跑（基线 **42 条**全绿）：
+
+| # | 变异 | RED | 变红的测试 |
+|---|---|---|---|
+| 1 | 缺失键读成 `absent` | 4 | 两条 audit-state + trail「状态未知」+ panel「状态未知」 |
+| 2 | 缺失键读成 `read_failed` | 8 | 上四条 + 三条 Δ 颜色 + 看板审计轨 |
+| 3 | `auditFlagChips` 不再过滤 | 3 | 两处「不再渲染英文药丸」+ 单测 |
+| 4 | trail 丢掉 `read_failed` 分支 | 1 | 「names a failed read…」 |
+| 5 | chart 空态把两种零合回一句 | 1 | 「names a failed odds read…」 |
+| 6 | chart 去掉「只有一侧」提示 | 1 | 「warns that the comparison is one-sided…」 |
+| 7 | board 去掉赔率失败行 | 1 | 「says so when the odds read failed…」 |
+| 8 | board 对**任何**跳过都告警 | 1 | 反向控制「stays quiet when…」 |
+| 9 | 共用的 flag 标签被绕过 | 3 | 「无快照」+ 看板「大幅移动」+ 标签单测 |
+
+九个全部还原，`sha256` 逐一相同。#2 与 #8 是本节的两条**反向**变异：一个把未知读成失败，
+一个对健康数据告警。没有它们，「一律报失败」能通过 #1/#5/#7 的全部断言，而界面会从此对每场
+没有赔率的比赛喊狼来了。
+
+### 过程账：设施看不见的东西会被当成「没有」
+
+两条，形状相同。
+
+**一、vitest 的 `×` 被 ANSI 包着。** 变异脚本第一版解析 `FAIL … > name`，跑完九个变异全部
+`green=False`、`red=0`——**变红了，但一个名字都没抓到**。原因不是解析写错，是颜色码：
+管道里 `×` 后面跟的是 `\x1b[39m` 而不是空格。修了正则又踩第二次：`text=True` 在 Windows 上
+用本地码页解码 UTF-8 输出，`×` 变成两个乱码字符。两道都修（先剥 ANSI，再强制 `encoding="utf-8"`）
+才拿到名字。**「0 个失败」和「没解析到失败」长得一模一样**，这正是 §4.2 那张空头表里的形状，
+只不过这次空头长在变异脚本自己身上。
+
+**二、`vi.mock` 全量替换连新导出的分类器一起替掉了。** 组件现在从 barrel 里同时拿 hook 和
+`auditZero`，而 `link-audit-trail.test.tsx` 原来的 mock 是**整体替换**：
+
+```ts
+vi.mock("@/lib/sports-api", () => ({ useLinkAudit: apiMocks.useLinkAudit }));
+```
+
+改成共用分类器后 8 条测试一起红，报的是「No `auditZero` export is defined on the mock」。
+修法是 `...(await importOriginal())`（同目录两个面板测试本来就是这么写的）。
+教训：**测试替身的粒度要跟着 import 的粒度走**——组件开始用同一个模块的第二个导出时，
+整体替换就不再是「只换掉网络那一层」。
+
+### 未决
+
+- `AUDIT_FLAG_LABELS` 是**枚举式**守卫：后端新增第七个 flag 时前端会显示英文键。方向是安全的
+  （不静默、不谎报），但「新增 flag」这件事没有跨语言守卫。
+- `MarketPriceAudit` 仍是手写 interface——两条 audit 路由都没有 `response_model`（§2 的那笔
+  大债的一部分），所以 `read_failed` 进不了生成物。
+- `available: false` 的三种成因（`no_snapshots` / `no_prices` / `untimestamped_snapshots`）
+  在 UI 上仍是同一句话「尚无可用价格序列」+ 一个药丸。要不要分成三句话，取决于这几种状态是否
+  需要不同的处置动作；本节只保证它们都不再说成「读失败」。
+- 赔率侧 `sport-odds` 的两条 GET 现在会**抛**（§53.180），`/snapshots/{id}` 与 `/links/{id}/latest`
+  也会 500：这三处的消费者已经各自有 error 分支（`snapshot-error` / `odds-chart` 的 error），
+  本节只补了 200 带词的两种。
+
+**本节行数**：正文 **+153/−0**，连本段共 **+156/−0**；审计文档已入库 **+23151/−15**，加本节 **+23307/−15**。
+
+
+## §53.182 剩下的六处：一处两套工具都看不见
+
+§53.181 收尾登记的欠账写的是「路由层剩 5 处时间戳：`predictions.py:319/572/589`、
+`sport_recommendations.py:61/65`」。开工前按 §53.172 立的判据重扫这两个**模块**（判据：**这个值进不进
+HTTP 响应**；进 ⇒ 可观察 ⇒ 修），得到 **6 处**。多出来的那处不在任何清单上：
+
+```text
+predictions.py:611   timestamp = pred.created_at
+                     if isinstance(timestamp, datetime):
+                         timestamp = timestamp.isoformat()
+```
+
+它同时躲开两套工具，而躲开的方式是**同一个**：
+
+| 工具 | 匹配什么 | 为什么看不见 |
+|---|---|---|
+| §53.172 的普查（`grep -rn "\.isoformat()"` 后按字段名分类） | 「字段名 + `.isoformat()`」相邻 | 字段名与调用隔着两行赋值和一个 `isinstance` |
+| `test_row_timestamp_serialization.py` 的 AST 规则 | `receiver.attr` 命中时间戳家族 | `receiver` 是 `ast.Name`（局部变量 `timestamp`），不是 `ast.Attribute` |
+
+**一条 `isinstance` 把同一个缺陷挡在两套视野之外。** 不是巧合：两套工具都按「属性访问」建模，因为
+前面四节的 20 处全是 `row.column.isoformat()`。第一处改用局部变量中转的写法就掉出了集合。
+
+### 六处不是一类缺陷
+
+按「读回来的值是不是真的 naive」分，而不是按位置分：
+
+| 位置 | 读的列 | 值从哪来 | 性质 |
+|---|---|---|---|
+| `predictions.py:611` `_prediction_to_dict` | `KernelPrediction.created_at` | SQLite 回读 | **现行** |
+| `sport_recommendations.py:61` | 同上（`_get_metadata` 取 `pred.created_at`） | SQLite 回读 | **现行** |
+| `sport_recommendations.py:65` | `KernelSportEdge.captured_at` | SQLite 回读 | **现行** |
+| `predictions.py:319` `predict_match` | `PredictionResult.prediction_timestamp` | 各引擎 `datetime.now(timezone.utc)` | 潜伏 |
+| `predictions.py:572` `_match_summary` | `MatchIdentity.kickoff_utc` | 八个适配器全带 `tzinfo` | 潜伏 |
+| `predictions.py:589` `_match_detail` | 同上 | 同上 | 潜伏 |
+
+三处「潜伏」是**今天输出正确、明天可能错**：它们不靠 helper 也发得出 `+00:00`，因为上游每一处都显式
+写了 `timezone.utc`。留着它们的理由不是「现在有 bug」，而是 §53.172 那条——**同一个形状出现两次就不是
+笔误，是缺一个共用出口**；何况 `kickoff_utc` 本来就在规则的时间戳家族里，模块一旦进 `MODULE_NAMES`
+就会被规则打红。
+
+### 修前取证
+
+同一段脚本（临时库 → 写 aware → 读回来 → 序列化），只打印不断言：
+
+```text
+wrote            : 2026-06-20T13:00:00+00:00
+column read back : datetime.datetime(2026, 6, 20, 13, 0) tzinfo: None
+_prediction_to_dict['prediction_timestamp'] -> 2026-06-20T13:00:00
+_rec_to_dict['prediction_timestamp']        -> '2026-06-20T13:00:00'
+_rec_to_dict['captured_at']                 -> '2026-06-20T13:00:00'
+```
+
+写进去带 `+00:00`，读出来 `tzinfo: None`，发出去没有标记。浏览器把 `2026-06-20T13:00:00` 当**本地
+时间**——UTC+8 下就是八小时，且除了时钟不对没有任何症状。
+
+`captured_at` 那处还多一层：服务层的兜底是 `datetime.now(timezone.utc)`，所以**同一个 body 的两个字段
+可以一个 aware 一个 naive**，取决于有没有走兜底。这是「缺共用出口」最清楚的形状。
+
+### 改法：只换出口，不碰语义
+
+六处全部换成 `app.utils.helpers.utc_isoformat`（`predictions.py` 早已 import、已有四处调用；
+`sport_recommendations.py` 新增 import）。三处 `x.isoformat() if x else None` 的手写空值分支删掉——
+helper 对 `None` 返回 `None`，两种写法等价，留着手写分支反而暗示 helper 不管空值。
+
+`_prediction_to_dict` 保留 `isinstance(timestamp, datetime)`：注解是 `datetime | str | None`，
+`utc_isoformat` 只接受 `datetime`，已格式化的字符串不该被再走一遍。
+
+「为什么是 `astimezone` 而不是 `replace`」§53.172 已经论证（今天在 SQLite 上等价、换驱动就错八小时），
+这里不重复，只把它变成**路由层也有守卫**——见变异 2、3。
+
+### 八个变异：五处靠断言，一处只靠规则
+
+两套 suite 分开跑：A = 行为（`test_api_predictions.py` + `test_sport_recommendation_routes.py`），
+B = A + 规则（`test_row_timestamp_serialization.py`）。
+
+| 变异 | A（行为） | B（+规则） | 谁红的 |
+|---|---|---|---|
+| 1 `_prediction_to_dict` 撤回调 | **RED（1）** | RED（2） | 详情端点时间戳 + 规则 |
+| 2 `_match_detail` 撤回调 | **RED（1）** | RED（2） | `test_kickoff_is_converted_not_relabelled` + 规则 |
+| 3 `_match_summary` 撤回调 | **RED（1）** | RED（2） | 同上 + 规则 |
+| 4 `predict_match` 撤回调 | **GREEN（0）** | RED（1） | **只有规则** |
+| 5 推荐 `prediction_timestamp` 撤回调 | **RED（1）** | RED（2） | 推荐端点时间戳 + 规则 |
+| 6 推荐 `captured_at` 撤回调 | **RED（1）** | RED（2） | 同上 + 规则 |
+| 7 守卫不再看局部变量 | GREEN（0） | **RED（1）** | 正向控制 |
+| 8 家族去掉 `kickoff_utc` | GREEN（0） | **RED（1）** | 家族自检 |
+
+八个变异全部被杀，八次还原后 sha256 与改前逐字节一致。
+
+第 4 行是本节唯一「行为层永远绿」的：`predict_match` 的时间戳来自引擎的
+`datetime.now(timezone.utc)`，撤掉 helper 之后输出字符串**逐字相同**，任何断言都分不出来。它还能被杀，
+只因规则看的是**调用形状**而不是输出。这就是留那三处「潜伏」的正当理由——**规则覆盖得了断言覆盖不到
+的地方**，反过来不成立。
+
+（第 3 行第一次跑是 GREEN：我当时只断言了 `_match_detail` 的输出，而 `_match_summary` 是另一个函数
+体、另一份实现。补上对称断言后才红。**同一个语义的两个载体要两条守卫**，这是 §4.2 的老规矩，本节又
+踩了一次——而且是靠变异发现的，不是靠读代码发现的。）
+
+### 守卫扩宽，以及扩宽自身带来的两个空头
+
+规则改了两处：
+
+1. `_offenders_in` 同时接受 `ast.Attribute` 与 `ast.Name` 的接收者。多匹配的代价是零：
+   `utc_isoformat` 对 already-aware 的值返回同样的字符串，所以**误报只是一次无操作的改写，漏报才是
+   八小时**。
+2. `MODULE_NAMES` 加进这两个模块（3 → 5），模块级测试 `test_every_swept_module_is_really_swept`
+   自动要求它们真的调用了 helper。
+
+扩宽立刻带来第一个空头：改完之后 `predictions.py` 已无裸调用，**删掉 `ast.Name` 分支不会有任何断言
+变红**。于是补 `test_the_rule_sees_both_receiver_shapes`——在一段合成源码上跑规则，两种接收者各命中
+一次，`row.name.upper()` 不命中。这是 §4.1「扫描必须有正向控制」的同一条要求。
+
+第二个空头在家族本身：把 `kickoff_utc` 从 `_is_row_timestamp` 里拿掉，所有模块都不再违规，
+**offender 测试反而更绿**。补 `test_the_family_covers_every_shape_in_use`，钉住六个正向、五个反向。
+
+### 诚实的三条
+
+- **`MODULE_NAMES` 仍是愿望清单**：从元组里删掉一个模块，没有任何断言会红。它只保证「列进来的干净」，
+  不保证「该列的列进来了」。要变成后者得让规则默认全仓，那需要先把余下所有路由模块清干净——
+  §53.176 留的那笔账。
+- **家族式匹配仍是启发式**：`foo_at.isoformat()` 若 `foo_at` 是 `datetime.now(timezone.utc)`，规则会
+  误报，而改成 helper 不改变输出。方向安全，但「命中」不等于「缺陷」，所以它只用来拦新增。
+- **`_prediction_to_dict` 的 `str` 分支没有守卫**：注解允许字符串，但没有任何测试传过字符串。本节既
+  没删它（不知道有没有外部生产者）也没为它加测试（那会多一个与本缺陷无关的决定），只把这一条写下来。
+- **本节自己的探针也「没验就写」过一次**：harness 的头注释写「`test_row_timestamp_serialization.py`
+  是 `w/lf`」。实测 `git ls-files --eol` 是 **`i/lf w/crlf`**，与全仓其余文件一致——那句话是从预期写的，
+  不是从字节读的。已更正。**同一节里，「值进不进响应」我验了，「行尾是什么」我没验**——验了什么、没验
+  什么，得分开说。
+
+### 门
+
+| 门 | 结果 |
+|---|---|
+| `ruff check .` | All checks passed |
+| `mypy app/` | **Success: no issues found in 334 source files** |
+| `generate_types --check` | `generated-types.ts is up to date` |
+| `lint_scan_guard.py` | `[OK] ... 851 .py files, both directions` |
+| `pytest`（全量） | **`tests=9591 failures=0 errors=0 skipped=11`**，6986 passed、2594 subtests（11m51s） |
+
+全量比上一节多 6 条用例，正是本节新增的 6 条（3 + 1 + 2）。
+
+### 全量跑出来的一个 §53.181 尾巴
+
+第一次全量跑红了一条，不在本节：`test_readme_inventory.py::test_frontend_test_file_count_matches_the_tree`
+——§53.181 新增了 `audit-state.test.ts`，README 里「131 个测试文件」没跟着改，实测 132。
+
+它值得记的不是「改个数字」，而是**这条守卫的位置**：README 的计数由**后端**测试核对，前端那套
+（`tsc` / `tsc -p tsconfig.test.json` / `eslint` / `vitest`）全绿也发现不了它，只有跑后端全量才会红——
+而全量要 12 分钟。§53.181 的门表正是这四道前端门，没有后端全量：那一节新增了 `audit-state.test.ts`，
+而「后端 9585 条全绿」是 §53.180 的数字，跑在那个文件落盘之前。两次「绿」各自为真，合起来不覆盖这一条。
+
+按只追加的规矩，§53.181 那段不改；这里改 `README.md` 131 → 132（+1/−1），并把这条记成它的尾巴——
+**一份清单放在 A 侧、被核对的是 B 侧的文件，A 侧的全部测试都看不见它**。
+
+
+### 未决
+
+- **全仓同形调用没扫完**。本节只扫了这两个模块；按 §53.172 的口径，剩下的在非路由模块里。
+  `MarketSnapshotStore._row_to_dict` 的裸 `captured_at` 已被 §53.181 记为「pydantic 序列化，
+  普查与本节规则都看不见」——那是**第三重**不可见：值没经过任何 `.isoformat()` 调用点。
+- **`MODULE_NAMES` 要吃下全部路由模块**，先得清掉 §53.176 列的欠账。
+- **变异 harness 自己出过一次事故**，值得记：第一次跑用的是前台命令，被默认超时 SIGTERM，
+  `path.write_bytes(original)` 排在 pytest 调用之后、没有 `finally`，于是变异体 4 的裸调用**留在了
+  `predictions.py` 里**。下一次 baseline 因此红在守卫上、而不是红在缺陷上——一条看起来像「我刚才改坏了」
+  的假警报。已改成**磁盘 `.mutbak` 备份 + 启动自愈 + `finally` 还原 + `SIGTERM` 转 `SystemExit`**。
+  教训不是「下次小心」，而是**崩溃安全的探针要留一份能自愈的证据**：靠进程正常返回的清理不算清理。
+
+**本节行数**：正文 **+166/−0**，连本段共 **+169/−0**；审计文档已入库 **+23307/−15**，加本节 **+23476/−15**。
+
+
+## §53.183 值不经过调用点的那一类：`response_model` 也不管时区
+
+§53.181 把这条记成一处欠账：「`MarketSnapshotStore._row_to_dict` 的裸 `captured_at`——被 pydantic
+序列化，上一轮的 `.isoformat()` 普查看不见」。开工前按模块重扫，发现它是一**类**，不是一处：同样的写法
+在六个 store 里出现，共 **9 个时间列**。
+
+### 为什么这次连 AST 规则也没有可匹配的东西
+
+§53.182 修的是一处「接收者是局部变量」的裸调用——规则看不见，但**源码里确实有个 `.isoformat()`**。
+这一节的写法连那个调用都没有：
+
+```python
+def _row_to_dict(row):            # app/kernel/market_snapshot_store.py
+    return {..., "captured_at": row.captured_at}
+```
+
+dict 里放的是 **`datetime` 对象**。格式化发生在 FastAPI 的两个序列化器里：
+有 `response_model` 时是 pydantic，没有时是 `jsonable_encoder`。两者都不在业务源码的调用图上，
+所以：
+
+| 工具 | 找什么 | 为什么一个都找不到 |
+|---|---|---|
+| `.isoformat()` 普查（§53.172） | 字面量形式的裸调用 | 没有调用 |
+| AST 规则（§53.182） | 调用节点 + 接收者形状 | 没有调用节点可匹配 |
+
+**前两重不可见是「写法不同」，这一重是「缺陷不在源码里」。** 源码里能扫的只有一件事：这个 converter
+有没有把列值包一层。那不是调用形状，是**值**——只能断言返回值。
+
+### 修前取证：四条路径，一个答案
+
+同一段脚本（临时库写 aware → 读回 → 分别过三条序列化路径）：
+
+```text
+wrote            : 2026-06-20T13:00:00+00:00
+dict value       : datetime.datetime(2026, 6, 20, 13, 0) tzinfo: None
+jsonable_encoder : 2026-06-20T13:00:00          # 无 response_model 的路由
+pydantic dump    : 2026-06-20T13:00:00          # 有 response_model 的路由
+response_model   : 2026-06-20T13:00:00
+audit first/last : 2026-06-20T13:00:00 2026-06-20T13:00:00
+```
+
+写进去带 `+00:00`，读出来 `tzinfo: None`，四条路径全部发出无标记的串。
+
+### 中心结论：`response_model` 不会添加值里没有的东西
+
+`/api/sport-markets/snapshots/{match_id}` 是这一族里唯一绑了模型的端点：
+
+```python
+@router.get("/snapshots/{match_id}", response_model=MarketSnapshotsResponse)
+...
+class MarketSnapshotPoint(BaseModel):
+    captured_at: datetime | None
+```
+
+上表第四行就是它——**绑了模型，照样输出无偏移的串**。pydantic 校验的是「这是不是一个
+`datetime`」，它不负责给 naive 值补时区；`datetime | None` 恰好把 naive 也算合法。
+
+所以 §2 那条「具名前先看 `response_model` 是不是裸 `FlexibleResponse`」是**键集**层面的判据，
+不是时区层面的。两件事共用一个入口，但不会互相保证。
+
+### 范围：六个 store，9 个列
+
+判据沿用 §53.172（**这个值进不进 HTTP 响应**），逐个实测：
+
+| store | 列 | 修前 | 发到哪 |
+|---|---|---|---|
+| `market_snapshot_store` | `captured_at` | naive | `/snapshots`、`/links/{id}/latest`、两条 audit |
+| `sport_market_link_store` | `created_at` / `updated_at` | naive | `/links`、`/links/{id}`、`/pending`、`/links/{id}/latest` |
+| `edge_store` | `captured_at` | naive | 推荐链路（§53.182 在序列化处兜了一层） |
+| `futures_link_store` | `created_at` / `updated_at` / `captured_at` | naive | `/futures/*` |
+| `optimized_params_store` | `created_at` / `applied_at` | naive，且是**裸 `.isoformat()`** | `/sport-optimization/*` |
+| `traditional_odds_store` | `captured_at` | **已经是 aware**（§53.178） | `/sport-odds/*` |
+
+最后一行是对照组，也是本节改法的来源：它早就在自己的 converter 里做 `_ensure_utc`，所以那两条路由
+一直是对的。**同一个决定在仓库里已经有两份实现**（helper 里内联一份、这个 store 里一份），而
+`market_snapshot_store` 什么都没有——不是有人写错了，是缺一个共用出口。
+
+`optimized_params_store` 值得单列：它是这一族里**唯一有调用点**的，所以 §53.182 的规则（如果把
+`app/kernel/` 纳入扫描）本来就能看见它。同一类缺陷，两种可见性，正好说明工具的分工。
+
+### 改法：一个业主，六个调用点
+
+```python
+def as_utc(value: datetime | None) -> datetime | None:   # app/utils/helpers.py
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)        # naive ⇒ 当 UTC
+    return value.astimezone(timezone.utc)                # aware ⇒ 换算，不重贴
+```
+
+- `utc_isoformat` 改成 `as_utc(...).isoformat()`，行为不变（`test_helpers.py` 原来那 5 条一条不改，全绿）。
+- 六个 converter 改成 `as_utc(row.xxx)`，**保留 `datetime` 类型**（响应模型声明的就是 `datetime`）。
+- `traditional_odds_store._ensure_utc` 删除——它是第二份实现。删掉后 `test_sport_odds_routes.py` 里
+  两处按名字引用它的注释也一并改准（**注释也会因为删除而失实**）。
+- `optimized_params_store` 保留字符串（那个 dict 的既有契约就是字符串），改走 `utc_isoformat`。
+
+为什么不把 store 全改成返回字符串？因为 `/snapshots` 的模型声明 `datetime`，字符串会被 pydantic
+再解析一遍——多一次无意义的转换，而且会让"值是什么类型"在两个端点之间不一致。
+
+### 两层守卫，因为这是两个不同的失败面
+
+1. **类型层**（`test_sport_market_stores.py`）：五个 store 各一条参数化用例，断言 converter 返回的
+   载荷里**每一个** `datetime` 都是 aware。附带两条防空转断言——列本身真的 naive（否则"dict 里 aware"
+   什么也不证明）、载荷里真的有时间戳（否则改个键名就静默通过）。
+2. **线上层**（`test_sport_market_routes.py`）：四条路由，对响应体里**所有**形状像 ISO 时间戳的
+   字符串做递归检查，**不逐键列举**。六个键名（`captured_at` / `created_at` / `updated_at` /
+   `latest_snapshot.captured_at` / `first_captured_at` / `last_captured_at`）逐条写的话，第七个键
+   加进来时没人会记得补一条。
+
+### 一个会被写错的断言：线上有两种写法
+
+同样是 aware 的 UTC，发出去可以是两种：
+
+```text
+/links/m1        -> "2026-11-26T16:23:31.442988Z"      # 值是 datetime 对象，encoder 渲染成 Z
+/sport-odds/m1   -> "2026-06-20T13:00:00+00:00"        # 值是预格式化的字符串，原样透传
+```
+
+FastAPI 的 `jsonable_encoder` 把 `datetime` 的 `+00:00` 改写成 `Z`，而对**已经是字符串**的值不动。
+于是「store 返回对象」与「路由预格式化」这两条路，线上写法不同、语义相同。
+
+所以本节的断言是**解析后看 `tzinfo`**，不是 `endswith("+00:00")`。后者在 `/snapshots` 上会红——
+而那个红是**编码器的拼法**，不是本节要管的事实。§53.182 那几条断言用的是后缀匹配，它们之所以成立，
+是因为那几处的值在到达 encoder 之前已经是字符串；这个前提没有被写下来。
+
+### 九个变异，九个 kill
+
+| 变异 | RED | 红的用例 |
+|---|---|---|
+| 1 `as_utc` 不再给 naive 贴 UTC | **15** | helper 2 + 五个 store 各 1 + 四条路由 + `sport_odds` 一条 |
+| 2 `as_utc` 把 aware 值重贴标签（`replace`） | 2 | 两个 helper 用例 |
+| 3 snapshot store 交回裸列 | 4 | store 参数 ×1 + 三条路由 |
+| 4 link store 交回裸 `created_at` | 3 | store 参数 + `/links` + `/latest` |
+| 5 edge store 交回裸列 | 1 | store 参数 `[edge]` |
+| 6 odds store 交回裸列 | 2 | store 参数 + `test_the_offset_comes_from_the_store_not_the_column` |
+| 7 futures link dict 交回裸列 | 1 | store 参数 `[futures]` |
+| 8 futures snapshot dict 交回裸列 | 1 | store 参数 `[futures]` |
+| 9 optimized params 回到裸 `.isoformat()` | 1 | `test_timestamps_carry_an_offset` |
+
+九个全杀，九次还原后 sha256 与改前一致。
+
+第 1 行的 15 是**爆炸半径读数**：`app/utils/helpers.py` 里一行改动，五个 store 测试与四条路由测试
+同时红——这就是"单一业主"在实践里的样子。反过来，第 5、7、8 行只红一条，说明每条 converter 都有
+自己的守卫，没有被别人的用例顺带覆盖。
+
+### 诚实的三条
+
+- **`as_utc` 的「naive 当 UTC」是个假设，不是被证明的结论**。支持它的只有一条事实：所有写入侧都用
+  `datetime.now(timezone.utc)`，所以 naive 只可能出现在读回来的一侧。若哪天有生产者写本地时间，这个
+  假设会静默错八小时——而**没有任何测试能发现它**，因为测试的种子也是用 UTC 写的。
+- **`market_settlement_store` 与 `market_settlement_service` 里的三处同样写法没改**：`settlement_captured_at`、
+  `match_finished_at`、`processed_at`。实测没有任何路由 import 它们，所以按判据（进不进响应）不动。
+- **`optimized_params_store` 的字符串类型与其余五个不一致**。本节保留了它——改类型要么动响应契约，
+  要么让两个 `_row_to_dict` 长得不一样，两者都比"类型不一致但都对"更差。这条留在这里是为了下次
+  有人看到时不必重新判断一遍。
+
+### 门
+
+| 门 | 结果 |
+|---|---|
+| `ruff check .` | All checks passed |
+| `mypy app/` | **Success: no issues found in 334 source files** |
+| `generate_types --check` | `generated-types.ts is up to date` |
+| `lint_scan_guard.py` | `[OK] ... 851 .py files, both directions` |
+| `pytest`（全量） | **`tests=9604 failures=0 errors=0 skipped=11`**，6999 passed、2594 subtests（11m53s） |
+
+比上一节多 13 条用例，正是本节新增的 13 条：`as_utc` 3、五个 store 参数化 5、路由四条 4、
+优化参数 1。
+
+### 行数与归属
+
+`git diff --numstat` 里有五个文件**同时被 §53.180 改过**，所以它们的数字是 HEAD→现在，不是本节净量：
+
+| 文件 | numstat | 归属 |
+|---|---|---|
+| `helpers.py` | +37/−17 | 本节 |
+| `edge_store.py` | +2/−1 | 本节 |
+| `futures_link_store.py` | +4/−3 | 本节 |
+| `optimized_params_store.py` | +3/−2 | 本节 |
+| `sport_market_link_store.py` | +3/−2 | 本节 |
+| `test_helpers.py` | +26/−2 | 本节 |
+| `test_optimized_params_store.py` | +21/−0 | 本节 |
+| **小计（7 个独占文件）** | **+96/−27** | |
+| `market_snapshot_store.py` | +66/−6 | **含 §53.180** |
+| `traditional_odds_store.py` | +19/−17 | **含 §53.180** |
+| `test_sport_market_stores.py` | +231/−0 | **含 §53.180** |
+| `test_sport_market_routes.py` | +174/−0 | **含 §53.180** |
+| `test_sport_odds_routes.py` | +94/−10 | **含 §53.180** |
+
+十二个文件**没有一个是 MIXED**：八个纯 CRLF、四个纯 LF（`traditional_odds_store`、`test_helpers`、
+`test_sport_market_stores`、`test_sport_odds_routes` 本来就是 LF），每个文件保持自己的行尾。
+
+### 未决
+
+- **`app/kernel/` 不在 AST 规则的扫描范围里**。规则要求模块名以 `app.api.routes.` 开头
+  （`test_every_swept_module_is_really_swept` 会断言这一点），所以 kernel 层永远进不去。
+  真要覆盖这一层，得给规则换一个按目录的入口。
+  顺带记一个**会误报的形状**：`market_snapshot_store.py` 的 `sort_key` 里有 `t.isoformat()`，
+  接收者也是局部变量，但它是**排序键**、不进响应——规则扫到它会红，而"修"它没有意义。
+  这是「命中 ≠ 缺陷」的又一例。
+- **`market_settlement_*` 的三处**（上面「诚实」第 2 条）等它们有了路由消费者再说。
+- **线上两种写法（`Z` / `+00:00`）没有统一**。统一要么改 store 的返回类型，要么改路由的预格式化，
+  都会动响应契约；而两者语义都正确，前端 `new Date(...)` 都能解析。记下来，不动。
+
+**本节行数**：正文 **+205/−0**，连本段共 **+208/−0**；审计文档已入库 **+23476/−15**，加本节 **+23684/−15**。
+
+## §53.184 规则的第二个圈：会格式化的模块不一定是会返回的模块
+
+§53.183 的未决第一条写着「`app/kernel/` 进不了 AST 规则」，第三条写着「`market_settlement_*` 的
+三处等它们有了路由消费者再说」。这一节把第一条走完一半，并**推翻了第三条的前提**：消费者一
+直都在，只是被一个默认 `false` 的功能开关挡在 503 后面。
+
+### 普查：按 dict 键枚举，不按调用枚举
+
+`.isoformat()` 的 grep 在 `app/kernel/` 只给出四条，其中一条还是排序键。§53.183 的第三级说清了
+为什么不能这么扫：**值可以不经任何调用就出去**。所以探针换了口径——枚举 `app/kernel/` 里所有
+**键名像时间戳的 dict 条目**，再看值的形状：
+
+| 形状 | 条数 | 含义 |
+|---|---|---|
+| `CONVERTED` | 10 | 已走 `as_utc` / `utc_isoformat`（§53.183 的成果） |
+| `RAW` | 9 | 裸属性：`datetime` 对象直接外流 |
+| `OTHER` | 5 | 条件表达式包着裸 `.isoformat()`（3 条，grep 能看见）+ `_ts()` 转发（2 条） |
+| 合计 | 24 | 45 个 `.py` 里的 24 条，只有 7 条真正到达响应 |
+
+24 条逐条判，落到四类：
+
+| 类 | 条数 | 去向 |
+|---|---|---|
+| 已收口 | 10 | §53.183 的六个 store，本节不再动 |
+| **到线上** | **7** | `kernel_db` 3 条（预格式化成字符串）+ `market_settlement_store` 4 条（交 `datetime` 对象） |
+| 纯内部 | 4 | `market_settlement_service`，算 edge 用，不进响应 |
+| 假阳性 / 良性 | 3 | 两处 `sort_key` + `market_snapshot_store._ts()` 透传 |
+
+三处"假阳性 / 良性"值得单独记：两处 **`sort_key`**（`market_snapshot_store:286`、
+`backtest/match_loader:68`）是排序键，一处随后 `pop` 掉、一处只用于 `sorted(key=...)`——规则扫到它们
+会红，而"修"它是错的，**命中 ≠ 缺陷**（§53.183 记过一次，这里是第二、三例）。`_ts()` 那两处是转发，
+值来自已 `as_utc` 的 `_row_to_dict`，现在是对的（输入侧假设见未决）。
+
+### 7 个源站点在 5 个端点上变成 10 处
+
+源站点数与线上出现数不等，这个差值本身是证据：
+
+- `_settlement_to_dict` 被 `get_history` 与 `get_settlement` 共用 ⇒ 3 个时间列在两条路由上各出现一次；
+- `/predictions/history` 的 `outcome` 是**嵌套 dict**，`finished_at` 藏在下一层，逐键列举的断言会漏。
+
+修之前，把两个功能开关打开后跑真实响应，10 处全是 `2026-06-20T13:00:00`——没有 offset。写进去的
+值明明是 `13:00Z`（生产者写的是 aware datetime），到浏览器就变成"本地 13:00"，在 UTC+8 是 8 小时
+误差，症状只有一个不对的钟。
+
+### 这 8 小时落在谁的脸上
+
+前端有确切的消费点：`use-learning.ts:41` 打的键是 `${base}/predictions/history`，
+`prediction-history-list.tsx:156` 渲染的是 `new Date(item.created_at).toLocaleString("zh-CN")`。
+`new Date("2026-06-20T13:00:00")` 按**本地时间**解析 ⇒ 表里显示 13:00，而真实本地时间是 21:00。
+修完之后同一行代码显示 21:00，**前端一个字都不用改**——这也是为什么修在 store 而不是修在组件。
+
+类型层同样沉默：`PredictionHistoryItem.created_at` 声明为 `string`（`sports-api/types.ts:77`，
+手写，因为这条路由没有 `response_model`）。`string` 里装不下"带不带 offset"这件事，所以 TS 对
+这一整类缺陷**没有检测能力**——§2 的 TS 三条之一（ISO 串声明 `str`）在这里是活的。
+
+### 为什么 503 看起来像「没有消费者」
+
+`sport_settlements.router` 在 `app/api/router.py:35` 注册着，四个端点都在；`PHASE7_MARKET_SETTLEMENT_
+FEEDBACK_ENABLED` 默认 `false`（`.env.example:654`），于是每个请求先吃一个 503。
+`KERNEL_PREDICTION_ENABLED` 同样默认 `false`，`/predictions/history` 系列一样。
+
+三种状态在运维眼里长得一样：**功能关着（503）/ 没有这条路由（404）/ 路由里有数据（200）**。§5 那条
+「同一个 0 分不清三种情况」换了个介质又出现一次：这次的"0"是一次 503。判"有没有消费者"不能看
+默认响应，要看**路由表**和**开关默认值**——两样都能读，读哪一样都不会得出"没有"。
+
+### 修法：两个模块，两种机制，一个业主
+
+| 模块 | 出口形状 | 修法 | 为什么不是另一种 |
+|---|---|---|---|
+| `kernel_db` | 自己格式化成**字符串** | `utc_isoformat(...)` | 它已经在格式化，只是漏了 offset；改成交对象会动响应类型 |
+| `market_settlement_store` | 交 **`datetime` 对象** | `as_utc(...)` | 它不格式化；在这里格式化会让 wire 从 `Z` 变 `+00:00`，与同族六个 store 不一致 |
+
+`kernel_db` 那三处原来的写法是 `hist.created_at.isoformat() if hist.created_at else None`。换成
+`utc_isoformat(hist.created_at)` 后条件表达式整个消失——`utc_isoformat(None)` 返回 `None`，那个
+`if` 从来只是在补"None 不能 `.isoformat()`"，不是在补业务规则。
+
+**两种拼法因此同时出现在线上**：`kernel_db` 给 `+00:00`，结算 store 给 `Z`（encoder 渲染）。两者
+语义相同、`new Date()` 都认，§53.183 已记为"记下来，不动"，本节不借机统一。
+
+### 守卫：两层，两条反空头，一条正向控制
+
+`tests/test_kernel_timestamp_wire.py`（新文件，304 行）：
+
+| 层 | 断言 | 挡的是 |
+|---|---|---|
+| 类型层 | 转换器返回值带 offset（字符串 parse / `datetime.tzinfo`） | 值在源头就错 |
+| 线上层 | 整个 body **递归**扫 ISO 形状字符串，逐个 parse 查 `tzinfo` | 以后新增的键 |
+| 反空头 ① | 裸列**真的是 naive**（6 列参数化） | SQLite 哪天开始返 aware ⇒ 上面全变空头 |
+| 反空头 ② | 每个端点的 body **真的含** N 个时间戳（5 个端点数各自钉死） | 扫描器扫了个空 |
+| 正向控制 | `_assert_every_stamp_is_zoned` 必须拒绝 `2026-06-20T13:00:00` | 断言写宽了，全绿而无一检测 |
+
+线上层刻意**不逐键列举**：`outcome.finished_at` 在第二层，`first_captured_at` 这类键还在长，逐键
+断言每加一个键就漏一个。
+
+### 规则：能进的进，不能进的写明为什么
+
+AST 规则（`tests/test_row_timestamp_serialization.py`）这次有两处改动：
+
+1. `MODULE_NAMES` 加 `app.kernel.kernel_db`——它自己格式化，`.isoformat()` 一回来规则就红；
+2. 前缀断言从 `"app.api.routes."` 放宽到 `("app.api.routes.", "app.kernel.")`——只放两层，不是
+   `"app."`，因为**能被这条规则覆盖的只有"自己调 `.isoformat()`"的模块**，这个集合不随目录走。
+
+`market_settlement_store` **没有进**，注释写在元组下方：它用 `as_utc`、从不调 `.isoformat()`，规则
+对它恒绿——列进去是**空头**，不是"扫干净了"。它的保护是上面那个线上文件。
+
+这条区分在变异里看得最清楚（见下表）：改 `kernel_db` 的三处，**规则与线上同时红**；改结算 store 的
+四处，**只有线上红**。同一节的两组变异红在不同工具上，不是重复守卫，是两种观测面。
+
+### 变异 8 个，全 kill
+
+| # | 变异 | 红 | 被谁抓到 |
+|---|---|---|---|
+| 1 | `kernel_db` 列表查询交回裸 `.isoformat()` | 3 | 类型层 + 线上 + **规则** |
+| 2 | `kernel_db` 的 `outcome.finished_at` 交回裸 `.isoformat()` | 3 | 类型层 + 线上 + **规则** |
+| 3 | `kernel_db` 单场查询交回裸 `.isoformat()` | 3 | 类型层 + 线上 + **规则** |
+| 4 | 结算 store 交回 `settlement_captured_at` | 3 | 类型层 + 线上（两条路由） |
+| 5 | 结算 store 交回 `match_finished_at` | 3 | 同上 |
+| 6 | 结算 store 交回 `processed_at` | 3 | 同上 |
+| 7 | 结算 store 交回 `last_updated` | 2 | 类型层 + 线上（calibrations） |
+| 8 | `as_utc` 不再贴 UTC（对照） | **8** | 两族全红 |
+
+变异 1 与 3 打的是**同一行源码**（两个函数各一次），所以 harness 按"第几次出现"替换，而不是要求
+唯一匹配——把两处合成一个变异会掩盖"哪条路由丢了 offset"。变异 8 是单一业主的读数：一行 `helpers.py`
+红了 8 条，跨两个族，说明这 7 条路径**全部**经过同一个决定。
+
+### 门自己先红了两处——都不是本节代码的错
+
+**① 全量第一次跑出 1 条红**：`test_readme_inventory::test_backend_test_file_count_matches_the_directory`。
+README 第 132 行写着「后端（447 个测试文件）」，而 `_count_backend_test_files()` 数的是
+`tests/test_*.py` 的个数——加了 `test_kernel_timestamp_wire.py` 就是 448。
+§53.181 记过镜像的那一半（**前端**测试文件数被**后端**测试检查），这次是同一张网的另一格：
+**新增一个测试文件是两处改动**，而那条断言不在新文件里，在别人的文件里。
+
+**② `lint_scan_guard.py` 也红了一次**：「linted .py 必须全部 tracked」。新文件还没进索引，于是本机
+lint 到的集合比 git 看到的大一个。用 `git add -N`（intent-to-add）让它出现在 `git ls-files`，守卫随即
+**852/852**（上一节是 851）。这不是绕过守卫：它防的是「本机能 lint、别人看不见的草稿」，而这份文件
+本来就要提交——只是**在提交前它就已经需要被 git 看见**。
+
+### 行数归属
+
+| 文件 | numstat | 归属 |
+|---|---|---|
+| `app/kernel/kernel_db.py` | +5/−3 | 本节 |
+| `app/kernel/market_settlement_store.py` | +20/−4 | 本节 |
+| `tests/test_kernel_timestamp_wire.py` | 新文件 304 行 | 本节 |
+| `tests/test_row_timestamp_serialization.py` | +101/−11 | **含 §53.182**（+79/−10）⇒ 本节 +22/−1 |
+
+四个文件行尾各自保持：三个纯 CRLF、新测试文件纯 LF（`git ls-files --eol` 为准，不按目录推）。
+
+### 未决
+
+- **`market_settlement_service` 的 4 条内部 dict 仍然交裸 `datetime`**。它们不进响应（算 edge 用），
+  但也没有出口把"这是本地时间还是 UTC"说清。要动就得先决定内部 dict 的时间语义，不代决。
+- **`market_snapshot_store` 的 `_ts()` 透传**：值来自 `_row_to_dict`（已 `as_utc`），所以现在是对的。
+  但如果有调用方自己塞一个 naive dict 进来，`_ts` 会原样转发，而**没有测试能发现**——这是输入侧假设，
+  不是已证事实。
+- **规则仍覆盖不到 `app/services/`**。那里有 112 处 `.isoformat()`，其中多少是出口（而不是日志、文件名、
+  缓存键）还没普查。这一节只做了 `app/kernel/`。
+- **`MODULE_NAMES` 仍是愿望清单**：从元组里删掉一条，红的是 `test_every_swept_module_is_really_swept`
+  吗？不是——那条只查"列着的模块里有没有转换调用"，不查"该列的有没有列"。删 `predictions` 一条，
+  全套仍然绿。
+- **两种线上拼法未统一**（`Z` / `+00:00`）：语义都对，不动；但任何按后缀写的客户端断言都会在换
+  store 实现那天静默失效。
+
+
+
+⚠️ 上面这个「已入库」的标签在本节之前是**不准的**：从 §53.180 起它被填成了「到上一节为止的累计」，
+而 §53.180–183 当时都还没提交。数字本身是逐节累加的，错的是**标签**——`git log --numstat` 实测合计
+**+22942/−15**，工作树里还有 742 行没入库。已交付的段落不改写，所以只在这里记一笔，并把本节的尾注
+拆成两个都写明的数：已入库一个，算到本节一个。下次再有人按这个标签推断「文档就这么大」，会差出 900 行。
+**本节行数**：正文 **+169/−0**，连本段共 **+172/−0**；审计文档 `git log --numstat` 合计 **+22942/−15**，算到本节（含未提交的 5 节）**+23856/−15**。

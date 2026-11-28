@@ -10,6 +10,7 @@ from app.models.world_cup_prediction import (
     MatchFixture, MatchPrediction, AIOptimizedPrediction,
     EngineCalibration,
 )
+from app.utils.helpers import utc_isoformat
 from app.utils.prediction_db import get_prediction_session, close_prediction_session
 from app.services.world_cup_ai_optimization_service import optimize_prediction_with_ai
 from app.services.optimization_task_manager import get_task_manager
@@ -407,7 +408,7 @@ def get_active_calibration(engine_name: str) -> dict[str, Any] | None:
             "based_on_matches": calibration.based_on_matches,
             "avg_improvement": calibration.avg_improvement,
             "is_verified": calibration.avg_improvement is not None,
-            "created_at": calibration.created_at.isoformat()
+            "created_at": utc_isoformat(calibration.created_at)
         }
 
     finally:

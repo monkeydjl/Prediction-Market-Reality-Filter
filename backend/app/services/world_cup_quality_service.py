@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from app.memory import loop_run_store
 from app.models.world_cup_prediction import MatchFixture, PredictionHistory
 from app.services.audit_metadata import normalize_audit_metadata
+from app.utils.helpers import utc_isoformat
 from app.utils.prediction_db import get_prediction_session, close_prediction_session
 
 logger = logging.getLogger(__name__)
@@ -140,7 +141,7 @@ def _build_sample(match: MatchFixture, history: PredictionHistory) -> dict[str, 
         "away_team": match.away_team,
         "engine": bucket_engine(history.prediction_method),
         "prediction_method": history.prediction_method,
-        "timestamp": history.timestamp.isoformat() if history.timestamp else None,
+        "timestamp": utc_isoformat(history.timestamp),
         "confidence": max(0.0, min(1.0, float(history.confidence or 0.0))),
         "predicted_score": {"home": predicted_home, "away": predicted_away},
         "actual_score": {"home": actual_home, "away": actual_away},
@@ -557,7 +558,7 @@ def preview_consistency_history_repair(
                 "history_id": row_id,
                 "status": "ok",
                 "match_id": row.match_id,
-                "timestamp": row.timestamp.isoformat() if row.timestamp else None,
+                "timestamp": utc_isoformat(row.timestamp),
                 "predicted_score": {
                     "home": round(float(row.predicted_home_score), 3),
                     "away": round(float(row.predicted_away_score), 3),

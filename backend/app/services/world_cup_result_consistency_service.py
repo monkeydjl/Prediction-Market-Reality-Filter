@@ -13,6 +13,7 @@ from app.services.sports_fact_service import (
     load_sports_facts,
     sports_fact_status,
 )
+from app.utils.helpers import utc_isoformat
 from app.utils.prediction_db import close_prediction_session, get_prediction_session
 
 
@@ -192,7 +193,7 @@ def _fixture_snapshot(fixture: MatchFixture) -> dict[str, Any]:
         "away_team": fixture.away_team,
         "status": _normalize_status(fixture.status),
         "score": _score_payload(_fixture_score(fixture)),
-        "updated_at": fixture.updated_at.isoformat() if fixture.updated_at else None,
+        "updated_at": utc_isoformat(fixture.updated_at),
     }
 
 

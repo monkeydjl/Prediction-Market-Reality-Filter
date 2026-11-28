@@ -15,6 +15,7 @@ from app.services.world_cup_result_fact_backfill_service import run_world_cup_re
 from app.services.world_cup_match_service import sync_world_cup_fixtures
 from app.services.world_cup_quality_service import build_quality_loop_report
 from app.services.world_cup_scoring_service import score_finished_match
+from app.utils.helpers import utc_isoformat
 from app.utils.prediction_db import get_prediction_session, close_prediction_session
 
 logger = logging.getLogger(__name__)
@@ -132,7 +133,7 @@ def _candidate_payload(match: MatchFixture) -> dict[str, Any]:
         "match_id": match.match_id,
         "home_team": match.home_team,
         "away_team": match.away_team,
-        "kickoff_utc": match.kickoff_utc.isoformat() if match.kickoff_utc else None,
+        "kickoff_utc": utc_isoformat(match.kickoff_utc),
         "actual_score": {"home": match.home_score, "away": match.away_score},
     }
 
@@ -143,7 +144,7 @@ def _stale_unfinished_payload(match: MatchFixture) -> dict[str, Any]:
         "home_team": match.home_team,
         "away_team": match.away_team,
         "stage": match.stage,
-        "kickoff_utc": match.kickoff_utc.isoformat() if match.kickoff_utc else None,
+        "kickoff_utc": utc_isoformat(match.kickoff_utc),
         "status": match.status,
         "home_score": match.home_score,
         "away_score": match.away_score,

@@ -7,6 +7,7 @@ Free tier: 500 requests/month → need smart caching strategy.
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from app.utils.helpers import utc_isoformat
 from app.utils.prediction_db import get_prediction_session
 from app.models.world_cup_prediction import Base
 from sqlalchemy import String, Float, DateTime, Integer
@@ -81,7 +82,7 @@ async def get_cached_odds(
                     "draw": cached.draw_odds,
                     "away": cached.away_odds,
                     "source": f"cached_{cached.source}",
-                    "last_update": cached.last_updated_api.isoformat() if cached.last_updated_api else cached.cached_at.isoformat(),
+                    "last_update": utc_isoformat(cached.last_updated_api or cached_at),
                     "bookmakers_count": cached.bookmakers_count,
                     "cache_age_seconds": int(age_seconds),
                     "stale": False,
@@ -131,7 +132,7 @@ async def get_cached_odds(
                 "draw": cached.draw_odds,
                 "away": cached.away_odds,
                 "source": f"stale_cached_{cached.source}",
-                "last_update": cached.last_updated_api.isoformat() if cached.last_updated_api else cached.cached_at.isoformat(),
+                "last_update": utc_isoformat(cached.last_updated_api or cached_at),
                 "bookmakers_count": cached.bookmakers_count,
                 "cache_age_seconds": int(age_seconds),
                 "stale": True,

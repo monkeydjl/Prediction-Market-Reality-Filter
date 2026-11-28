@@ -13,6 +13,7 @@ from app.models.world_cup_prediction import MatchFixture
 from app.services.audit_metadata import normalize_audit_metadata
 from app.services.sports_fact_service import WORLD_CUP_TOURNAMENT, import_sports_facts
 from app.services.world_cup_scoring_service import score_finished_match
+from app.utils.helpers import utc_isoformat
 from app.utils.prediction_db import close_prediction_session, get_prediction_session
 
 logger = logging.getLogger(__name__)
@@ -289,7 +290,7 @@ def _fixture_payload(fixture: MatchFixture) -> dict[str, Any]:
         # No int() cast: the columns are Integer, so it was a no-op that only
         # hid that an unfinished fixture reports a null score here.
         "score": {"home": fixture.home_score, "away": fixture.away_score},
-        "updated_at": fixture.updated_at.isoformat() if fixture.updated_at else None,
+        "updated_at": utc_isoformat(fixture.updated_at),
     }
 
 

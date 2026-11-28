@@ -24263,3 +24263,94 @@ README 不动：**没有新增测试文件**（守卫并进了已有的 `test_ke
 - `models 5` 那批（pydantic / `jsonable_encoder` 序列化 `datetime` 字段）仍未扫，需要 wire 层，AST 数不到。
 
 **本节行数**：正文 **+93/−0**，连本段共 **+96/−0**；审计文档已入库 **+24184/−15**，加本节 **+24280/−15**。
+
+## §53.189 两处潜在收口 + 普查锚从「名字」换到「动作」
+
+### 一、收的是什么
+
+§53.187 的普查给出 29 个候选，逐个读完后是 **1 处真缺陷**（§53.188 的 phase9）、**2 处潜在**、其余安全或内部。
+两处潜在的判据相同，而且不是「少了个 offset」这么笼统 —— 是**值算对了，送出去的是另一个值**：
+
+| 位置 | 症结 | 修法 |
+|---|---|---|
+| `transfermarkt_scraper.get_cached_market_value` | 用 `cached.scraped_at.replace(tzinfo=utc)` 算 age，返回体却**又读了一遍列**（`cached.scraped_at.isoformat()`） | `as_utc` 算一次，`utc_isoformat(scraped_at)` 送同一个值 |
+| `world_cup_schedule_factors._team_schedule` | 两个 return 都带 `last_match_utc`，全仓**零读者** | 两个 return 一起删 |
+
+第一条为什么不是「改个后缀」：`replace(tzinfo=...)` 保留墙上时钟、挪动时刻，`as_utc` 转换。SQLite 回来的列是
+naive，**两者今天等价** —— 但送出去的那个字符串来自**第二遍读列**，那一遍没经过任何转换，于是 response 里是个
+裸戳，而紧挨着它的 `cache_age_hours` 用的是 aware 值。同一个函数里两个值出自同一条列、却有不同时区语义，
+这就是缺陷的形状。第二条的「零读者」是 grep 出来的：`backend/`、`frontend/` 全仓零命中，而相邻三个键各有真读者
+（`world_cup_prediction_pipeline:882-886`、`world_cup_rule_engine:286-287`、`world_cup_data_quality:127-128`）——
+同族键里有读者，恰恰是它没读者这件事一直没被注意到的原因。
+
+### 二、守卫：三个出口，不是一个模块
+
+`test_transfermarkt_scraper.py` 的 docstring 原本写着 **「Not covered here: the cache read path」**。那句话就是
+发现本身：**把这个洞写下来，并不能让它不再是洞**。缓存读路径是唯一的生产消费者，而它一行测试都没有。补的守卫
+走**真的 SQLite 往返**（写 aware、读回来 naive），不是手搓一行 —— 手搓的行只能编码我对驱动的假设，而假设本身
+要单独钉：
+
+| 守卫 | 钉的是什么 |
+|---|---|
+| `test_the_cached_stamp_is_the_instant_that_was_written` | 戳 parse 得出来、带 offset、等于写进去的那个**时刻** |
+| `test_the_column_really_comes_back_naive` | **反空头**：列真的回 naive。否则上面的守卫在任何实现下都绿 |
+| `test_the_cached_row_has_exactly_the_documented_keys` | 8 键键集（7 列 + 1 个算出来的 `cache_age_hours`） |
+| `test_a_missing_or_expired_row_is_a_miss` | 两条 `None` 返回；同一行换长 TTL 能读到 ⇒ miss 是 TTL 不是读路径 |
+| `test_the_shape_is_pinned_on_every_return` | `_team_schedule` **两个 return** 的键集 + `build_schedule_factors` 顶层键集 |
+
+最后一行的键集守卫在 `test_world_cup_schedule_factors.py`，带三个载体：顶层、`home`/`away`（subtest）、以及
+**早退分支**。早退分支在持久行上不可达（`kickoff_utc` NOT NULL），用 transient 对象喂 —— 分支是防御性的，
+但形状承诺是同一条，只删那一处的键否则静默。
+
+变异（每个都 sha256 还原）：
+
+| 变异 | 结果 |
+|---|---|
+| M1 返回体改回 `cached.scraped_at.isoformat()` | **红**（`parsed.tzinfo` 是 None，戳 `2026-11-28T12:18:22`） |
+| M2 `as_utc` 换回 `.replace(tzinfo=utc)` | **绿 —— 不入账** |
+| M3 `last_match_utc` 加回主 return | **红**（键集） |
+| M4 只加回早退分支 | **红**（transient 那一条） |
+
+M2 不红要写清楚，否则下一个人会以为漏了：**naive 列上这两个操作是同一件事**，没有测试能分开它们，也没有测试
+应该假装能。relabel 与转换的差别只在会返回 offset 的驱动（Postgres/MySQL）上出现，钉在 `test_helpers.py`；
+这一处换成 `as_utc` 的理由是**规则单一出处**，不是在 SQLite 上有行为变化。这是 §4.2「承重不能按名字推」的反向
+用法：一条守卫杀不掉某个变异时，要说明它为什么不该杀。
+
+### 三、普查锚：从「名字」换到「动作」
+
+§53.188 的教训一句话：**锚 `utc_isoformat` 永远看不见一个叫 `_isoformat` 的私有函数**。这次把锚换成动作 ——
+「任何把 `datetime` 变成字符串的写法」，`app/` 全量扫：
+
+| 通道 | 命中 | 判定 |
+|---|---|---|
+| `.isoformat()` | 87 | §53.187 已逐条读过（90 − 3 = §53.188 与本轮删掉的三处调用点） |
+| `.strftime("%Y-%m-%d")` | 3 | 全是**纯日期**：内部键、URL、与 `detected_date` 比日期 —— 不上线 |
+| f-string 隐式 `str(dt)` | 1 真 / 3 假 | 见下 |
+| `json.dumps(..., default=str)` | 2 | `app/replay/report.py`，写文件的报告，无线上路径 |
+| `ctime` / 显式 `str()` / `str.format` / 真 `%`-日期格式 | 0 | 唯一的 `%d` 是日志里的整数占位符，不是日期指令 |
+
+**结论：第三条通道确实存在（`strftime`，以及 f-string 里隐式的 `str()`），但没有第三个缺陷。**
+唯一值得记的是这一条：`market_settlement_service.py:444` 的
+`skip_reason=f"No snapshot before {finished_at} for link {...}"` —— 一个 naive datetime 用 `str()` 拼进人读的
+句子（空格分隔、无 offset）。**不改**：它是诊断文案，不是机器解析的戳；同一个值紧挨着以 `match_finished_at=finished_at`
+结构化送出去了，改这句话只是改存储里的历史字符串。记在这里是为了下一次普查不必再判一遍 —— 而这正是「锚动作」
+比「锚名字」多出来的东西：`_isoformat`、`skip_reason` 里的 `{finished_at}`、`default=str`，三者的名字互不相干，
+**只有「它在把时间变成文本」这个共同点能一次抓住它们**。
+
+### 门
+
+`ruff check .` 通过 · `mypy app/` 334 文件 · `generate_types --check` 已最新 · 全量 **9649 测 / 0 失败 / 0 错误 /
+11 跳过**（7042 passed + 11 skipped = 7053 元素，另 2596 subtests，11m20s；比 §53.188 的 9642 多 7 = 5 条新用例
++ 2 个 subtest，两个文件的元素数 12→16、2→3 已核）。
+README 不动：**没有新增测试文件**（两个守卫并进了已有文件）。
+
+### 未决
+
+- `models 5` 那批（pydantic / `jsonable_encoder` 序列化 `datetime` 字段）仍未扫：§53.183 的第三级，**没有调用点**，
+  AST 与 wire 扫描都摸不到，要的是「把整个 body 递归扫 ISO 形状」。
+- 本次四个通道的普查脚本是一次性的（`.workbuddy/tmp/`，不入库）。**要不要把它提成守卫**是个独立判断：写成 CI 步骤
+  可以挡住「新增一处 `strftime`」，但纯日期会被误报 3 次，需要一张白名单 —— 而白名单会过期。
+- `app/replay/report.py` 的 `default=str` 不在「线上 offset」规则管辖内，但如果 replay 报告将来走 HTTP，它就变成
+  第五个入口。
+
+**本节行数**：正文 **+88/−0**，连本段共 **+91/−0**；审计文档已入库 **+24280/−15**，加本节 **+24371/−15**。

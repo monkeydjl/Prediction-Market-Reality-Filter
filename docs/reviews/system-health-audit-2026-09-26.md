@@ -23839,3 +23839,234 @@ lint 到的集合比 git 看到的大一个。用 `git add -N`（intent-to-add�
 **+22942/−15**，工作树里还有 742 行没入库。已交付的段落不改写，所以只在这里记一笔，并把本节的尾注
 拆成两个都写明的数：已入库一个，算到本节一个。下次再有人按这个标签推断「文档就这么大」，会差出 900 行。
 **本节行数**：正文 **+169/−0**，连本段共 **+172/−0**；审计文档 `git log --numstat` 合计 **+22942/−15**，算到本节（含未提交的 5 节）**+23856/−15**。
+
+## §53.185 `app/services/` 的 77 处 `.isoformat()`：普查
+
+§53.184 的未决写着「`app/services/` 有 **112 处** `.isoformat()`」。开工第一件事是量：
+
+```
+$ grep -rn "isoformat()" app/ --include=*.py | wc -l      ->  109
+$ 按二级目录拆：
+     app/services 75   app/memory 6   app/api 6   app/models 5   app/core 5
+     app/utils 4       app/sports 4   app/replay 2  app/kernel 2   = 109
+```
+
+**112 是整个 `app/` 的数，而且那是 §53.184 修完之前**（修掉三处裸调用后现在是 109）。`app/services/`
+按行数是 75，按 **AST 调用点是 77**——差的 2 个是"一行里两个调用"
+（`cached.last_updated_api.isoformat() if … else cached.cached_at.isoformat()`）。
+
+先把口径钉死：**本节说"处"= 调用点，不是行**。以后写数字要连口径一起写。
+
+### 三遍口径：去处 → 来历 → 可达性
+
+按 §53.184 的教训，不能按调用判。三遍各给一个坐标，落成
+`.workbuddy/tmp/census_53185.tsv`（77 行，所有数字从这张表算，不手数）：
+
+| 遍 | 问什么 | 手段 |
+|---|---|---|
+| 一 | 值**进了什么容器** | 找父节点，`IfExp` 穿透：`DICT_STAMP` 38 / `OTHER` 13 / `DICT_OTHER` 8 / `RETURN` 7 / `ASSIGN` 6 / `CALL` 3 / `KEYWORD` 2 |
+| 二 | 接收者**从哪来** | `ast.unparse` 后剥掉 `.replace/.date/.astimezone` 包装再看内核 |
+| 三 | 所在模块**能不能从路由走到** | 按名字建调用图，从 17 个 route 模块 BFS（走到 284 个模块：service 149、kernel 42） |
+
+第三遍是近似的（按函数名，不解析 import 别名），**只用来排除，不用来断言**——所以每一条结论都回读了
+调用点。这一点后面还要踩一次（见「可达 ≠ 进响应」）。
+
+### 77 处的来历
+
+| 来历 | 条数 | 判 |
+|---|---|---|
+| `NOW`：`now(utc)` / `fromtimestamp(_, tz)` 内核 | 34 | **正确**：构造上就是 aware（10 处再 `.replace("+00:00","Z")` 归一） |
+| `NO_TS`：`strptime(...).date()` | 1 | **正确**：纯日期 |
+| `BOOLOP`：`(now or datetime.now(timezone.utc)).isoformat()` | 1 | **正确** |
+| `LOCAL` + `.astimezone` / `.astimezone.replace` 包装 | 7 | **正确**：包装就是为了贴 UTC |
+| `LOCAL` + `.date()` 包装 | 2 | **正确**：纯日期 |
+| `LOCAL` + `.replace(microsecond=0)` 包装 | 1 | **可疑**：`replace` 不补 offset，naive 原样留下 |
+| `LOCAL` 裸 | 7 | 逐个判 |
+| `COLUMN` 属性访问 | 19 | 逐个判 |
+| `SUBSCRIPT` 下标 | 5 | 逐个判 |
+| 合计 | **77** | |
+
+**45 处构造上就正确**（前五行之和），判完之后又多了 4 处：`optimization_task_manager` 的三兄弟
+（`self.created_at = datetime.now(timezone.utc)`，第 47 行，内存对象）与 `daily_digest:191` 的
+`close_ts`（值是 `_parse_ts` 从带 `+00:00` 的审计记录里解出来的，aware）。**合计 49 处不动。**
+
+剩下 **28 处** = 12 待修 + 2 纯日期 + 3 不能动 + 11 未判。
+
+顺带一个不修但要说的事实：那 13 个 `_utc_now()` / `_utc_timestamp()` helper 里有 11 个逐字相同
+（`datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00","Z")`），散在
+`world_cup_*_source.py` 里。**都对，但十一个副本**——下次改格式要改十一处。
+
+### 已确认：9 个键、12 个调用点，naive 且进响应
+
+判据是**接收者是 ORM 行的列**（SQLite 回来没有 offset），且所在模块从路由可达：
+
+| 站点 | 键 | 到哪 |
+|---|---|---|
+| `engine_auto_tuning_service:410` | `created_at` | `world_cup_predictions` 直接返回该 dict |
+| `world_cup_quality_service:143` | `timestamp` | 质量报告样本条目 |
+| `world_cup_quality_service:560` | `timestamp` | 一致性修复 preview 条目 |
+| `world_cup_result_consistency_service:195` | `updated_at` | 审计响应的 fixture 快照 |
+| `world_cup_verified_result_correction_service:292` | `updated_at` | 修正预览的 fixture |
+| `world_cup_post_match_backfill_service:135` | `kickoff_utc` | 回填报告候选 |
+| `world_cup_post_match_backfill_service:146` | `kickoff_utc` | 陈旧未完成条目 |
+| `odds_cache_service:84` 与 `:134` | `last_update` | 缓存命中 / 新鲜两条分支（各 2 个调用点） |
+| `world_cup_historical_results:76` | `last_match_date` | 历史球队统计 |
+
+这九处的写法与 §53.184 修掉的 `kernel_db` 一模一样——**同一类缺陷的第三批**，只是这次藏在
+service 层。它们能活到今天，是因为 AST 规则只扫 `app.api.routes.` 与 `app.kernel.`，而 service
+既不是路由也不是 store。
+
+### 三处不能按同一个模子改
+
+普查的价值一半在"该改哪些"，另一半在"哪些改了会坏"：
+
+1. **`optimization_task_manager:262` 的 `cutoff_iso`**——它拿去做 **SQL 字符串比较**
+   （`delete_older_than(cutoff_iso)`）。列里存的就是不带 offset 的串，补上 `+00:00` 会让比较全部落空，
+   清理任务从此一条也删不掉。**这里的 naive 是契约。**
+2. **`world_cup_prediction_pipeline:797` / `:869`**——`match_date=match.kickoff_utc.isoformat()` 是传给
+   **天气 API 的出参**，不是响应。改它要先知道那个 API 怎么解释这个串，不代决。
+3. **`optimization_task_manager:63-65` 的三兄弟**——`self.created_at = datetime.now(timezone.utc)`
+   （第 47 行），内存对象，格式化是对的。**同样是 `.isoformat()`，只有接收者从 DB 回来的才有问题。**
+
+### 两处纯日期，不该有 offset
+
+`kalshi_sports_source:103` / `polymarket_sports_source:94` 的 `detected_date` 在
+`sport_market_detector.SportMarketDetection` 里是 `Optional[date]`——**日期没有钟点，也就没有 offset
+可丢**。把它们算进"裸时间戳"会让名册虚胖。
+
+### 还没判的 11 处（写明为什么没判）
+
+| 站点 | 为什么挂着 |
+|---|---|
+| `world_cup_quality_service:103` `_timestamp_bucket` | 分组键（第 351 行）；不补 offset 会让"同一时刻"分不开，但那个键会不会进响应还没读全 |
+| `sentiment_aggregator:132` `pub_date` | `datetime(*published[:6])` **构造出来就 naive**，成因与 DB 那批不同；feed 的日期是什么时区是业务语义 |
+| `transfermarkt_scraper:232` `scraped_at` | 缓存对象，值来自 JSON 还是 DB 未查 |
+| `fixture_freshness_service:165` `reference` | 上游是"参考时刻"，来源未查 |
+| `odds_api_service:54` `_quota_last_checked` | 模块级全局，赋值处未查 |
+| `world_cup_schedule_factors:66` `last_kickoff` | 来自特征输入，时区未知 |
+| `historical_data_ingestor:122/147/188` | 三处都在**不可达**模块（只被测试调用），但 `parsed["kickoff_utc"]` 的 parser 是否补 tz 未查 |
+| `phase9_live_evidence_service:19` | 不可达模块 |
+| `world_cup_prediction_engine:131` | 不可达模块 |
+
+### 方法上的三个坑（都踩了）
+
+- **键名普查必须用词边界**。第一遍用 `grep "last_update"` 数前端消费，得 19 条；加 `\b` 之后是 **2**
+  条——另外 17 条是 `last_updated`（另一个键、另一个生产者）。同一前缀把两个键合成一个数。
+- **AST 与 grep 的行号不同**。`.isoformat()` 跨行写时，AST 报表达式的起始行（`…_api_football_source:669`），
+  grep 报字面量那一行（`:672`）。对账会差 2，差的不是漏扫。
+- **可达 ≠ 进响应**。`pipeline:797` 从路由可达，但那个值进了 HTTPS 查询串。第三遍只能排除"整个模块
+  没人调用"，不能证明"这个值在 body 里"——最后一步必须回读。
+
+### 未决
+
+- **9 个键 / 12 个调用点待修**（上表），本节只普查不动手。修法与 §53.183/184 一致：ORM 列走 `as_utc`。
+- **`sentiment_aggregator` 那处**要先定 feed 日期的时区，属业务语义，不代决。
+- **另外 11 处待判**（上表）：要么来源未查，要么在不可达模块。不可达的三处**不是"安全"**，是"没有消费者"。
+- **`app/` 其余 34 行没普查**：memory 6、api 6、models 5、core 5、utils 4、sports 4、replay 2。其中
+  `app/api` 那 6 处最该先看——路由层是规则覆盖的地方，剩下的漏网意味着家族名不够宽。
+- **11 个 `_utc_now` 副本**：不是缺陷，但合一次要动 11 个文件的导入，不顺手做。
+
+**本节行数**：正文 **+125/−0**，连本段共 **+128/−0**；审计文档已入库 **+23856/−15**，加本节 **+23984/−15**。
+
+## §53.186 修那批 service 层的时间戳：12 处里只有 7 处该改
+
+§53.185 的清单写着「9 个键 / 12 个调用点」。动手前逐个回读，先退回三处——**清单本身有三处要修正**：
+
+| 退回项 | 证据 |
+|---|---|
+| `world_cup_historical_results:76` 的 `last_match_date` | `_load_results()` 里是 `date.fromisoformat(...)` 读 CSV，`rows[0]["date"]` 是 **`datetime.date`**，不是 ORM 列。`as_utc` 会在 `value.tzinfo` 上抛 `AttributeError`。属「纯日期」，与已排除的 `kalshi_sports_source:103` / `polymarket_sports_source:94` 同类 |
+| `odds_cache_service:84/:134` 的 `last_update` | **不进响应**。链路 `get_cached_odds → pipeline:719 → calculate_betting_market_factors`（只取 home/draw/away）/ `age_minutes_from_source`（第 99 行 `cache_age_seconds` 命中就提前返回）。全仓无第二个消费者；`/odds-cache-stats` 只返回计数，`/sport-odds` 走 kernel 的另一个 store |
+| 「9 个键」这个数 | 9 是**站点行数**，不是键名数。真实口径：**6 个键名 / 9 个站点行 / 12 个调用点** |
+
+第三行是 §53.185 自己那条判据（「计数带口径」）的又一次现形：写数字的时候没问「这是谁的数」。
+
+### 真改的 7 处（4 个键名）
+
+| 站点（改后行号） | 键 | 改后 |
+|---|---|---|
+| `engine_auto_tuning_service:411` `get_active_calibration` | `created_at` | `utc_isoformat(calibration.created_at)` |
+| `world_cup_quality_service:144` `_build_sample` | `timestamp` | `utc_isoformat(history.timestamp)` |
+| `world_cup_quality_service:561` `preview_consistency_history_repair` | `timestamp` | `utc_isoformat(row.timestamp)` |
+| `world_cup_result_consistency_service:196` `_fixture_snapshot` | `updated_at` | `utc_isoformat(fixture.updated_at)` |
+| `world_cup_verified_result_correction_service:293` `_fixture_payload` | `updated_at` | `utc_isoformat(fixture.updated_at)` |
+| `world_cup_post_match_backfill_service:136` `_candidate_payload` | `kickoff_utc` | `utc_isoformat(match.kickoff_utc)` |
+| `world_cup_post_match_backfill_service:147` `_stale_unfinished_payload` | `kickoff_utc` | `utc_isoformat(match.kickoff_utc)` |
+
+六个文件各加一行 `from app.utils.helpers import utc_isoformat`；**7 处里 6 处的 `if x else None` 条件表达式随之消失**
+（`utc_isoformat(None)` 返回 `None`），与 §53.184 的 `kernel_db` 同一形状。改动 **+15/−9**，没有一行附带删除。
+
+`odds_cache_service` 那两行也改了（`utc_isoformat(cached.last_updated_api or cached_at)`，复用第 71 行已算好的
+aware 局部量），但**不登记为线格式缺陷**——它不出去。改的理由是「这个模块吐出的每个戳都走同一条规则」，
+以及顺手去掉那个没有守卫的 `else cached.cached_at.isoformat()`。
+
+⚠️ 原文里我写「顺带修一个 `AttributeError`」，**这条要更正**：`OddsCache.cached_at` 声明 `nullable=False`，
+DDL 有 NOT NULL，那个 NULL 分支从 ORM 走不到。所以这只是**防御性写法**，不是崩溃修复。差别很大：
+前者能说「修了个 bug」，后者只能说「统一了写法」。
+
+### 为什么是 `+00:00` 而不是 `Z`
+
+不是口味问题。这 7 处所在的 body 里，别的戳本来就是 `+00:00`：`quality:879` 的 `generated_at`、
+`backfill:307` 的 `ran_at`、`consistency:64` 的 `generated_at`、`correction:185` 的 `observed_at`——
+**改前同一个响应里混着两种形状**，「这一行不对」不需要任何外部标准就能看出来。
+
+### 守卫：`tests/test_service_timestamp_wire.py`（13 测）
+
+值级一层 + 三处 anti-vacuity：
+
+| 守卫 | 抓什么 |
+|---|---|
+| `TestTheColumnsComeBackNaive`（4 列参数化） | 若 SQLite 哪天开始返回 aware，**这个文件的断言全部免费成立**——它是那一天的绊线 |
+| `TestTheBuildersEmitZonedStamps`（7 测，一站点一测） | 递归扫 builder 返回的 dict：`_assert_every_stamp_is_zoned`，外加 `_claim_instant` 断言「同一时刻」，不只断言"有时区" |
+| `TestTheScanSeesWhatItClaimsToGuard` | 每个 dict 恰好 1 个戳；扫描器对空 dict 恒真，不先数就是空头 |
+| `test_the_zone_assertion_rejects_a_bare_stamp` | 正控：共享断言必须拒绝裸戳 |
+
+`_assert_every_stamp_is_zoned` / `_stamp_strings` 从 `test_kernel_timestamp_wire.py` **导入**，不复制——「每个戳都能
+解析出 offset」这条规则只该有一个所有者。代价是两文件耦合，所以本文件**自带正控**：那边被改宽，这边仍有东西会红。
+（跨测试模块导入在本仓有先例：`test_calibration_prior_feedback` 系列就从别的测试模块取 `_record`。）
+
+`tests/test_odds_cache_timestamp_wire.py`（3 测：命中 / 陈旧 / `last_updated_api` 为 None 时回退 `cached_at`）。
+
+这三个用例**最初写在 `test_odds_cache_service.py` 里**（那个文件一度从 1 测变 4 测），随后整段挪出：原文件管
+**缓存的行为**（TTL 边界、陈旧报告、配额计数），形状守卫放进去是两种职责同处一室。挪完原文件**字节与 HEAD
+完全一致**（1 994 B / 纯 LF / 58 个换行）⇒ **零改动**，用例总数不变 —— 3 个用例换了文件，不是 3 个用例消失。
+独立性另有一层理由：分文件后 M7/M8 各自只跑那 3 条，命中分支红了就是命中分支红了，不会被行为测试的噪声盖住。
+
+### 变异：10 个变异体全部被杀，但先是 9 个
+
+| 变异体 | 结果 |
+|---|---|
+| M1–M6、M10：7 个站点逐个改回 | 各红 1（`world_cup_quality_service` 的两个站点、回填的两个站点**各测各的**） |
+| M7 `odds` 缓存命中分支 | **第一次 stayed GREEN** |
+| M8 `odds` 陈旧分支 | 红 2 |
+| M9 控制：`as_utc` 去掉 `replace(tzinfo=...)` | **红 9**，覆盖两个测试文件 |
+
+M7 是这轮唯一一次"以为锁住了"。两处站点在**同一函数的两条 `return`** 里，我按"一个模块一条测试"写了 2 个用例，
+两个都走**陈旧**分支——命中分支的 `last_update` 一个断言都没有。补第 4 个测试（`ttl_seconds=3600` +
+`cached_at = now - 1min`，断言 `stale is False`），M7 才变红。
+⇒ 这是 §4.2 那条「一成员 N 处只补 1 处」在**分支**上的变体：**同名字段的两条出口，不是一处**。
+
+M9 是单所有者的证据：改 `helpers.as_utc` 一行，9 条断言同时红——如果这 7 处各自复写转换逻辑，就只会红一处。
+
+### 一件刻意没做的：`_timestamp_bucket`
+
+`world_cup_quality_service:104` 的 `_timestamp_bucket` 输出 `consistency_issues[].timestamp`（模型
+`QualityConsistencyIssue.timestamp: str`，前端 `analytics-dashboard.tsx:636` 原样显示、不是 `new Date()`），
+**仍在同一个 body 里留着一个 naive 戳**。它属于 §53.185 的「未判」表，本次范围不含。
+
+关键取舍：**守卫不去扫质量报告的 envelope**。扫了它会因为 bucket 而红，而"让断言宽容一个裸戳"就是把守卫删掉——
+宁可少覆盖一个 body，不多留一个可以松口的地方。这条写在这里，是为了让下一个接手的人知道 envelope 现在**没有**守卫。
+
+### 门
+
+`ruff check .` 通过 · `mypy app/` 334 文件 · `generate_types --check` 已最新（字段仍是 `str`/`str | None`，
+schema 不动）· 全量 **9636 测 / 0 失败 / 0 错误 / 11 跳过**（7031 passed + 2594 subtests；分文件前后各跑一次，18m08s / 19m39s，两个计数一字不差）·
+`README.md` 后端测试文件 448 → **450**（两个新文件，`test_readme_inventory` 会盯这个数）。
+
+### 未决
+
+- **`_timestamp_bucket`**：同 body 里最后一个 naive，要修得连分组键一起改（分组不变，只多后缀；前端是纯文本显示）。
+- **`odds_cache` 的 4 个调用点不是线缺陷**：现在有测试钉住形状，但**哪天这个 dict 变成响应体，它就不再是"内部值"了**。
+- **`app/` 其余 34 行仍未普查**（memory 6、api 6、models 5、core 5、utils 4、sports 4、replay 2）。`app/api` 那 6 处
+  最该先看：路由层是规则覆盖的地方，漏网意味着家族名不够宽。
+
+**本节行数**：正文 **+230/−0**，连本段共 **+231/−0**；审计文档已入库 **+23856/−15**，加本节 **+24087/−15**。

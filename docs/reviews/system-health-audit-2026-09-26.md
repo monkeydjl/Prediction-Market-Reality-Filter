@@ -24167,3 +24167,99 @@ N2 才是重点：**形状守卫抓不到截断丢失**——它的种子是整�
   形状守卫与分组守卫必须分开写，合成一条会让其中一半永远空过。
 
 **本节行数**：正文 **+94/−0**，连本段共 **+97/−0**；审计文档已入库 **+24087/−15**，加本节 **+24184/−15**。
+
+## §53.188 私有 `_isoformat`：一个助手把缺陷藏了三轮
+
+§53.187 的普查（口径：AST `.isoformat()` 调用点）在 29 个候选里挑出这一处。它不是"又一个漏网的字符串"，
+而是**为什么会漏**的答案。
+
+### 事实
+
+`app/services/phase9_live_evidence_service.py` 里有一个私有助手：
+
+```python
+def _isoformat(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    return value.isoformat()
+```
+
+全 `app/` 只有这一个（`grep -rn "def _[a-z_]*isoformat" app/` ⇒ 一条）。它喂给
+`groups[].latest_settled_at`，来源是 `KernelMatchOutcome.finished_at`（ORM 列 ⇒ SQLite 回来 naive），
+路由 `sport_optimization.py:208` 直接把 `build_live_evidence_report()` 的返回值当 body 返回。
+
+**探针实测**（只读，写 aware 读回 naive）：
+
+| 步骤 | 读数 |
+|---|---|
+| 写入 | `2026-06-20T13:00:00+00:00` |
+| 读回 | `datetime(2026, 6, 20, 13, 0)`，`tzinfo=None` |
+| 出线 | `'2026-06-20T13:00:00'` |
+
+### 五条漏网原因，逐条都有证据
+
+| # | 原因 | 证据 |
+|---|---|---|
+| 1 | **目录前缀** | AST 规则扫 `app.api.routes.` / `app.kernel.`，这个模块在 `app/services` |
+| 2 | **名字** | 历次普查都以 `utc_isoformat` 为锚；私有 `_isoformat` 让锚失效——**同一个动作换个名字就是另一个世界** |
+| 3 | **测试把生产者 mock 掉** | `test_sport_optimization_routes.py:266` 把 `build_live_evidence_report` 换成字面量，真 body 从没走过 wire 断言 |
+| 4 | **开关** | `PHASE9_ACCURACY_SPRINT_ENABLED` 默认 false ⇒ 503，与「没这条路由」同形（§53.184） |
+| 5 | **测试把缺陷钉成契约** | `test_phase9_live_evidence_service.py:93` 断言 `== "2026-01-03T00:00:00"`。绿了很久，因为断言写的就是缺陷 |
+
+第 5 条是这一节最贵的一条：**它不是漏检，是反向锁定**。修的时候它会立刻变红——这正是 §4.2 那条
+「改实现前先回读断言行」要挡的东西，只是这次反过来用在"改对了但旧断言是错的"上。
+处理方式是把断言改成 `+00:00` 并就地注明「这一行原本是缺陷的书面形式」，不留一条被悄悄删掉的断言。
+
+### 修法
+
+删助手，改一次调用：
+
+```python
+"latest_settled_at": utc_isoformat(group["latest_settled_at"]),
+```
+
+循环顶部 `finished_at > latest` 的比较**不动**——那是分组逻辑，不是序列化；把它挪到字符串上会是另一次改动。
+随助手一起消失的还有 `from datetime import datetime`（它是唯一用户）。
+
+### 守卫：并进 `test_kernel_timestamp_wire.py`，不新开文件
+
+那个文件已经有 kernel DB 夹具、`_stamp_strings` / `_assert_every_stamp_is_zoned`、正控和「把开关打开」的约定；
+本节只加三个东西：
+
+| 加什么 | 抓什么 |
+|---|---|
+| 参数化 URL 列表 **+1 条** | 整个 body 递归扫 ISO 形状 |
+| `test_live_evidence_stamp_is_the_same_instant` | **同一时刻**：zone 对不代表时刻对 |
+| 计数表 **+1 条（1 个戳）** | 空头：body 里没戳时扫描恒真 |
+
+`client` 夹具因此从"两个家族"变成"三个家族"，并多打开一个开关——与 §53.184 同一做法（开关关着时，
+handler 代码路径从没被执行过，而它正是运维某天打开开关时跑的那段）。
+
+### 变异：N2 只红 2，wire 扫描照绿
+
+| 变异体 | 结果 |
+|---|---|
+| N0 基线 | 绿 |
+| N1 改回裸戳 | 红 **3**：wire 扫描 / 同一时刻 / 旧字符串用例 |
+| N2 用 `+08:00` 冒充修复 | 红 **2**：同一时刻 / 旧字符串用例，**wire 扫描 GREEN** |
+| NZ 还原 | 绿，sha256 一致 |
+
+N2 是这一节的第二个证据：`+08:00` 是**合法 offset**，递归扫描会痛快放行，而它整整错了 8 小时。
+没有「同一时刻」那一条，把 `as_utc` 换成 `replace(tzinfo=...)` 就能骗过全套。
+
+⇒ 三层各管一件事：扫描管「有没有 offset」，同一时刻管「offset 对不对」，计数管「有没有东西可扫」。
+
+### 门
+
+`ruff check .` 通过 · `mypy app/` 334 文件 · `generate_types --check` 已最新（该路由没有 `response_model`，返回裸 dict ⇒ 生成物本来就不变）· 全量 **9642 测 / 0 失败 / 0 错误 / 11 跳过**（7037 passed + 2594 subtests，18m32s；比上一轮 +2 = 本节两条新断言）。
+README 不动：**没有新增测试文件**（守卫并进了已有的 `test_kernel_timestamp_wire.py`）。
+
+### 未决
+
+- §53.187 普查里的两处潜在（`transfermarkt_scraper:232`、`world_cup_schedule_factors:66`）仍在：都无消费者，
+  但前者的 aware 值就在手边。
+- **普查锚要同时锚「动作」与「动作的别名」**——这次是 `utc_isoformat` vs 私有 `_isoformat`，
+  下次可能是 `strftime` 或 `format()`。下一步该补的是「任何把 `datetime` 变字符串的调用」，而不是再列一遍名字。
+- `models 5` 那批（pydantic / `jsonable_encoder` 序列化 `datetime` 字段）仍未扫，需要 wire 层，AST 数不到。
+
+**本节行数**：正文 **+93/−0**，连本段共 **+96/−0**；审计文档已入库 **+24184/−15**，加本节 **+24280/−15**。

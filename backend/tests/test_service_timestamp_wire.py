@@ -1,10 +1,10 @@
-"""The seven service-layer stamps that reach a response must carry an offset.
+"""The eight service-layer stamps that reach a response must carry an offset.
 
-Audit 53.186, the repair of 53.185's open list. The census there found these
-sites by reading ``app/services``; the AST rule in
-``test_row_timestamp_serialization.py`` cannot see them because it sweeps only
-``app.api.routes.`` and ``app.kernel.`` -- a service is neither a route nor a
-store. That is the whole reason this family survived three sweeps.
+Audit 53.186, the repair of 53.185's open list, plus the site 53.186 deferred
+(53.187). The census there found these sites by reading ``app/services``; the AST
+rule in ``test_row_timestamp_serialization.py`` cannot see them because it
+sweeps only ``app.api.routes.`` and ``app.kernel.`` -- a service is neither a
+route nor a store. That is the whole reason this family survived three sweeps.
 
 What is different here, and why a plain call-site sweep still would not have
 been enough: the conversion is the *producer's* job, and the dict it returns
@@ -23,11 +23,13 @@ One layer plus two anti-vacuity guards:
 * **each dict really contains a stamp** -- the scan passes trivially on a body
   with no stamps in it.
 
-Deliberately **not** scanned: the quality report *envelope*, whose
-``consistency_issues[].timestamp`` is ``_timestamp_bucket``'s grouping key and
-still emits a naive string (deferred by scope, see 53.186). Scanning that body
-here would fail for a reason this file is not about, and widening the assertion
-to tolerate one unzoned stamp would delete the guard.
+The envelope is now scanned too. 53.186 left it alone because
+``consistency_issues[].timestamp`` was ``_timestamp_bucket``'s grouping key and
+still naive: scanning that body would have failed for a reason this file is not
+about, and widening the assertion to tolerate one unzoned stamp would have
+deleted the guard. 53.187 fixed the bucket, so the whole report can be scanned
+without an exception -- which is the point. A guard that needs a carve-out is a
+guard that has already been negotiated down.
 
 The shared scan lives in ``test_kernel_timestamp_wire.py`` -- one owner for the
 rule "every stamp parses to an aware datetime". This file still runs its own
@@ -53,6 +55,7 @@ from app.services.world_cup_post_match_backfill_service import (
 )
 from app.services.world_cup_quality_service import (
     _build_sample,
+    build_quality_loop_report,
     preview_consistency_history_repair,
 )
 from app.services.world_cup_result_consistency_service import _fixture_snapshot
@@ -143,6 +146,33 @@ def _seed() -> None:
         prediction_db.close_prediction_session(session)
 
 
+def _seed_conflict() -> None:
+    """A second history row at the same instant with a different score.
+
+    ``_timestamp_bucket`` only appears in the body when a conflict exists: the
+    group has to contain two variants before ``issues.append`` runs at all. One
+    row would have made the envelope guard below silently vacuous -- it would
+    still find ``generated_at`` and pass.
+    """
+    session = prediction_db.get_prediction_session()
+    try:
+        session.add(PredictionHistory(
+            match_id="wc-1",
+            timestamp=AT,
+            predicted_home_score=1.2,
+            predicted_away_score=1.8,
+            home_win_prob=0.20,
+            draw_prob=0.25,
+            away_win_prob=0.55,
+            confidence=0.7,
+            trigger="daily_update",
+            prediction_method="hybrid",
+        ))
+        session.commit()
+    finally:
+        prediction_db.close_prediction_session(session)
+
+
 def _rows(model):
     """Read a row back through the ORM, i.e. through SQLite's type handling."""
     session = prediction_db.get_prediction_session()
@@ -216,6 +246,25 @@ class TestTheBuildersEmitZonedStamps:
         _assert_every_stamp_is_zoned(payload)
         _claim_instant(payload["items"][0]["timestamp"])
 
+    def test_quality_report_consistency_issue_timestamp(self, prediction_db_file):
+        """Not a builder -- the report envelope, the site 53.186 deferred.
+
+        ``consistency_issues[].timestamp`` is ``_timestamp_bucket``'s grouping
+        key *and* the string the dashboard prints. One value, two jobs, which is
+        why it could not be wrapped like the seven above: the truncation that
+        makes it a key had to survive the change.
+        """
+        _seed()
+        _seed_conflict()
+        session = prediction_db.get_prediction_session()
+        try:
+            report = build_quality_loop_report(session=session)
+        finally:
+            prediction_db.close_prediction_session(session)
+        assert len(report["consistency_issues"]) == 1, report["consistency_issues"]
+        _assert_every_stamp_is_zoned(report)
+        _claim_instant(report["consistency_issues"][0]["timestamp"])
+
     def test_result_consistency_fixture_updated_at(self, prediction_db_file):
         _seed()
         payload = _fixture_snapshot(_rows(MatchFixture))
@@ -262,6 +311,30 @@ class TestTheScanSeesWhatItClaimsToGuard:
         payloads["active_calibration"] = get_active_calibration("hybrid")
         for name, payload in payloads.items():
             assert len(_stamp_strings(payload)) == 1, (name, payload)
+
+    def test_the_quality_report_carries_one_stamp_per_source(self, prediction_db_file):
+        """The envelope again, this time as a count.
+
+        ``_assert_every_stamp_is_zoned`` on the report would still pass if the
+        issue list came back empty -- it would just find ``generated_at``. The
+        count is what makes the claim cover the bucket.
+
+        Two, not three: the report does **not** carry ``samples``. The per-sample
+        dicts are reduced to counters and trend points here (``trends[].date`` is
+        a date, not a stamp), so the body's only stamps are its own clock and the
+        bucket. ``_build_sample`` is guarded as a producer in its own right.
+        """
+        _seed()
+        _seed_conflict()
+        session = prediction_db.get_prediction_session()
+        try:
+            report = build_quality_loop_report(session=session)
+        finally:
+            prediction_db.close_prediction_session(session)
+        stamps = _stamp_strings(report)
+        assert report["generated_at"] in stamps
+        assert report["consistency_issues"][0]["timestamp"] in stamps
+        assert len(stamps) == 2, stamps
 
 
 def test_the_zone_assertion_rejects_a_bare_stamp() -> None:

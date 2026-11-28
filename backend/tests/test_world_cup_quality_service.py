@@ -196,6 +196,64 @@ class WorldCupQualityServiceTests(unittest.TestCase):
 
         self.assertEqual(report["consistency_issues"], [])
 
+    def test_same_second_is_one_group_across_a_sub_second_difference(self):
+        """The bucket is a grouping key *and* the value on the wire (53.187).
+
+        The offset could not simply be appended to the old string: the same
+        string is the group key, and the truncation to whole seconds is what
+        makes "same second" mean anything. Drop the truncation while adding the
+        offset and these two rows land in different groups -- each group then
+        holds one variant, ``len(score_variants) <= 1`` skips it, and the
+        conflict stops being reported. A formatter change that silently removes
+        a detection is the worst kind of green.
+        """
+        kickoff = self._add_finished_match("m1", 2, 1, kickoff=datetime(2026, 6, 14, 18, 0, 0))
+        timestamp = kickoff - timedelta(hours=1)
+        self._add_history(
+            "m1", kickoff, "hybrid", 2, 1, 0.80,
+            timestamp=timestamp.replace(microsecond=123456),
+        )
+        self._add_history(
+            "m1", kickoff, "hybrid", 1, 2, 0.80,
+            timestamp=timestamp.replace(microsecond=654321),
+        )
+        self.session.commit()
+
+        report = build_quality_loop_report(session=self.session)
+
+        self.assertEqual(len(report["consistency_issues"]), 1)
+        issue = report["consistency_issues"][0]
+        self.assertEqual(issue["rows"], 2)
+        self.assertEqual(issue["variant_count"], 2)
+        self.assertEqual(issue["timestamp"], "2026-06-14T17:00:00+00:00")
+
+    def test_adjacent_seconds_stay_two_groups(self):
+        """The other side of the truncation: a second later is a new group.
+
+        Together with the test above this pins the bucket at *whole seconds* --
+        not sub-second (which would split) and not coarser (which would merge
+        and hand the reviewer one issue where there are two).
+        """
+        kickoff = self._add_finished_match("m1", 2, 1, kickoff=datetime(2026, 6, 14, 18, 0, 0))
+        base = kickoff - timedelta(hours=1)
+        for seconds, home, away in ((0, 2, 1), (0, 1, 2), (1, 3, 0), (1, 0, 3)):
+            self._add_history(
+                "m1", kickoff, "hybrid", home, away, 0.80,
+                timestamp=base + timedelta(seconds=seconds),
+            )
+        self.session.commit()
+
+        report = build_quality_loop_report(session=self.session)
+
+        self.assertEqual(
+            [issue["timestamp"] for issue in report["consistency_issues"]],
+            ["2026-06-14T17:00:01+00:00", "2026-06-14T17:00:00+00:00"],
+        )
+        self.assertEqual(
+            [issue["rows"] for issue in report["consistency_issues"]],
+            [2, 2],
+        )
+
     def test_consistency_repair_plan_is_dry_run_manual_for_unknown_methods(self):
         kickoff = self._add_finished_match("m1", 2, 1)
         timestamp = kickoff - timedelta(hours=1)

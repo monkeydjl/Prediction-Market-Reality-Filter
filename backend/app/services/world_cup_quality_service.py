@@ -98,10 +98,29 @@ def _match_date(match: MatchFixture) -> str:
 
 
 def _timestamp_bucket(value: datetime | None) -> str:
+    """Whole-second UTC stamp: the grouping key *and* the value the client reads.
+
+    The truncation is not cosmetic -- it **is** the key. The caller groups on
+    ``(match_id, engine, this string)`` to find "same match, same engine, same
+    second, different score", so dropping ``microsecond=0`` would not merely
+    reformat: it would split one group per microsecond and the conflict would
+    stop being detected. Format and partition move together here, which is why
+    53.186 deferred this site instead of wrapping it like the six before it.
+
+    The offset was missing (audit 53.186's last naive stamp in this body, closed
+    here at 53.187). It is a constant suffix, so it shifts neither the grouping
+    nor the sort at the call site.
+    """
     timestamp = _utc_naive(value)
     if timestamp is None:
         return "unknown"
-    return timestamp.replace(microsecond=0).isoformat()
+    stamp = utc_isoformat(timestamp.replace(microsecond=0))
+    # ``utc_isoformat`` keeps its ``None`` in the signature, so the narrowing is
+    # spelled out rather than cast. Failing loudly beats degrading to "unknown":
+    # that is a real bucket, and an unexpected None would merge unrelated rows
+    # into it -- a detection quietly lost, which is what this whole fix is about.
+    assert stamp is not None
+    return stamp
 
 
 def _brier_score(history: PredictionHistory, outcome: str) -> float:

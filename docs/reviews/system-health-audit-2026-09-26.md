@@ -24070,3 +24070,100 @@ schema 不动）· 全量 **9636 测 / 0 失败 / 0 错误 / 11 跳过**（7031 
   最该先看：路由层是规则覆盖的地方，漏网意味着家族名不够宽。
 
 **本节行数**：正文 **+230/−0**，连本段共 **+231/−0**；审计文档已入库 **+23856/−15**，加本节 **+24087/−15**。
+
+## §53.187 `_timestamp_bucket`：一个字符串兼两份工作
+
+§53.186 的「未决」第一条。看着是同一家族的第 8 个站点，其实不是——那个字符串**同时**是分组键和给人看的值。
+
+### 为什么不能照抄前七处
+
+分组键在 `:371`：
+
+```python
+groups[(history.match_id, _consistency_engine(history.prediction_method),
+        _timestamp_bucket(history.timestamp))].append(history)
+```
+
+同一条字符串又在 `:416` 写成 `issues[].timestamp`（模型 `QualityConsistencyIssue.timestamp: str`），
+前端 `analytics-dashboard.tsx:636` 在 `font-mono` 里原样打印，`:631` 还用它拼 React `key`。
+
+所以「加个后缀」不是格式化——**是改主键**。`microsecond=0` 一旦去掉，同一秒的两行会各成一组，
+`len(score_variants) <= 1` 把它们全部跳过，**同秒冲突检测静默失效**。这就是 §53.186 当时把它留下的原因：
+那七处能一行包掉，是因为它们只影响「怎么写」；这一处改的是「谁和谁一组」。
+
+唯一兼顾的写法是**截断在里、后缀在外**：
+
+```python
+stamp = utc_isoformat(timestamp.replace(microsecond=0))
+```
+
+`+00:00` 是常量后缀 ⇒ 分组不变；`:424` 的 `sort(reverse=True)` 也不变（公共后缀不移动相对序，
+`"unknown"` 与 ISO 串的相对序同样不变）。
+
+### 这里的 `None` 不是「缺失」
+
+前七处修的是「`if x else None` 多造了一种形状」，这一处的 `None` 是一档真值：`"unknown"` 表示
+「这一行不知道落在哪一秒」。它和「没有值」不是一件事，所以那个分支不动。
+
+### mypy 逼出来的第三种写法
+
+`utc_isoformat` 的签名是 `(datetime | None) -> str | None`，而这个函数返回 `str`，`mypy app/` 当场报
+`Incompatible return value type (got "str | None", expected "str")`。三条路，只有一条能接受：
+
+| 写法 | 问题 |
+|---|---|
+| `cast(str, ...)` | 连「真的 None」一起骗过去 |
+| `... or "unknown"` | 把意外 None **并进一个真实的桶**：两批无关的行合成一组 = 又静默丢一个告警 |
+| `assert stamp is not None` ✅ | 契约变化当场炸；`-O` 下行为不变（值本来就是 `str`） |
+
+### 守卫拆成两处，因为有两件事
+
+| 位置 | 抓什么 |
+|---|---|
+| `test_service_timestamp_wire.py::test_quality_report_consistency_issue_timestamp` | 形状：整个 report body 递归扫，**envelope 第一次被扫**且不需要任何豁免 |
+| `test_world_cup_quality_service.py::test_same_second_is_one_group_across_a_sub_second_difference` | 分组：同秒、差 0.5 s、比分不同 ⇒ 仍是 1 个问题、`rows=2` |
+| `test_world_cup_quality_service.py::test_adjacent_seconds_stay_two_groups` | 分组的另一侧：相邻秒是两组（不是更粗的桶） |
+| `test_service_timestamp_wire.py::test_the_quality_report_carries_one_stamp_per_source` | 空头：body 里**恰好 2 个戳** |
+
+第四条是必须的：`_assert_every_stamp_is_zoned` 对「`consistency_issues` 为空」的报告照样通过——
+它只找到 `generated_at`，什么也没验证。
+
+⚠️ 我第一版把这个数写成 3，理由是「`generated_at` + sample + bucket」。**报告里根本没有 `samples`**：
+`build_quality_loop_report` 只保留 counters / overall / by_engine / trends 聚合，逐样本 dict 不出去。
+又一次「数字要问这是谁的」。
+
+### 变异：N2 只红 1，这一条才是本节的证据
+
+| 变异体 | 结果 |
+|---|---|
+| N0 基线（不改） | 绿 |
+| N1 去掉后缀（改回原样） | 红 **3**：形状 1 + 分组 2 |
+| N2 只加后缀、不截断 | 红 **1**：只有「同秒分组」那条 |
+| NZ 还原 | 绿，sha256 与变异前一致 |
+
+N2 才是重点：**形状守卫抓不到截断丢失**——它的种子是整秒，`_assert_every_stamp_is_zoned` 对带微秒的戳
+照样通过（戳是 zoned 的，只是分到了自己那一组）。没有那条分组用例，这次修复会把「同秒冲突检测」悄悄改坏
+而全绿。
+
+⇒ 与 §53.186 的 M7 是同一条道理的另一面：上一轮是「**一个字段**两条出口」，这一轮是
+「**一个字符串**两种用途」。两轮都不是靠"再仔细看一遍"发现的，是靠变异把守卫按**用途**拆开。
+
+### 消费侧
+
+前端那行是纯文本（`{issue.timestamp}`），不 `new Date()` ⇒ 多出 6 个字符，不解析、不偏移；React `key`
+会重挂一次，无副作用。嫌长该在**消费侧**格式化，而不是让生产者也吐裸戳——那正是这个家族所有缺陷的起因。
+
+### 门
+
+`ruff check .` 通过 · `mypy app/` 334 文件 · `generate_types --check` 已最新（该字段仍是 `str`，schema 不动）·
+全量 **9640 测 / 0 失败 / 0 错误 / 11 跳过**（7035 passed + 2594 subtests，17m07s）。
+比上一轮多 4 测，正是本节在**两个已有文件**里各加 2 条 ⇒ `README.md` 的 450 个测试文件不动（没有新文件）。
+
+### 未决
+
+- §53.186 的三条里，`_timestamp_bucket` 这条关闭。剩下两条不动：`app/` 其余 34 行（`app/api` 那 6 处优先）、
+  440 B 阈值要按「一条判据的实测份量」重算。
+- 这一处给下一个接手的人留了一个模式：**当被改的字符串同时是键时，先找它的所有用途，再决定改法**；
+  形状守卫与分组守卫必须分开写，合成一条会让其中一半永远空过。
+
+**本节行数**：正文 **+94/−0**，连本段共 **+97/−0**；审计文档已入库 **+24087/−15**，加本节 **+24184/−15**。

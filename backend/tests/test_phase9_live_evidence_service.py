@@ -90,7 +90,10 @@ def test_threshold_and_aggregates(db, monkeypatch):
     assert group["readiness"] == "ready"
     assert group["accuracy"] == 0.5
     assert group["avg_brier_score"] == 0.1
-    assert group["latest_settled_at"] == "2026-01-03T00:00:00"
+    # 53.188: this assertion used to pin the bare string and was, in effect, the
+    # defect written down. The value is a wire stamp -- it now carries the offset
+    # the column loses; the instant did not move.
+    assert group["latest_settled_at"] == "2026-01-03T00:00:00+00:00"
 
 
 def test_groups_are_separate_and_sorted(db, monkeypatch):

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime
 from typing import Any
 
 from app.core.config import settings
@@ -11,12 +10,7 @@ from app.kernel.kernel_db import (
     KernelPrediction,
     get_kernel_session,
 )
-
-
-def _isoformat(value: datetime | None) -> str | None:
-    if value is None:
-        return None
-    return value.isoformat()
+from app.utils.helpers import utc_isoformat
 
 
 def build_live_evidence_report() -> dict[str, Any]:
@@ -86,7 +80,7 @@ def build_live_evidence_report() -> dict[str, Any]:
                         if group["brier_count"]
                         else None
                     ),
-                    "latest_settled_at": _isoformat(group["latest_settled_at"]),
+                    "latest_settled_at": utc_isoformat(group["latest_settled_at"]),
                 }
             )
 

@@ -19,6 +19,12 @@ to ``false``, which is why 53.183's open list read them as consumer-less: a 503
 answering "feature off" looks exactly like "no route exists". This file turns
 the flags on and asserts what the wire then carries.
 
+53.188 added a third family to the same fixture: ``/sport-optimization
+/live-evidence`` returned ``latest_settled_at`` as a bare stamp, because its
+service formatted the value with a private ``_isoformat`` helper of its own --
+the only one in ``app/``, which is why grepping for ``utc_isoformat`` would
+never have found it. Same flag shape (defaults to false, so 503), same silence.
+
 Two layers, because either alone is defeatable:
 
 * **type level** -- the converter's return value carries an offset. A new key
@@ -120,21 +126,29 @@ def _seed(kernel_db) -> None:
 
 @pytest.fixture
 def client(kernel_db, monkeypatch):
-    """Both families mounted, both feature flags on.
+    """Three families mounted, every feature flag on.
 
     The flags default to ``false``; turning them on is the whole point -- the
     handler code path is what was never exercised, and it is the same code that
     runs the day an operator flips them.
+
+    ``sport_optimization`` joined in 53.188: its ``/live-evidence`` body carried
+    a bare ``latest_settled_at`` because the service formatted it with a private
+    ``_isoformat`` helper instead of ``utc_isoformat``. The route's own test
+    could not see it -- it monkeypatches ``build_live_evidence_report`` with a
+    literal, so the real body never reaches the wire there.
     """
     monkeypatch.setattr(config.settings, "KERNEL_PREDICTION_ENABLED", True)
     monkeypatch.setattr(
         config.settings, "PHASE7_MARKET_SETTLEMENT_FEEDBACK_ENABLED", True
     )
-    from app.api.routes import predictions, sport_settlements
+    monkeypatch.setattr(config.settings, "PHASE9_ACCURACY_SPRINT_ENABLED", True)
+    from app.api.routes import predictions, sport_optimization, sport_settlements
 
     app = FastAPI()
     app.include_router(predictions.router, prefix="/api")
     app.include_router(sport_settlements.router, prefix="/api")
+    app.include_router(sport_optimization.router, prefix="/api")
     _seed(kernel_db)
     return TestClient(app)
 
@@ -264,11 +278,24 @@ class TestTheWireCarriesTheOffset:
         "/api/sport-settlements/history?limit=5",
         "/api/sport-settlements/calibrations",
         "/api/sport-settlements/nba-1",
+        "/api/sport-optimization/live-evidence",
     ])
     def test_body_stamps_carry_an_offset(self, client, url):
         response = client.get(url)
         assert response.status_code == 200, response.text
         _assert_every_stamp_is_zoned(response.json())
+
+    def test_live_evidence_stamp_is_the_same_instant(self, client):
+        """Zoned is half the claim; the other half is *which* instant.
+
+        ``utc_isoformat`` converts a naive value by assuming UTC, while a
+        ``replace(tzinfo=...)`` would keep the wall clock and move the instant.
+        Both pass a zone-only assertion, so this reads the value back.
+        """
+        body = client.get("/api/sport-optimization/live-evidence").json()
+        stamp = body["groups"][0]["latest_settled_at"]
+        parsed = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+        assert parsed.astimezone(timezone.utc) == AT, stamp
 
     def test_the_scan_sees_the_stamps_it_claims_to_guard(self, client):
         """Anti-vacuity for the scan itself, per endpoint.
@@ -283,6 +310,7 @@ class TestTheWireCarriesTheOffset:
             "/api/sport-settlements/history?limit=5": 3,
             "/api/sport-settlements/calibrations": 1,
             "/api/sport-settlements/nba-1": 3,
+            "/api/sport-optimization/live-evidence": 1,  # latest_settled_at
         }
         for url, count in expected.items():
             body = client.get(url).json()

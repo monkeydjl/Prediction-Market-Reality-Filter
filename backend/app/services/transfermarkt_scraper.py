@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 import httpx
 from bs4 import BeautifulSoup
 
+from app.utils.helpers import as_utc, utc_isoformat
 from app.utils.prediction_db import get_prediction_session, close_prediction_session
 
 logger = logging.getLogger(__name__)
@@ -214,10 +215,11 @@ def get_cached_market_value(team_name: str, ttl_days: int = 7) -> dict[str, Any]
         if not cached:
             return None
 
-        # Check if expired
-        # SQLite stores naive datetimes; attach UTC tzinfo before subtracting.
-        scraped_at = cached.scraped_at.replace(tzinfo=timezone.utc) if cached.scraped_at else None
-        if not scraped_at:
+        # Check if expired. 53.189: the offset comes from the owner rather than a
+        # local `replace(tzinfo=...)` -- relabelling keeps the wall clock, so an
+        # aware value would be wrong by its offset instead of converted.
+        scraped_at = as_utc(cached.scraped_at)
+        if scraped_at is None:
             return None
         age = datetime.now(timezone.utc) - scraped_at
         if age > timedelta(days=ttl_days):
@@ -229,7 +231,9 @@ def get_cached_market_value(team_name: str, ttl_days: int = 7) -> dict[str, Any]
             "avg_player_value": cached.avg_player_value,
             "num_players": cached.num_players,
             "source": "transfermarkt_cached",
-            "scraped_at": cached.scraped_at.isoformat(),
+            # The same value that was just aged, not the column again: the column
+            # is the one that lost the offset on the way out of SQLite.
+            "scraped_at": utc_isoformat(scraped_at),
             "url": cached.url,
             "cache_age_hours": age.total_seconds() / 3600
         }

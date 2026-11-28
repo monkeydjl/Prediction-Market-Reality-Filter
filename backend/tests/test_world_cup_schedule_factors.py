@@ -5,7 +5,21 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.models.world_cup_prediction import Base, MatchFixture
-from app.services.world_cup_schedule_factors import build_schedule_factors
+from app.services.world_cup_schedule_factors import _team_schedule, build_schedule_factors
+
+#: The per-team shape. Pinned as a set because 53.189 deleted a dead key from
+#: both returns -- ``last_match_utc``, which nothing in ``backend/`` or
+#: ``frontend/`` read. "No reader" was established by grep; this is what makes
+#: the *absence* stay true, since a key with no reader can come back without
+#: breaking anything -- which is how it survived in the first place.
+TEAM_SCHEDULE_KEYS = {
+    "days_since_last_match",
+    "matches_last_14_days",
+    "schedule_density",
+    "last_match_id",
+}
+
+FACTORS_KEYS = {"home", "away", "rest_days_difference", "rest_advantage"}
 
 
 def naive() -> datetime:
@@ -69,6 +83,36 @@ class WorldCupScheduleFactorsTests(unittest.TestCase):
         self.assertEqual(factors["rest_advantage"], "balanced")
         self.assertEqual(factors["home"]["days_since_last_match"], 7)
         self.assertEqual(factors["away"]["matches_last_14_days"], 0)
+
+    def test_the_shape_is_pinned_on_every_return(self):
+        """Three carriers, because ``_team_schedule`` has two returns.
+
+        53.188's lesson applied here: a rule that holds at one exit is not a rule
+        about the function. The early return is unreachable from a persisted row
+        (``kickoff_utc`` is NOT NULL), so it is exercised with a transient
+        fixture -- the branch is defensive, but the *shape* promise is the same
+        one, and dropping a key from only that branch would otherwise be silent.
+        """
+        kickoff = naive() + timedelta(days=1)
+        target = self._add_match("target", "Home", "Away", kickoff, status="scheduled")
+        self._add_match("h1", "Home", "Other A", kickoff - timedelta(days=6))
+        self.session.commit()
+
+        factors = build_schedule_factors(target, self.session)
+        self.assertEqual(set(factors), FACTORS_KEYS)
+        for side in ("home", "away"):
+            with self.subTest(side=side):
+                self.assertEqual(set(factors[side]), TEAM_SCHEDULE_KEYS)
+
+        transient = MatchFixture(
+            match_id="no-kickoff",
+            fixture_id="no-kickoff",
+            home_team="Home",
+            away_team="Away",
+            kickoff_utc=None,
+            stage="group_stage",
+        )
+        self.assertEqual(set(_team_schedule("Home", transient, self.session)), TEAM_SCHEDULE_KEYS)
 
 
 if __name__ == "__main__":

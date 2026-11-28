@@ -27,7 +27,6 @@ def _team_schedule(team: str, match: MatchFixture, session: Session) -> dict[str
             "matches_last_14_days": 0,
             "schedule_density": "normal",
             "last_match_id": None,
-            "last_match_utc": None,
         }
 
     previous_matches = session.query(MatchFixture).filter(
@@ -63,7 +62,6 @@ def _team_schedule(team: str, match: MatchFixture, session: Session) -> dict[str
         "matches_last_14_days": matches_last_14,
         "schedule_density": density,
         "last_match_id": last_match.match_id if last_match else None,
-        "last_match_utc": last_kickoff.isoformat() if last_kickoff else None,
     }
 
 

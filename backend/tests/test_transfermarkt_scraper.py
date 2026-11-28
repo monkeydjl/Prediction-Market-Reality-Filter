@@ -16,18 +16,28 @@ So the durable part is what is a bug regardless of who drives it:
   is asserted to carry it -- so changing the posture is a one-line edit, not a
   hunt through headers dicts.
 
-Not covered here: the cache read path (the only production consumer) opens the
-prediction DB and is exercised where that store lives.
+The cache read path -- ``get_cached_market_value``, the only production
+consumer -- was "not covered here" until 53.189. That omission is where a latent
+site lived: the function aged the column with ``replace(tzinfo=...)`` and then
+serialised **the column again**, so the response carried a bare stamp while the
+arithmetic beside it used an aware one. A test of the arithmetic would not have
+caught it; a test of the returned dict does, which is why the class at the
+bottom reads a real SQLite round-trip rather than a hand-built row.
 """
 from __future__ import annotations
 
 import asyncio
 import inspect
+import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
+from app.core import config
+from app.models.world_cup_prediction import TeamMarketValue
 from app.services import transfermarkt_scraper as scraper
+from app.utils import prediction_db
 
 
 class ParseMarketValueTests(unittest.TestCase):
@@ -162,6 +172,150 @@ class RequestHeaderTests(unittest.TestCase):
                 )
             )
         client.assert_not_called()
+
+
+CACHED_ROW_KEYS = {
+    "team_name",
+    "total_market_value",
+    "avg_player_value",
+    "num_players",
+    "source",
+    "scraped_at",
+    "url",
+    "cache_age_hours",
+}
+
+
+class CachedMarketValueReadTests(unittest.TestCase):
+    """``get_cached_market_value``: the offset has to survive the read path.
+
+    The row is written **aware** and read back **through SQLite**, which is what
+    drops the offset. That round-trip is the whole point -- a hand-built row would
+    encode my assumption about the driver instead of testing it, and the
+    assumption is checked separately in
+    :meth:`test_the_column_really_comes_back_naive`.
+
+    What this class does **not** distinguish: ``as_utc`` from a local
+    ``replace(tzinfo=timezone.utc)``. On a naive column those two are the same
+    operation, so no test here can tell them apart -- and none should pretend to.
+    The relabelling difference only appears on a driver that returns an offset
+    (Postgres, MySQL), and it is pinned where the rule lives, in
+    ``test_helpers.py``. The reason this site calls ``as_utc`` is **single
+    ownership** of that rule, not a behaviour change on SQLite.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        patcher = mock.patch.object(
+            config.settings,
+            "WORLD_CUP_PREDICTION_DB_FILE",
+            str(Path(self._tmp.name) / "world_cup_predictions.db"),
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        # Registered after the patcher, so it runs before it (cleanups are LIFO).
+        self.addCleanup(self._reset_prediction_db)
+        self._reset_prediction_db()
+        prediction_db.init_prediction_db()
+
+    @staticmethod
+    def _reset_prediction_db() -> None:
+        """Null both module globals and release the file handles.
+
+        ``get_prediction_session`` guards only on ``_SessionLocal``, so a leftover
+        factory hands out sessions bound to the previous test's file. Disposing
+        the engine matters on Windows, where an open SQLite handle keeps the
+        temporary directory from being removed.
+        """
+        engine = prediction_db._engine
+        prediction_db._engine = None
+        prediction_db._SessionLocal = None
+        if engine is not None:
+            engine.dispose()
+
+    @staticmethod
+    def _fresh_stamp() -> datetime:
+        """Two hours ago: inside the 7-day TTL, and unambiguously in the past."""
+        return (datetime.now(timezone.utc) - timedelta(hours=2)).replace(microsecond=0)
+
+    @staticmethod
+    def _seed(scraped_at: datetime) -> None:
+        session = prediction_db.get_prediction_session()
+        try:
+            session.add(TeamMarketValue(
+                team_name="Brazil",
+                total_market_value=1050.0,
+                avg_player_value=45.65,
+                num_players=23,
+                url="https://www.transfermarkt.com/brazil/startseite/verein/3439",
+                scraped_at=scraped_at,
+            ))
+            session.commit()
+        finally:
+            prediction_db.close_prediction_session(session)
+
+    def test_the_cached_stamp_is_the_instant_that_was_written(self):
+        """The guard for 53.189: re-serialising the column fails here.
+
+        ``cached.scraped_at.isoformat()`` produces ``...T11:00:00`` with no
+        marker, and a browser reads that as local time -- eight hours off in
+        UTC+8, with no symptom other than a wrong clock.
+        """
+        written = self._fresh_stamp()
+        self._seed(written)
+
+        body = scraper.get_cached_market_value("Brazil")
+
+        self.assertIsNotNone(body)
+        stamp = body["scraped_at"]
+        parsed = datetime.fromisoformat(stamp)
+        self.assertIsNotNone(parsed.tzinfo, stamp)
+        self.assertEqual(parsed.astimezone(timezone.utc), written)
+        self.assertGreaterEqual(body["cache_age_hours"], 2.0)
+
+    def test_the_column_really_comes_back_naive(self):
+        """Anti-vacuity for the test above: without this the conversion is untested.
+
+        If a future driver preserved the offset, the guard would pass on any
+        implementation and stop meaning anything.
+        """
+        written = self._fresh_stamp()
+        self._seed(written)
+
+        session = prediction_db.get_prediction_session()
+        try:
+            row = session.query(TeamMarketValue).filter_by(team_name="Brazil").one()
+        finally:
+            prediction_db.close_prediction_session(session)
+
+        self.assertIsNone(
+            row.scraped_at.tzinfo,
+            "SQLite kept the offset -- the conversion is untested, not unnecessary",
+        )
+        self.assertEqual(row.scraped_at, written.replace(tzinfo=None))
+
+    def test_the_cached_row_has_exactly_the_documented_keys(self):
+        """A key set, because ``cache_age_hours`` is computed, not stored.
+
+        Every other key is a column; pinning the set is what stops a column read
+        replacing a derived value (or the reverse) without a failing test.
+        """
+        self._seed(self._fresh_stamp())
+
+        body = scraper.get_cached_market_value("Brazil")
+
+        self.assertIsNotNone(body)
+        self.assertEqual(set(body), CACHED_ROW_KEYS)
+        self.assertEqual(body["source"], "transfermarkt_cached")
+
+    def test_a_missing_or_expired_row_is_a_miss(self):
+        """Both ``None`` returns, since the fix moved the age comparison."""
+        self.assertIsNone(scraper.get_cached_market_value("Atlantis"))
+        self._seed((datetime.now(timezone.utc) - timedelta(days=8)).replace(microsecond=0))
+        self.assertIsNone(scraper.get_cached_market_value("Brazil", ttl_days=7))
+        # Same row, longer TTL: the miss above is the TTL, not the read path.
+        self.assertIsNotNone(scraper.get_cached_market_value("Brazil", ttl_days=30))
 
 
 if __name__ == "__main__":
